@@ -32,7 +32,7 @@ class AppConfigSeeder extends Seeder
                 'description' => 'Config untuk kategori produk lainnya.',
                 'value' => json_encode([
                     'name' => 'Lainnya',
-                    'picture_source' => 'ad-category/lainnya.jpg'
+                    'picture_source' => 'ad-category/category.png'
                 ]),
                 'created_at' => Carbon::now(),
                 'updated_at' => Carbon::now()

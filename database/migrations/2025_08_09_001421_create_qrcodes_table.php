@@ -11,8 +11,13 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('vouchers', function (Blueprint $table) {
-            $table->string('code', 100)->index()->after('name');
+        Schema::create('qrcodes', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('admin_id');
+            $table->string('qr_code');
+            $table->timestamps();
+
+            $table->foreign('admin_id')->references('id')->on('users')->onDelete('cascade');
         });
     }
 
@@ -21,8 +26,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('vouchers', function (Blueprint $table) {
-            $table->dropColumn('code');
-        });
+        Schema::dropIfExists('qrcodes');
     }
 };

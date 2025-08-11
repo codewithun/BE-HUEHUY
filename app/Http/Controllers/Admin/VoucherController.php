@@ -15,49 +15,35 @@ class VoucherController extends Controller
     // ========================================>
     public function index(Request $request)
     {
-        // ? Initial params
         $sortDirection = $request->get("sortDirection", "DESC");
         $sortby = $request->get("sortBy", "created_at");
         $paginate = $request->get("paginate", 10);
         $filter = $request->get("filter", null);
 
-        // ? Preparation
-        $columnAliases = [
-            'created_at' => 'voucher_items.created_at'
-        ];
+        $model = new Voucher();
+        $query = Voucher::with('ad', 'ad.cube', 'ad.cube.cube_type');
 
-        // ? Begin
-        $model = new VoucherItem();
-        $query = VoucherItem::with('voucher', 'voucher.ad', 'voucher.ad.cube', 'voucher.ad.cube.cube_type');
-
-        // ? When search
+        // Search
         if ($request->get("search") != "") {
-            $query = $this->search($request->get("search"), $model, $query);
-        } else {
-            $query = $query;
+            $query = $query->where('name', 'like', '%' . $request->get("search") . '%');
         }
 
-        // ? When Filter
+        // Filter
         if ($filter) {
             $filters = json_decode($filter);
             foreach ($filters as $column => $value) {
-                if ($column == 'ad_id')  {
-
+                if ($column == 'ad_id') {
                     $filterVal = explode(':', $value)[1];
-                    $query = $query->join('vouchers', 'vouchers.id', 'voucher_items.voucher_id')
-                        ->where('vouchers.ad_id', $filterVal);
+                    $query = $query->where('ad_id', $filterVal);
                 } else {
-                    $query = $this->filter($this->remark_column($column, $columnAliases), $value, $model, $query);
+                    $query = $query->where($column, 'like', '%' . $value . '%');
                 }
             }
         }
 
-        // ? Sort & executing with pagination
-        $query = $query->orderBy($this->remark_column($sortby, $columnAliases), $sortDirection)
-            ->select($model->selectable)
+        $query = $query->orderBy($sortby, $sortDirection)
             ->paginate($paginate);
 
-        // ? When empty
         if (empty($query->items())) {
             return response([
                 "message" => "empty data",
@@ -65,10 +51,9 @@ class VoucherController extends Controller
             ], 200);
         }
 
-        // ? When success
         return response([
             "message" => "success",
-            "data" => $query->all(),
+            "data" => $query->items(),
             "total_row" => $query->total(),
         ]);
     }
@@ -96,23 +81,24 @@ class VoucherController extends Controller
     // =============================================>
     public function store(Request $request)
     {
-        // ? Validate request
         $validation = $this->validation($request->all(), [
-            'ad_id' => 'required|numeric|exists:ads,id',
-            'name' => 'required|string|max:255'
+            'name' => 'required|string|max:255',
+            'description' => 'nullable|string',
+            'image' => 'nullable|string',
+            'type' => 'nullable|string',
+            'valid_until' => 'nullable|date',
+            'tenant_location' => 'nullable|string',
+            'stock' => 'required|integer|min:0',
+            'delivery' => 'required|in:manual,auto', // validasi pengiriman
         ]);
-
         if ($validation) return $validation;
 
-        // ? Initial
         DB::beginTransaction();
         $model = new Voucher();
-
-        // ? Dump data
-        $model = $this->dump_field($request->all(), $model);
+        $model->fill($request->only([
+            'name', 'description', 'image', 'type', 'valid_until', 'tenant_location', 'stock', 'delivery'
+        ]));
         $model->code = $model->generateVoucherCode();
-
-        // ? Executing
         try {
             $model->save();
         } catch (\Throwable $th) {
@@ -121,9 +107,7 @@ class VoucherController extends Controller
                 "message" => "Error: server side having problem!",
             ], 500);
         }
-
         DB::commit();
-
         return response([
             "message" => "success",
             "data" => $model
@@ -135,22 +119,23 @@ class VoucherController extends Controller
     // ============================================>
     public function update(Request $request, string $id)
     {
-        // ? Initial
         DB::beginTransaction();
         $model = Voucher::findOrFail($id);
-
-        // ? Validate request
         $validation = $this->validation($request->all(), [
-            'ad_id' => 'required|numeric|exists:ads,id',
-            'name' => 'required|string|max:255'
+            'name' => 'required|string|max:255',
+            'description' => 'nullable|string',
+            'image' => 'nullable|string',
+            'type' => 'nullable|string',
+            'valid_until' => 'nullable|date',
+            'tenant_location' => 'nullable|string',
+            'stock' => 'required|integer|min:0',
+            'delivery' => 'required|in:manual,auto',
         ]);
-
         if ($validation) return $validation;
 
-        // ? Dump data
-        $model = $this->dump_field($request->all(), $model);
-
-        // ? Executing
+        $model->fill($request->only([
+            'name', 'description', 'image', 'type', 'valid_until', 'tenant_location', 'stock', 'delivery'
+        ]));
         try {
             $model->save();
         } catch (\Throwable $th) {
@@ -159,9 +144,7 @@ class VoucherController extends Controller
                 "message" => "Error: server side having problem!",
             ], 500);
         }
-
         DB::commit();
-
         return response([
             "message" => "success",
             "data" => $model
@@ -190,5 +173,37 @@ class VoucherController extends Controller
             "data" => $model
         ]);
     }
+
+    public function sendToUser(Request $request, $voucherId)
+    {
+        $validation = $this->validation($request->all(), [
+            'user_id' => 'required|exists:users,id',
+        ]);
+        if ($validation) return $validation;
+
+        $voucher = Voucher::findOrFail($voucherId);
+
+        // Cek stock
+        if ($voucher->stock <= 0) {
+            return response([
+                "message" => "Stock voucher habis!"
+            ], 400);
+        }
+
+        // Buat voucher item untuk user
+        $voucherItem = new \App\Models\VoucherItem();
+        $voucherItem->user_id = $request->user_id;
+        $voucherItem->voucher_id = $voucher->id;
+        $voucherItem->code = $voucher->code; // atau generate kode unik jika perlu
+        $voucherItem->save();
+
+        // Kurangi stock
+        $voucher->stock -= 1;
+        $voucher->save();
+
+        return response([
+            "message" => "Voucher berhasil dikirim ke user",
+            "data" => $voucherItem
+        ]);
+    }
 }
-        

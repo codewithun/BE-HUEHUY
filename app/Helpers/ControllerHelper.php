@@ -215,7 +215,7 @@ trait ControllerHelper
     public function response_file(
         string $file_name  //? filename
     ) {
-        $file_path = Storage::disk('public')->path($file_name);
+        $file_path = storage_path('app/public/' . $file_name);
 
         if (Storage::disk('public')->exists($file_name)) {
             return response()->file($file_path);

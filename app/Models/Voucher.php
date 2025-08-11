@@ -16,9 +16,15 @@ class Voucher extends Model
     // ## Fillable
     // =========================>
     protected $fillable = [
-        'ad_id',
         'name',
-        'code'
+        'description',
+        'image',
+        'type',
+        'valid_until',
+        'tenant_location',
+        'stock',
+        'code',
+        'delivery', // tambahkan ini
     ];
 
     // =========================>

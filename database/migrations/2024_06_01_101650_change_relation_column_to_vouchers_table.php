@@ -14,7 +14,6 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('vouchers', function (Blueprint $table) {
-            $table->dropColumn('cube_id');
             $table->foreignIdFor(Ad::class)->nullable()->index()->onDelete('cascade')->after('id');
         });
     }

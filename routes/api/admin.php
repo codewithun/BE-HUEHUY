@@ -17,6 +17,7 @@ use App\Http\Controllers\Admin\GrabController;
 use App\Http\Controllers\Admin\HuehuyAdController;
 use App\Http\Controllers\Admin\NotificationController;
 use App\Http\Controllers\Admin\OpeningHourController;
+use App\Http\Controllers\Admin\QrcodeController;
 use App\Http\Controllers\Admin\ReportContentTicketController;
 use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\Admin\RoleController;
@@ -25,6 +26,7 @@ use App\Http\Controllers\Admin\WorldAffiliateController;
 use App\Http\Controllers\Admin\WorldController;
 use App\Http\Controllers\AppConfigController;
 use App\Http\Controllers\PicklistController;
+use App\Http\Controllers\Admin\PromoController;
 
 Route::prefix('/admin')->group(function() {
 
@@ -66,6 +68,7 @@ Route::prefix('/admin')->group(function() {
     Route::apiResource('/huehuy-ads', HuehuyAdController::class);
 
     Route::apiResource('/vouchers', VoucherController::class);
+    Route::post('/vouchers/{id}/send', [VoucherController::class, 'sendToUser']);
 
     Route::apiResource('/worlds', WorldController::class);
     Route::get('/worlds/{id}/user', [WorldController::class, 'getWorldMember']);
@@ -96,4 +99,12 @@ Route::prefix('/admin')->group(function() {
     Route::put('/report-content-ticket/{id}/update-status', [ReportContentTicketController::class, 'updateStatus']);
 
     Route::get('/notification', [NotificationController::class, 'index']);
+
+    // QR Code routes
+    Route::get('/qrcodes', [QrcodeController::class, 'index']);
+    Route::post('/qrcodes/generate', [QrcodeController::class, 'generate']);
+    Route::put('/qrcodes/{id}', [QrcodeController::class, 'update']);
+    Route::delete('/qrcodes/{id}', [QrcodeController::class, 'destroy']);
+
+    Route::apiResource('/promos', PromoController::class);
 });

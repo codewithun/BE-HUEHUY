@@ -14,8 +14,15 @@ return new class extends Migration
     {
         Schema::create('vouchers', function (Blueprint $table) {
             $table->id();
-            $table->foreignIdFor(Cube::class)->index()->onDelete('set null');
             $table->string('name');
+            $table->text('description')->nullable();
+            $table->string('image')->nullable();
+            $table->string('type')->nullable();
+            $table->date('valid_until')->nullable();
+            $table->string('tenant_location')->nullable();
+            $table->integer('stock')->default(0);
+            $table->string('code')->unique();
+            $table->enum('delivery', ['manual', 'auto'])->default('manual');
             $table->timestamps();
         });
     }

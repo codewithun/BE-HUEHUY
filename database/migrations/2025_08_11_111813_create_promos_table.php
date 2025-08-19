@@ -13,18 +13,20 @@ return new class extends Migration
     {
         Schema::create('promos', function (Blueprint $table) {
             $table->id();
+            $table->foreignId('community_id')->nullable()->constrained()->onDelete('cascade');
             $table->string('title');
             $table->string('description')->nullable();
             $table->text('detail')->nullable();
-            $table->integer('promo_distance')->default(0);
-            $table->date('start_date');
-            $table->date('end_date');
+            $table->double('promo_distance', 8, 2)->default(0);
+            $table->dateTime('start_date')->nullable();
+            $table->dateTime('end_date')->nullable();
             $table->boolean('always_available')->default(false);
             $table->integer('stock')->default(0);
             $table->enum('promo_type', ['offline', 'online'])->default('offline');
             $table->string('location')->nullable();
             $table->string('owner_name')->nullable();
             $table->string('owner_contact')->nullable();
+            $table->string('image')->nullable();
             $table->timestamps();
         });
     }

@@ -14,26 +14,53 @@ class QrcodeController extends Controller
     // Menampilkan semua QR code milik admin
     public function index()
     {
-        $adminId = Auth::id();
-        $qrcodes = Qrcode::where('admin_id', $adminId)->get();
-        return response()->json([
-            'success' => true,
-            'count' => $qrcodes->count(),
-            'data' => $qrcodes
-        ]);
+       $adminId = Auth::id();
+    // Tambahkan eager loading voucher & promo
+    $qrcodes = Qrcode::with(['voucher', 'promo'])->where('admin_id', $adminId)->get();
+    return response()->json([
+        'success' => true,
+        'count' => $qrcodes->count(),
+        'data' => $qrcodes
+    ]);
     }
 
     // Generate QR code baru
     public function generate(Request $request)
     {
+        $request->validate([
+            'voucher_id' => 'nullable|exists:vouchers,id',
+            'promo_id' => 'nullable|exists:promos,id',
+            'tenant_name' => 'required|string|max:255',
+        ]);
+
+        // Validasi: minimal salah satu voucher_id atau promo_id harus ada
+        if (empty($request->voucher_id) && empty($request->promo_id)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Voucher atau Promo harus diisi salah satu.'
+            ], 422);
+        }
+
         $adminId = Auth::id();
-        $data = $request->input('data', 'default');
-        $qrSvg = QrCodeFacade::format('svg')->size(300)->generate($data);
+        $voucherId = $request->input('voucher_id');
+        $promoId = $request->input('promo_id');
+        $tenantName = $request->input('tenant_name');
+        $data = [
+            'voucher_id' => $voucherId,
+            'promo_id' => $promoId,
+            'tenant_name' => $tenantName,
+            'admin_id' => $adminId,
+        ];
+        $qrData = json_encode($data);
+        $qrSvg = QrCodeFacade::format('svg')->size(300)->generate($qrData);
         $fileName = 'qr_codes/admin_' . $adminId . '_' . time() . '.svg';
         Storage::disk('public')->put($fileName, $qrSvg);
         $qrcode = Qrcode::create([
             'admin_id' => $adminId,
             'qr_code' => $fileName,
+            'voucher_id' => $voucherId,
+            'promo_id' => $promoId,
+            'tenant_name' => $tenantName,
         ]);
         return response()->json(['path' => $fileName, 'qrcode' => $qrcode]);
     }
@@ -41,11 +68,33 @@ class QrcodeController extends Controller
     // Edit QR code (update data dan file)
     public function update(Request $request, $id)
     {
+        $request->validate([
+            'voucher_id' => 'nullable|exists:vouchers,id',
+            'promo_id' => 'nullable|exists:promos,id',
+            'tenant_name' => 'required|string|max:255',
+        ]);
+
+        if (empty($request->voucher_id) && empty($request->promo_id)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Voucher atau Promo harus diisi salah satu.'
+            ], 422);
+        }
+
         $adminId = Auth::id();
         $qrcode = Qrcode::where('id', $id)->where('admin_id', $adminId)->firstOrFail();
 
-        $data = $request->input('data', 'default');
-        $qrSvg = QrCodeFacade::format('svg')->size(300)->generate($data);
+        $voucherId = $request->input('voucher_id');
+        $promoId = $request->input('promo_id');
+        $tenantName = $request->input('tenant_name');
+        $data = [
+            'voucher_id' => $voucherId,
+            'promo_id' => $promoId,
+            'tenant_name' => $tenantName,
+            'admin_id' => $adminId,
+        ];
+        $qrData = json_encode($data);
+        $qrSvg = QrCodeFacade::format('svg')->size(300)->generate($qrData);
         $fileName = 'qr_codes/admin_' . $adminId . '_' . time() . '.svg';
         Storage::disk('public')->put($fileName, $qrSvg);
 
@@ -56,6 +105,9 @@ class QrcodeController extends Controller
 
         $qrcode->update([
             'qr_code' => $fileName,
+            'voucher_id' => $voucherId,
+            'promo_id' => $promoId,
+            'tenant_name' => $tenantName,
         ]);
 
         return response()->json(['success' => true, 'qrcode' => $qrcode]);

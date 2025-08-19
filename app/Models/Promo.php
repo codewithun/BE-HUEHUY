@@ -10,6 +10,8 @@ class Promo extends Model
     use HasFactory;
 
     protected $fillable = [
+        'community_id',
+        'category_id', // ditambahkan
         'title',
         'description',
         'detail',
@@ -22,5 +24,26 @@ class Promo extends Model
         'location',
         'owner_name',
         'owner_contact',
+        'image',
     ];
+
+    protected $casts = [
+        'start_date' => 'datetime',
+        'end_date' => 'datetime',
+        'always_available' => 'boolean',
+        'stock' => 'integer',
+        'promo_distance' => 'float',
+    ];
+
+    // relasi ke Community
+    public function community()
+    {
+        return $this->belongsTo(Community::class);
+    }
+
+    // relasi ke CommunityCategory (kategori)
+    public function category()
+    {
+        return $this->belongsTo(CommunityCategory::class, 'category_id');
+    }
 }

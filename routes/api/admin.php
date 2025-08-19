@@ -28,6 +28,7 @@ use App\Http\Controllers\AppConfigController;
 use App\Http\Controllers\PicklistController;
 use App\Http\Controllers\Admin\PromoController;
 
+
 Route::prefix('/admin')->group(function() {
 
     // * Picklist Options
@@ -107,4 +108,5 @@ Route::prefix('/admin')->group(function() {
     Route::delete('/qrcodes/{id}', [QrcodeController::class, 'destroy']);
 
     Route::apiResource('/promos', PromoController::class);
+
 });

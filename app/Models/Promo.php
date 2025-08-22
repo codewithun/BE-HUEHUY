@@ -11,7 +11,8 @@ class Promo extends Model
 
     protected $fillable = [
         'community_id',
-        'category_id', // ditambahkan
+        'category_id',
+        'code', // tambahkan code agar bisa diisi saat create/update
         'title',
         'description',
         'detail',

@@ -125,20 +125,15 @@
         Route::prefix('communities/{communityId}/promos')->group(function () {
             Route::get('/', [PromoController::class, 'indexByCommunity']);
             Route::post('/', [PromoController::class, 'storeForCommunity']);
-            Route::get('{id}', [PromoController::class, 'show']);
+            // gunakan showForCommunity agar query mencocokkan both community_id dan promo id
+            Route::get('{id}', [PromoController::class, 'showForCommunity']);
             Route::put('{id}', [PromoController::class, 'update']);
             Route::delete('{id}', [PromoController::class, 'destroy']);
         });
 
-        Route::prefix('admin')->group(function () {
-            Route::prefix('communities/{communityId}')->group(function () {
-                Route::get('promos', [PromoController::class, 'indexByCommunity']);
-                Route::get('promos/available', [PromoController::class, 'availableForCommunity']);
-                Route::post('promos/assign', [PromoController::class, 'assignToCommunity']);
-                Route::delete('promos/{promoId}', [PromoController::class, 'detachFromCommunity']);
-                Route::post('promos', [PromoController::class, 'storeForCommunity']); // create & assign
-            });
-        });
+        // HAPUS duplikat berikut (jika masih ada), karena sudah ditangani di atas:
+        // Route::get('/communities/{communityId}/promos/{promoId}', [PromoController::class, 'showForCommunity']);
+        // Route::get('/communities/{communityId}/promos', [PromoController::class, 'indexByCommunity']);
     });
 
     // * Client

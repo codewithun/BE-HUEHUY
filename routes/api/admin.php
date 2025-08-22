@@ -27,6 +27,7 @@ use App\Http\Controllers\Admin\WorldController;
 use App\Http\Controllers\AppConfigController;
 use App\Http\Controllers\PicklistController;
 use App\Http\Controllers\Admin\PromoController;
+use App\Http\Controllers\Admin\PromoItemController;
 
 
 Route::prefix('/admin')->group(function() {
@@ -108,5 +109,11 @@ Route::prefix('/admin')->group(function() {
     Route::delete('/qrcodes/{id}', [QrcodeController::class, 'destroy']);
 
     Route::apiResource('/promos', PromoController::class);
+
+    // Promo items
+    Route::apiResource('/promo-items', PromoItemController::class);
+    // helper routes to manage items under a promo
+    Route::get('/promos/{promoId}/items', [PromoItemController::class, 'indexByPromo']);
+    Route::post('/promos/{promoId}/items', [PromoItemController::class, 'storeForPromo']);
 
 });

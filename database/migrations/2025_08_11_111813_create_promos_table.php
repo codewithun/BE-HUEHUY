@@ -14,6 +14,7 @@ return new class extends Migration
         Schema::create('promos', function (Blueprint $table) {
             $table->id();
             $table->foreignId('community_id')->nullable()->constrained()->onDelete('cascade');
+            $table->string('code')->unique(); // <--- Tambahkan ini
             $table->string('title');
             $table->string('description')->nullable();
             $table->text('detail')->nullable();

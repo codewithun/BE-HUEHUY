@@ -59,6 +59,7 @@ class PromoController extends Controller
             'owner_contact' => 'required|string|max:255',
             'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
             'community_id' => 'nullable|exists:communities,id',
+            'code' => 'nullable|string|unique:promos,code', // validasi kode unik jika diinput manual
         ]);
 
         if ($validator->fails()) {
@@ -71,6 +72,12 @@ class PromoController extends Controller
 
         try {
             $data = $request->except('image');
+
+            // Generate kode unik jika tidak diinput manual
+            if (empty($data['code'])) {
+                $data['code'] = 'PRM-' . strtoupper(uniqid());
+            }
+
             if ($request->hasFile('image')) {
                 $path = $request->file('image')->store('promos', 'public');
                 $data['image'] = $path;
@@ -115,6 +122,7 @@ class PromoController extends Controller
             'owner_contact' => 'sometimes|required|string|max:255',
             'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
             'community_id' => 'nullable|exists:communities,id',
+            'code' => 'nullable|string|unique:promos,code,' . $id, // validasi kode unik saat update
         ]);
 
         if ($validator->fails()) {
@@ -127,6 +135,12 @@ class PromoController extends Controller
 
         try {
             $data = $request->except('image');
+
+            // Jika code kosong, tetap gunakan code lama
+            if (empty($data['code'])) {
+                $data['code'] = $promo->code;
+            }
+
             if ($request->hasFile('image')) {
                 if (!empty($promo->image)) {
                     Storage::disk('public')->delete($promo->image);
@@ -277,5 +291,35 @@ class PromoController extends Controller
             'message' => 'Promo detached from community',
             'data' => $promo
         ]);
+    }
+
+    /**
+     * Show single promo scoped to a community.
+     * GET /api/communities/{community}/promos/{promo}
+     */
+    public function showForCommunity($communityId, $promoId)
+    {
+        try {
+            $promo = Promo::where('id', $promoId)
+                ->where('community_id', $communityId)
+                ->first();
+
+            if (! $promo) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Promo not found for this community'
+                ], 404);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $promo
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to retrieve promo'
+            ], 500);
+        }
     }
 }

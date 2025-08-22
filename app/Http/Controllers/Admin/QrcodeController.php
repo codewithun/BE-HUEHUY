@@ -33,7 +33,6 @@ class QrcodeController extends Controller
             'tenant_name' => 'required|string|max:255',
         ]);
 
-        // Validasi: minimal salah satu voucher_id atau promo_id harus ada
         if (empty($request->voucher_id) && empty($request->promo_id)) {
             return response()->json([
                 'success' => false,
@@ -45,13 +44,27 @@ class QrcodeController extends Controller
         $voucherId = $request->input('voucher_id');
         $promoId = $request->input('promo_id');
         $tenantName = $request->input('tenant_name');
-        $data = [
-            'voucher_id' => $voucherId,
-            'promo_id' => $promoId,
-            'tenant_name' => $tenantName,
-            'admin_id' => $adminId,
-        ];
-        $qrData = json_encode($data);
+
+        // Ambil community_id dari relasi voucher/promo jika ada
+        $communityId = null;
+        if ($promoId) {
+            $promo = \App\Models\Promo::find($promoId);
+            $communityId = $promo ? ($promo->community_id ?? 'default') : 'default';
+            $qrData = json_encode([
+                'type' => 'promo',
+                'promoId' => (string)$promoId,
+                'communityId' => (string)$communityId,
+            ]);
+        } else if ($voucherId) {
+            $voucher = \App\Models\Voucher::find($voucherId);
+            $communityId = $voucher ? ($voucher->community_id ?? 'default') : 'default';
+            $qrData = json_encode([
+                'type' => 'voucher',
+                'voucherId' => (string)$voucherId,
+                'communityId' => (string)$communityId,
+            ]);
+        }
+
         $qrSvg = QrCodeFacade::format('svg')->size(300)->generate($qrData);
         $fileName = 'qr_codes/admin_' . $adminId . '_' . time() . '.svg';
         Storage::disk('public')->put($fileName, $qrSvg);

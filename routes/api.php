@@ -156,6 +156,10 @@
     Route::get('/primary-category', [AdController::class, 'getPrimaryCategory']);
     Route::get('/categories', [AdController::class, 'getCategory']);
     Route::get('/get-cube-by-code-general/{code}', [AdController::class, 'getCubeByCodeGeneral']);
+    // HAPUS route ini karena method tidak ada:
+    // Route::get('/user/promo-validations', [PromoController::class, 'userValidationHistory']);
+
+    // Route yang sudah ada dan benar:
     Route::post('/promos/validate', [PromoController::class, 'validateCode'])->middleware('auth:sanctum');
     Route::get('promos/{promo}/history', [PromoController::class, 'history']);
 

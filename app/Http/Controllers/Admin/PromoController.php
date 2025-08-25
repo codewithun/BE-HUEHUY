@@ -9,6 +9,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 
 class PromoController extends Controller
 {
@@ -23,7 +24,7 @@ class PromoController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to retrieve promos'
+                'message' => 'Gagal mengambil data promo'
             ], 500);
         }
     }
@@ -34,7 +35,7 @@ class PromoController extends Controller
         if (!$promo) {
             return response()->json([
                 'success' => false,
-                'message' => 'Promo not found'
+                'message' => 'Promo tidak ditemukan'
             ], 404);
         }
 
@@ -67,7 +68,7 @@ class PromoController extends Controller
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Validation failed',
+                'message' => 'Validasi gagal',
                 'errors' => $validator->errors()
             ], 422);
         }
@@ -88,13 +89,13 @@ class PromoController extends Controller
             $promo = Promo::create($data);
             return response()->json([
                 'success' => true,
-                'message' => 'Promo created successfully',
+                'message' => 'Promo berhasil dibuat',
                 'data' => $promo
             ], 201);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to create promo'
+                'message' => 'Gagal membuat promo'
             ], 500);
         }
     }
@@ -105,7 +106,7 @@ class PromoController extends Controller
         if (!$promo) {
             return response()->json([
                 'success' => false,
-                'message' => 'Promo not found'
+                'message' => 'Promo tidak ditemukan'
             ], 404);
         }
 
@@ -130,7 +131,7 @@ class PromoController extends Controller
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Validation failed',
+                'message' => 'Validasi gagal',
                 'errors' => $validator->errors()
             ], 422);
         }
@@ -154,13 +155,13 @@ class PromoController extends Controller
             $promo->update($data);
             return response()->json([
                 'success' => true,
-                'message' => 'Promo updated successfully',
+                'message' => 'Promo berhasil diperbarui',
                 'data' => $promo
             ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to update promo'
+                'message' => 'Gagal memperbarui promo'
             ], 500);
         }
     }
@@ -171,7 +172,7 @@ class PromoController extends Controller
         if (!$promo) {
             return response()->json([
                 'success' => false,
-                'message' => 'Promo not found'
+                'message' => 'Promo tidak ditemukan'
             ], 404);
         }
 
@@ -182,12 +183,12 @@ class PromoController extends Controller
             $promo->delete();
             return response()->json([
                 'success' => true,
-                'message' => 'Promo deleted successfully'
+                'message' => 'Promo berhasil dihapus'
             ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to delete promo'
+                'message' => 'Gagal menghapus promo'
             ], 500);
         }
     }
@@ -246,7 +247,7 @@ class PromoController extends Controller
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Validation failed',
+                'message' => 'Validasi gagal',
                 'errors' => $validator->errors()
             ], 422);
         }
@@ -257,7 +258,7 @@ class PromoController extends Controller
         if ($promo->community_id && $promo->community_id != $communityId) {
             return response()->json([
                 'success' => false,
-                'message' => 'Promo is already assigned to another community'
+                'message' => 'Promo sudah ditugaskan ke komunitas lain'
             ], 409);
         }
 
@@ -266,7 +267,7 @@ class PromoController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Promo assigned to community',
+            'message' => 'Promo berhasil ditugaskan ke komunitas',
             'data' => $promo
         ]);
     }
@@ -281,7 +282,7 @@ class PromoController extends Controller
         if (!$promo) {
             return response()->json([
                 'success' => false,
-                'message' => 'Promo not found or not assigned to this community'
+                'message' => 'Promo tidak ditemukan atau tidak ditugaskan ke komunitas ini'
             ], 404);
         }
 
@@ -290,7 +291,7 @@ class PromoController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Promo detached from community',
+            'message' => 'Promo berhasil dilepas dari komunitas',
             'data' => $promo
         ]);
     }
@@ -309,7 +310,7 @@ class PromoController extends Controller
             if (! $promo) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Promo not found for this community'
+                    'message' => 'Promo tidak ditemukan untuk komunitas ini'
                 ], 404);
             }
 
@@ -320,58 +321,104 @@ class PromoController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Failed to retrieve promo'
+                'message' => 'Gagal mengambil data promo'
             ], 500);
         }
     }
 
     public function validateCode(Request $request)
     {
-        $request->validate([
-            'code' => 'required|string'
-        ]);
+        try {
+            $request->validate([
+                'code' => 'required|string'
+            ]);
 
-        $promo = Promo::where('code', $request->code)->first();
+            $promo = Promo::where('code', $request->code)->first();
 
-        if (!$promo) {
+            if (!$promo) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Kode promo tidak ditemukan'
+                ], 404);
+            }
+
+            // Cek apakah sudah pernah divalidasi
+            $existingValidation = PromoValidation::where([
+                'promo_id' => $promo->id,
+                'user_id' => $request->user()?->id ?? auth()->id() ?? null,
+                'code' => $request->code
+            ])->first();
+
+            if ($existingValidation) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Kode promo sudah pernah divalidasi'
+                ], 409);
+            }
+
+            // Buat record history validasi
+            $validation = PromoValidation::create([
+                'promo_id' => $promo->id,
+                'user_id' => $request->user()?->id ?? auth()->id() ?? null,
+                'code' => $request->code,
+                'validated_at' => now(),
+                'notes' => $request->input('notes'),
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Kode promo valid',
+                'data' => [
+                    'promo' => $promo, // HAPUS ->load('cube.cube_type')
+                    'validation' => $validation
+                ]
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Error in validateCode: " . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Kode promo tidak ditemukan'
-            ], 404);
+                'message' => 'Gagal memvalidasi kode: ' . $e->getMessage()
+            ], 500);
         }
-
-        // buat record history validasi
-        $validation = $promo->validations()->create([
-            'user_id' => $request->user()?->id ?? auth()->id() ?? null,
-            'code' => $request->code,
-            'validated_at' => now(),
-            'notes' => $request->input('notes'),
-        ]);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Kode promo valid',
-            'data' => [
-                'promo' => $promo,
-                'validation' => $validation
-            ]
-        ]);
     }
 
     // endpoint untuk mengambil history validasi promo
     public function history($promoId)
     {
-        $promo = Promo::with('validations.user')->find($promoId);
-        if (! $promo) {
+        Log::info("Fetching history for promo ID: " . $promoId);
+        
+        try {
+            // HAPUS relasi cube yang tidak ada
+            $promo = Promo::with(['validations.user'])->find($promoId);
+            
+            Log::info("Promo found: " . ($promo ? 'yes' : 'no'));
+            if ($promo) {
+                Log::info("Validations count: " . $promo->validations->count());
+            }
+            
+            if (!$promo) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Promo tidak ditemukan'
+                ], 404);
+            }
+
+            // HAPUS relasi cube
+            $validations = $promo->validations()->with([
+                'user',
+                'promo' // HAPUS .cube.cube_type
+            ])->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => $validations
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Error in history method: " . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Promo not found'
-            ], 404);
+                'message' => 'Gagal mengambil riwayat validasi: ' . $e->getMessage()
+            ], 500);
         }
-
-        return response()->json([
-            'success' => true,
-            'data' => $promo->validations
-        ]);
     }
 }

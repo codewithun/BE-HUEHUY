@@ -23,6 +23,7 @@ return new class extends Migration
             $table->integer('stock')->default(0);
             $table->string('code')->unique();
             $table->enum('delivery', ['manual', 'auto'])->default('manual');
+            $table->unsignedBigInteger('community_id')->nullable(); // Tambahkan ini
             $table->timestamps();
         });
     }

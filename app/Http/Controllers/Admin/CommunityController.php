@@ -24,14 +24,21 @@ public function index(Request $request)
         $query->orderBy($request->sortBy, $request->sortDirection);
     }
 
-    // Pagination
-    $paginate = $request->paginate ?? 10;
-    $data = $query->paginate($paginate);
-
-    return response()->json([
-        'data' => $data->items(),
-        'total_row' => $data->total(),
-    ]);
+    // Jika ada parameter paginate, gunakan pagination. Jika tidak, ambil semua.
+    if ($request->has('paginate')) {
+        $paginate = $request->paginate ?? 10;
+        $data = $query->paginate($paginate);
+        return response()->json([
+            'data' => $data->items(),
+            'total_row' => $data->total(),
+        ]);
+    } else {
+        $data = $query->get();
+        return response()->json([
+            'data' => $data,
+            'total_row' => $data->count(),
+        ]);
+    }
 }
 
     // Store a new community

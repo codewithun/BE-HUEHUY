@@ -21,7 +21,7 @@ class VoucherController extends Controller
         $filter = $request->get("filter", null);
 
         $model = new Voucher();
-        $query = Voucher::with('ad', 'ad.cube', 'ad.cube.cube_type');
+        $query = Voucher::with('community'); // hanya relasi community
 
         // Search
         if ($request->get("search") != "") {
@@ -32,9 +32,9 @@ class VoucherController extends Controller
         if ($filter) {
             $filters = json_decode($filter);
             foreach ($filters as $column => $value) {
-                if ($column == 'ad_id') {
+                if ($column == 'community_id') {
                     $filterVal = explode(':', $value)[1];
-                    $query = $query->where('ad_id', $filterVal);
+                    $query = $query->where('community_id', $filterVal);
                 } else {
                     $query = $query->where($column, 'like', '%' . $value . '%');
                 }
@@ -60,7 +60,7 @@ class VoucherController extends Controller
 
     public function show(string $id)
     {
-        $model = Voucher::with('ad', 'ad.cube', 'ad.cube.cube_type', 'voucher_items', 'voucher_items.user')
+        $model = Voucher::with('community', 'voucher_items', 'voucher_items.user')
             ->where('id', $id)
             ->first();
 
@@ -89,16 +89,17 @@ class VoucherController extends Controller
             'valid_until' => 'nullable|date',
             'tenant_location' => 'nullable|string',
             'stock' => 'required|integer|min:0',
-            'delivery' => 'required|in:manual,auto', // validasi pengiriman
+            'delivery' => 'required|in:manual,auto',
+            'code' => 'required|string|unique:vouchers,code', // wajib diisi manual
+            'community_id' => 'nullable|exists:communities,id',
         ]);
         if ($validation) return $validation;
 
         DB::beginTransaction();
         $model = new Voucher();
         $model->fill($request->only([
-            'name', 'description', 'image', 'type', 'valid_until', 'tenant_location', 'stock', 'delivery'
+            'name', 'description', 'image', 'type', 'valid_until', 'tenant_location', 'stock', 'delivery', 'code', 'community_id'
         ]));
-        $model->code = $model->generateVoucherCode();
         try {
             $model->save();
         } catch (\Throwable $th) {
@@ -130,11 +131,13 @@ class VoucherController extends Controller
             'tenant_location' => 'nullable|string',
             'stock' => 'required|integer|min:0',
             'delivery' => 'required|in:manual,auto',
+            'code' => 'required|string|unique:vouchers,code,' . $id, // pastikan unik kecuali dirinya sendiri
+            'community_id' => 'nullable|exists:communities,id',
         ]);
         if ($validation) return $validation;
 
         $model->fill($request->only([
-            'name', 'description', 'image', 'type', 'valid_until', 'tenant_location', 'stock', 'delivery'
+            'name', 'description', 'image', 'type', 'valid_until', 'tenant_location', 'stock', 'delivery', 'code', 'community_id'
         ]));
         try {
             $model->save();

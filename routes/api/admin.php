@@ -28,6 +28,7 @@ use App\Http\Controllers\AppConfigController;
 use App\Http\Controllers\PicklistController;
 use App\Http\Controllers\Admin\PromoController;
 use App\Http\Controllers\Admin\PromoItemController;
+use App\Http\Controllers\Admin\CommunityController;
 
 
 Route::prefix('/admin')->group(function() {
@@ -115,5 +116,7 @@ Route::prefix('/admin')->group(function() {
     // helper routes to manage items under a promo
     Route::get('/promos/{promoId}/items', [PromoItemController::class, 'indexByPromo']);
     Route::post('/promos/{promoId}/items', [PromoItemController::class, 'storeForPromo']);
+
+    Route::apiResource('/communities', CommunityController::class);
 
 });

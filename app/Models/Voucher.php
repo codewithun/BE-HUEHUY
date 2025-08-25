@@ -24,7 +24,8 @@ class Voucher extends Model
         'tenant_location',
         'stock',
         'code',
-        'delivery', // tambahkan ini
+        'delivery',
+        'community_id', // tambahkan ini
     ];
 
     // =========================>
@@ -62,28 +63,11 @@ class Voucher extends Model
     }
 
     /**
-     * * Generate Voucher Code
+     * * Relation to `Community` model
      */
-    public function generateVoucherCode()
+    public function community() : BelongsTo
     {
-        $zeroPadding = "0000000";
-        $prefixCode = "VC-";
-        $code = "$prefixCode";
-
-        $increment = 0;
-        $similiarCode = DB::table('vouchers')->select('code')
-            ->orderBy('code', 'desc')
-            ->first();
-
-        if (!$similiarCode) {
-            $increment = 1;
-        } else {
-            $increment = (int) substr($similiarCode->code, strlen($code));
-            $increment = $increment + 1;
-        }
-
-        $code = $code . substr($zeroPadding, strlen("$increment")) . $increment;
-
-        return $code;
+        return $this->belongsTo(Community::class, 'community_id', 'id');
     }
+
 }

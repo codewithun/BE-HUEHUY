@@ -107,8 +107,6 @@
         // =========================>
         require('api/corporate.php');
 
-        Route::apiResource('communities', \App\Http\Controllers\Admin\CommunityController::class);
-
         // CRUD kategori komunitas (nested resource)
         Route::prefix('communities/{communityId}/categories')->group(function () {
             Route::get('/', [CommunityWidgetController::class, 'index']);

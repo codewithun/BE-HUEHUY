@@ -47,4 +47,9 @@ class Promo extends Model
     {
         return $this->belongsTo(CommunityCategory::class, 'category_id');
     }
+
+      public function validations()
+    {
+        return $this->hasMany(PromoValidation::class);
+    }
 }

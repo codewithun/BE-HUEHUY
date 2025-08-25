@@ -156,8 +156,8 @@
     Route::get('/primary-category', [AdController::class, 'getPrimaryCategory']);
     Route::get('/categories', [AdController::class, 'getCategory']);
     Route::get('/get-cube-by-code-general/{code}', [AdController::class, 'getCubeByCodeGeneral']);
-
-
+    Route::post('/promos/validate', [PromoController::class, 'validateCode']);
+    Route::get('promos/{promo}/history', [PromoController::class, 'history']);
 
     // * Datasource Integration
     require('api/integration.php');

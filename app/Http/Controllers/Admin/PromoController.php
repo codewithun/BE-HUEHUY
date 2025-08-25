@@ -4,9 +4,11 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Promo;
+use App\Models\PromoValidation;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Auth;
 
 class PromoController extends Controller
 {
@@ -321,5 +323,55 @@ class PromoController extends Controller
                 'message' => 'Failed to retrieve promo'
             ], 500);
         }
+    }
+
+    public function validateCode(Request $request)
+    {
+        $request->validate([
+            'code' => 'required|string'
+        ]);
+
+        $promo = Promo::where('code', $request->code)->first();
+
+        if (!$promo) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Kode promo tidak ditemukan'
+            ], 404);
+        }
+
+        // buat record history validasi
+        $validation = $promo->validations()->create([
+            'user_id' => auth()->id() ?? null,
+            'code' => $request->code,
+            'validated_at' => now(),
+            'notes' => $request->input('notes'),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Kode promo valid',
+            'data' => [
+                'promo' => $promo,
+                'validation' => $validation
+            ]
+        ]);
+    }
+
+    // endpoint untuk mengambil history validasi promo
+    public function history($promoId)
+    {
+        $promo = Promo::with('validations.user')->find($promoId);
+        if (! $promo) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Promo not found'
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => $promo->validations
+        ]);
     }
 }

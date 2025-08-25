@@ -342,7 +342,7 @@ class PromoController extends Controller
 
         // buat record history validasi
         $validation = $promo->validations()->create([
-            'user_id' => auth()->id() ?? null,
+            'user_id' => $request->user()?->id ?? auth()->id() ?? null,
             'code' => $request->code,
             'validated_at' => now(),
             'notes' => $request->input('notes'),

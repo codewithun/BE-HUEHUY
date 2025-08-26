@@ -70,4 +70,28 @@ class Voucher extends Model
         return $this->belongsTo(Community::class, 'community_id', 'id');
     }
 
+    /**
+     * * Relation to `VoucherValidation` model
+     */
+    public function validations() : HasMany
+    {
+        return $this->hasMany(VoucherValidation::class, 'voucher_id', 'id');
+    }
+
+    /**
+     * Get the status attribute based on stock and validity
+     */
+    public function getStatusAttribute()
+    {
+        if ($this->stock <= 0) {
+            return 'inactive';
+        }
+        
+        if ($this->valid_until && now()->isAfter($this->valid_until)) {
+            return 'expired';
+        }
+        
+        return 'active';
+    }
+
 }

@@ -5,8 +5,10 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Voucher;
 use App\Models\VoucherItem;
+use App\Models\VoucherValidation;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class VoucherController extends Controller
 {
@@ -208,5 +210,132 @@ class VoucherController extends Controller
             "message" => "Voucher berhasil dikirim ke user",
             "data" => $voucherItem
         ]);
+    }
+
+    public function validateCode(Request $request)
+    {
+        try {
+            $request->validate([
+                'code' => 'required|string'
+            ]);
+
+            $voucher = Voucher::where('code', $request->code)->first();
+
+            if (!$voucher) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Kode voucher tidak ditemukan'
+                ], 404);
+            }
+
+            // Cek apakah sudah pernah divalidasi
+            $existingValidation = VoucherValidation::where([
+                'voucher_id' => $voucher->id,
+                'user_id' => $request->user()?->id ?? auth()->id() ?? null,
+                'code' => $request->code
+            ])->first();
+
+            if ($existingValidation) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Kode voucher sudah pernah divalidasi'
+                ], 409);
+            }
+
+            // Buat record history validasi
+            $validation = VoucherValidation::create([
+                'voucher_id' => $voucher->id,
+                'user_id' => $request->user()?->id ?? auth()->id() ?? null,
+                'code' => $request->code,
+                'validated_at' => now(),
+                'notes' => $request->input('notes'),
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Kode voucher valid',
+                'data' => [
+                    'voucher' => $voucher,
+                    'validation' => $validation
+                ]
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Error in validateCode: " . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal memvalidasi kode: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    // endpoint untuk mengambil history validasi voucher
+    public function history($voucherId)
+    {
+        Log::info("Fetching history for voucher ID: " . $voucherId);
+        
+        try {
+            $voucher = Voucher::with(['validations.user'])->find($voucherId);
+            
+            Log::info("Voucher found: " . ($voucher ? 'yes' : 'no'));
+            if ($voucher) {
+                Log::info("Validations count: " . $voucher->validations->count());
+            }
+            
+            if (!$voucher) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Voucher tidak ditemukan'
+                ], 404);
+            }
+
+            $validations = $voucher->validations()->with([
+                'user',
+                'voucher'
+            ])->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => $validations
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Error in history method: " . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengambil riwayat validasi: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    // endpoint untuk mengambil history validasi voucher untuk user yang login
+    public function userValidationHistory(Request $request)
+    {
+        try {
+            $userId = $request->user()?->id ?? auth()->id();
+            
+            if (!$userId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'User tidak terautentikasi'
+                ], 401);
+            }
+
+            $validations = VoucherValidation::with([
+                'user',
+                'voucher'
+            ])->where('user_id', $userId)
+              ->orderBy('validated_at', 'desc')
+              ->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => $validations
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Error in userValidationHistory method: " . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengambil riwayat validasi: ' . $e->getMessage()
+            ], 500);
+        }
     }
 }

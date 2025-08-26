@@ -22,6 +22,7 @@
     use App\Http\Controllers\Admin\GenerateOTPController;
     use App\Http\Controllers\Admin\CommunityWidgetController;
     use App\Http\Controllers\Admin\PromoController;
+    use App\Http\Controllers\Admin\VoucherController;
 
     /**
      * * Route Unauthorized Exception
@@ -156,12 +157,18 @@
     Route::get('/primary-category', [AdController::class, 'getPrimaryCategory']);
     Route::get('/categories', [AdController::class, 'getCategory']);
     Route::get('/get-cube-by-code-general/{code}', [AdController::class, 'getCubeByCodeGeneral']);
-    // HAPUS route ini karena method tidak ada:
-    // Route::get('/user/promo-validations', [PromoController::class, 'userValidationHistory']);
 
     // Route yang sudah ada dan benar:
     Route::post('/promos/validate', [PromoController::class, 'validateCode'])->middleware('auth:sanctum');
     Route::get('promos/{promo}/history', [PromoController::class, 'history']);
+
+    // Voucher validation routes
+    Route::post('/vouchers/validate', [VoucherController::class, 'validateCode'])->middleware('auth:sanctum');
+    Route::get('vouchers/{voucher}/history', [VoucherController::class, 'history']);
+
+    // User validation history routes
+    Route::get('/user/promo-validations', [PromoController::class, 'userValidationHistory'])->middleware('auth:sanctum');
+    Route::get('/user/voucher-validations', [VoucherController::class, 'userValidationHistory'])->middleware('auth:sanctum');
 
     // * Datasource Integration
     require('api/integration.php');
@@ -169,4 +176,3 @@
     // =========================>
         // * WhatsAppOTP
         // =========================>
-

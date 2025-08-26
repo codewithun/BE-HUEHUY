@@ -421,4 +421,37 @@ class PromoController extends Controller
             ], 500);
         }
     }
+    
+    // endpoint untuk mengambil history validasi promo untuk user yang login
+    public function userValidationHistory(Request $request)
+    {
+        try {
+            $userId = $request->user()?->id ?? auth()->id();
+            
+            if (!$userId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'User tidak terautentikasi'
+                ], 401);
+            }
+
+            $validations = PromoValidation::with([
+                'user',
+                'promo'
+            ])->where('user_id', $userId)
+              ->orderBy('validated_at', 'desc')
+              ->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => $validations
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Error in userValidationHistory method: " . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengambil riwayat validasi: ' . $e->getMessage()
+            ], 500);
+        }
+    }
 }

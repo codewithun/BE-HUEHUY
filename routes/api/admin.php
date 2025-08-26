@@ -22,6 +22,7 @@ use App\Http\Controllers\Admin\ReportContentTicketController;
 use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\Admin\RoleController;
 use App\Http\Controllers\Admin\VoucherController;
+use App\Http\Controllers\Admin\VoucherItemController;
 use App\Http\Controllers\Admin\WorldAffiliateController;
 use App\Http\Controllers\Admin\WorldController;
 use App\Http\Controllers\AppConfigController;
@@ -71,7 +72,9 @@ Route::prefix('/admin')->group(function() {
     Route::apiResource('/huehuy-ads', HuehuyAdController::class);
 
     Route::apiResource('/vouchers', VoucherController::class);
-    Route::post('/vouchers/{id}/send', [VoucherController::class, 'sendToUser']);
+    Route::post('/vouchers/{id}/send-to-user', [VoucherController::class, 'sendToUser']);
+
+    Route::apiResource('/voucher-items', VoucherItemController::class);
 
     Route::apiResource('/worlds', WorldController::class);
     Route::get('/worlds/{id}/user', [WorldController::class, 'getWorldMember']);

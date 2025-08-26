@@ -170,6 +170,10 @@
     Route::get('/user/promo-validations', [PromoController::class, 'userValidationHistory'])->middleware('auth:sanctum');
     Route::get('/user/voucher-validations', [VoucherController::class, 'userValidationHistory'])->middleware('auth:sanctum');
 
+    Route::middleware('auth:sanctum')->group(function() {
+        Route::get('/vouchers/voucher-items', [VoucherController::class, 'voucherItems']);
+    });
+
     // * Datasource Integration
     require('api/integration.php');
 

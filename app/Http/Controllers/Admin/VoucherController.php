@@ -9,6 +9,8 @@ use App\Models\VoucherValidation;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Validator;
 
 class VoucherController extends Controller
 {
@@ -83,38 +85,54 @@ class VoucherController extends Controller
     // =============================================>
     public function store(Request $request)
     {
-        $validation = $this->validation($request->all(), [
+        $validator = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'description' => 'nullable|string',
-            'image' => 'nullable|string',
+            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
             'type' => 'nullable|string',
             'valid_until' => 'nullable|date',
             'tenant_location' => 'nullable|string',
             'stock' => 'required|integer|min:0',
             'delivery' => 'required|in:manual,auto',
-            'code' => 'required|string|unique:vouchers,code', // wajib diisi manual
+            'code' => 'required|string|unique:vouchers,code',
             'community_id' => 'nullable|exists:communities,id',
         ]);
-        if ($validation) return $validation;
 
-        DB::beginTransaction();
-        $model = new Voucher();
-        $model->fill($request->only([
-            'name', 'description', 'image', 'type', 'valid_until', 'tenant_location', 'stock', 'delivery', 'code', 'community_id'
-        ]));
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validasi gagal',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
         try {
-            $model->save();
-        } catch (\Throwable $th) {
+            DB::beginTransaction();
+            
+            $data = $request->except('image');
+            
+            // Handle image upload
+            if ($request->hasFile('image')) {
+                $path = $request->file('image')->store('vouchers', 'public');
+                $data['image'] = $path;
+            }
+
+            $model = Voucher::create($data);
+            
+            DB::commit();
+            
+            return response()->json([
+                'success' => true,
+                'message' => 'Voucher berhasil dibuat',
+                'data' => $model
+            ], 201);
+        } catch (\Exception $e) {
             DB::rollBack();
-            return response([
-                "message" => "Error: server side having problem!",
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal membuat voucher: ' . $e->getMessage()
             ], 500);
         }
-        DB::commit();
-        return response([
-            "message" => "success",
-            "data" => $model
-        ], 201);
     }
 
     // ============================================>
@@ -122,38 +140,61 @@ class VoucherController extends Controller
     // ============================================>
     public function update(Request $request, string $id)
     {
-        DB::beginTransaction();
-        $model = Voucher::findOrFail($id);
-        $validation = $this->validation($request->all(), [
+        $validator = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'description' => 'nullable|string',
-            'image' => 'nullable|string',
+            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
             'type' => 'nullable|string',
             'valid_until' => 'nullable|date',
             'tenant_location' => 'nullable|string',
             'stock' => 'required|integer|min:0',
             'delivery' => 'required|in:manual,auto',
-            'code' => 'required|string|unique:vouchers,code,' . $id, // pastikan unik kecuali dirinya sendiri
+            'code' => 'required|string|unique:vouchers,code,' . $id,
             'community_id' => 'nullable|exists:communities,id',
         ]);
-        if ($validation) return $validation;
 
-        $model->fill($request->only([
-            'name', 'description', 'image', 'type', 'valid_until', 'tenant_location', 'stock', 'delivery', 'code', 'community_id'
-        ]));
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validasi gagal',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
         try {
+            DB::beginTransaction();
+            
+            $model = Voucher::findOrFail($id);
+            $data = $request->except('image');
+            
+            // Handle image upload
+            if ($request->hasFile('image')) {
+                // Delete old image if exists
+                if ($model->image && Storage::disk('public')->exists($model->image)) {
+                    Storage::disk('public')->delete($model->image);
+                }
+                
+                $path = $request->file('image')->store('vouchers', 'public');
+                $data['image'] = $path;
+            }
+
+            $model->fill($data);
             $model->save();
-        } catch (\Throwable $th) {
+            
+            DB::commit();
+            
+            return response()->json([
+                'success' => true,
+                'message' => 'Voucher berhasil diupdate',
+                'data' => $model
+            ]);
+        } catch (\Exception $e) {
             DB::rollBack();
-            return response([
-                "message" => "Error: server side having problem!",
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengupdate voucher: ' . $e->getMessage()
             ], 500);
         }
-        DB::commit();
-        return response([
-            "message" => "success",
-            "data" => $model
-        ]);
     }
 
     // ===============================================>
@@ -181,35 +222,51 @@ class VoucherController extends Controller
 
     public function sendToUser(Request $request, $voucherId)
     {
-        $validation = $this->validation($request->all(), [
+        $validator = Validator::make($request->all(), [
             'user_id' => 'required|exists:users,id',
         ]);
-        if ($validation) return $validation;
 
-        $voucher = Voucher::findOrFail($voucherId);
-
-        // Cek stock
-        if ($voucher->stock <= 0) {
-            return response([
-                "message" => "Stock voucher habis!"
-            ], 400);
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validasi gagal',
+                'errors' => $validator->errors()
+            ], 422);
         }
 
-        // Buat voucher item untuk user
-        $voucherItem = new \App\Models\VoucherItem();
-        $voucherItem->user_id = $request->user_id;
-        $voucherItem->voucher_id = $voucher->id;
-        $voucherItem->code = $voucher->code; // atau generate kode unik jika perlu
-        $voucherItem->save();
+        try {
+            $voucher = Voucher::findOrFail($voucherId);
 
-        // Kurangi stock
-        $voucher->stock -= 1;
-        $voucher->save();
+            // Cek stock
+            if ($voucher->stock <= 0) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Stock voucher habis!'
+                ], 400);
+            }
 
-        return response([
-            "message" => "Voucher berhasil dikirim ke user",
-            "data" => $voucherItem
-        ]);
+            // Buat voucher item untuk user
+            $voucherItem = new \App\Models\VoucherItem();
+            $voucherItem->user_id = $request->user_id;
+            $voucherItem->voucher_id = $voucher->id;
+            $voucherItem->code = $voucher->code;
+            $voucherItem->save();
+
+            // Kurangi stock
+            $voucher->stock -= 1;
+            $voucher->save();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Voucher berhasil dikirim ke user',
+                'data' => $voucherItem
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengirim voucher: ' . $e->getMessage()
+            ], 500);
+        }
     }
 
     public function validateCode(Request $request)
@@ -335,6 +392,36 @@ class VoucherController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Gagal mengambil riwayat validasi: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function voucherItems(Request $request)
+    {
+        try {
+            $userId = $request->user()?->id ?? auth()->id();
+            
+            if (!$userId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'User tidak terautentikasi'
+                ], 401);
+            }
+
+            $voucherItems = VoucherItem::with(['voucher.community'])
+                ->where('user_id', $userId)
+                ->orderBy('created_at', 'desc')
+                ->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => $voucherItems
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Error in voucherItems: " . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengambil voucher items: ' . $e->getMessage()
             ], 500);
         }
     }

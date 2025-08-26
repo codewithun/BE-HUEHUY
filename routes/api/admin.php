@@ -73,6 +73,7 @@ Route::prefix('/admin')->group(function() {
 
     Route::apiResource('/vouchers', VoucherController::class);
     Route::post('/vouchers/{id}/send-to-user', [VoucherController::class, 'sendToUser']);
+    Route::get('/vouchers/voucher-items', [VoucherController::class, 'voucherItems']);
 
     Route::apiResource('/voucher-items', VoucherItemController::class);
 

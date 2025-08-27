@@ -45,8 +45,9 @@ Route::prefix('/admin')->group(function() {
         Route::get('/user', [PicklistController::class, 'user']);
     });
 
-    Route::get('/app-config', [AppConfigController::class, 'index']);
-    Route::get('/app-config/{id}', [AppConfigController::class, 'show']);
+    // Moved to public routes in main api.php for public access
+    // Route::get('/app-config', [AppConfigController::class, 'index']);
+    // Route::get('/app-config/{id}', [AppConfigController::class, 'show']);
     Route::post('/app-config/update-other-category', [AppConfigController::class, 'updateOtherCategoryProduct']);
     Route::post('/app-config/{id}', [AppConfigController::class, 'update']);
 

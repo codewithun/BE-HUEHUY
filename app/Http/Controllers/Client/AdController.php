@@ -22,8 +22,11 @@ class AdController extends Controller
 
         $worlds = [];
 
-        foreach ($user->worlds as $world) {
-            array_push($worlds, $world->world_id);
+        // Handle case when user is not authenticated (public endpoint)
+        if ($user && $user->worlds) {
+            foreach ($user->worlds as $world) {
+                array_push($worlds, $world->world_id);
+            }
         }
 
         $model = Ad::with('cube', 'cube.cube_type', 'cube.opening_hours', 'cube.world')
@@ -49,8 +52,13 @@ class AdController extends Controller
             }, function ($query) use ($worlds) {
 
                 return $query->where(function ($q) use ($worlds) {
-                    $q->whereNull('cubes.world_id')
-                        ->orWhereIn('cubes.world_id', $worlds);
+                    if (empty($worlds)) {
+                        // If no user worlds, show all ads with null world_id or show all
+                        $q->whereNull('cubes.world_id');
+                    } else {
+                        $q->whereNull('cubes.world_id')
+                            ->orWhereIn('cubes.world_id', $worlds);
+                    }
                 });
             })
             ->groupBy('ads.id')
@@ -73,8 +81,11 @@ class AdController extends Controller
 
         $worlds = [];
 
-        foreach ($user->worlds as $world) {
-            array_push($worlds, $world->world_id);
+        // Handle case when user is not authenticated (public endpoint)
+        if ($user && $user->worlds) {
+            foreach ($user->worlds as $world) {
+                array_push($worlds, $world->world_id);
+            }
         }
 
         $model = Ad::with('cube', 'cube.cube_type', 'cube.world')
@@ -103,8 +114,13 @@ class AdController extends Controller
             }, function ($query) use ($worlds) {
 
                 return $query->where(function ($q) use ($worlds) {
-                    $q->whereNull('cubes.world_id')
-                        ->orWhereIn('cubes.world_id', $worlds);
+                    if (empty($worlds)) {
+                        // If no user worlds, show all ads with null world_id or show all
+                        $q->whereNull('cubes.world_id');
+                    } else {
+                        $q->whereNull('cubes.world_id')
+                            ->orWhereIn('cubes.world_id', $worlds);
+                    }
                 });
             })
             ->where('is_information', 0)
@@ -169,14 +185,21 @@ class AdController extends Controller
             $query = $query->where('cubes.world_id', $world_id);
         } else {
             $user = Auth::user();
-            $worldRegisteredId = $user->worlds->map(function ($item) {
-                return $item->world_id;
-            });
+            
+            // Handle case when user is not authenticated (public endpoint)
+            if ($user && $user->worlds) {
+                $worldRegisteredId = $user->worlds->map(function ($item) {
+                    return $item->world_id;
+                });
 
-            $query = $query->where(function ($q) use ($worldRegisteredId) {
-                $q->whereNull('cubes.world_id')
-                    ->orWhereIn('cubes.world_id', $worldRegisteredId);
-            });
+                $query = $query->where(function ($q) use ($worldRegisteredId) {
+                    $q->whereNull('cubes.world_id')
+                        ->orWhereIn('cubes.world_id', $worldRegisteredId);
+                });
+            } else {
+                // If no user or no worlds, show only ads with null world_id
+                $query = $query->whereNull('cubes.world_id');
+            }
         }
 
         $query =  $query->select([
@@ -334,14 +357,21 @@ class AdController extends Controller
             $query = $query->where('cubes.world_id', $world_id);
         } else {
             $user = Auth::user();
-            $worldRegisteredId = $user->worlds->map(function ($item) {
-                return $item->world_id;
-            });
+            
+            // Handle case when user is not authenticated (public endpoint)
+            if ($user && $user->worlds) {
+                $worldRegisteredId = $user->worlds->map(function ($item) {
+                    return $item->world_id;
+                });
 
-            $query = $query->where(function ($q) use ($worldRegisteredId) {
-                $q->whereNull('cubes.world_id')
-                    ->orWhereIn('cubes.world_id', $worldRegisteredId);
-            });
+                $query = $query->where(function ($q) use ($worldRegisteredId) {
+                    $q->whereNull('cubes.world_id')
+                        ->orWhereIn('cubes.world_id', $worldRegisteredId);
+                });
+            } else {
+                // If no user or no worlds, show only ads with null world_id
+                $query = $query->whereNull('cubes.world_id');
+            }
         }
 
         $query =  $query->select([

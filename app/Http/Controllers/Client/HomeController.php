@@ -94,8 +94,11 @@ class HomeController extends Controller
 
         $worlds = [];
 
-        foreach ($user->worlds as $world) {
-            array_push($worlds, $world->world_id);
+        // Handle case when user is not authenticated (public endpoint)
+        if ($user && $user->worlds) {
+            foreach ($user->worlds as $world) {
+                array_push($worlds, $world->world_id);
+            }
         }
 
         $homeCategory = AdCategory::where('is_home_display', true)
@@ -132,8 +135,13 @@ class HomeController extends Controller
                 }, function ($query) use ($worlds) {
 
                     return $query->where(function ($q) use ($worlds) {
-                        $q->whereNull('cubes.world_id')
-                            ->orWhereIn('cubes.world_id', $worlds);
+                        if (empty($worlds)) {
+                            // If no user worlds, show all ads with null world_id or show all
+                            $q->whereNull('cubes.world_id');
+                        } else {
+                            $q->whereNull('cubes.world_id')
+                                ->orWhereIn('cubes.world_id', $worlds);
+                        }
                     });
                 })
                 ->distinct('ads.id')

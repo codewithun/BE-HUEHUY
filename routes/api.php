@@ -59,14 +59,20 @@
     Route::post('/account/forgot-password/token-verify', [AuthController::class, 'forgotPasswordTokenVerify']);
     Route::post('/account/forgot-password/new-password', [AuthController::class, 'forgotPasswordNewPassword']);
 
+    // Public endpoints (no auth required)
+    Route::get('/ads/promo-recommendation', [AdController::class, 'getPromoRecommendation']);
+    Route::get('/ads/promo-nearest/{lat}/{long}', [AdController::class, 'getPromoNearest']);
+    Route::get('/ads-category', [HomeController::class, 'category']);
+    Route::get('/app-config/{id}', [AppConfigController::class, 'show']);
+    Route::get('/admin/app-config', [AppConfigController::class, 'index']);
+    Route::get('/admin/app-config/{id}', [AppConfigController::class, 'show']);
+
     Route::middleware('auth:sanctum')->group(function() {
         Route::get('/account', [AuthController::class, 'account']);
         Route::get('/account-unverified', [AuthController::class, 'account_unverified']);
-        
-        Route::get('/app-config/{id}', [AppConfigController::class, 'show']);
 
         /**
-         * * Client
+         * * Client (requires auth)
          */
         Route::get('/notification', [NotificationController::class, 'index']);
         Route::apiResource('/cubes', CubeController::class);
@@ -79,12 +85,8 @@
 
         Route::get('/ads/{lat}/{long}', [AdController::class, 'getAds']);
         Route::get('/shuffle-ads', [AdController::class, 'getShuffleAds']);
-        Route::get('/ads/promo-recommendation', [AdController::class, 'getPromoRecommendation']);
-        Route::get('/ads/promo-nearest/{lat}/{long}', [AdController::class, 'getPromoNearest']);
         Route::get('/menu-cube/{id}', [AdController::class, 'getMenuCubes']);
         Route::get('/get-cube-by-code/{code}', [AdController::class, 'getCubeByCode']);
-
-        Route::get('/ads-category', [HomeController::class, 'category']);
 
         Route::apiResource('/report-content-ticket', ReportContentTicketController::class)->only(['index', 'store']);
 

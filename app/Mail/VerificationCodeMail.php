@@ -9,18 +9,18 @@ use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
 
-class UserRegisterMail extends Mailable
+class VerificationCodeMail extends Mailable
 {
     use Queueable, SerializesModels;
 
-    public $token;
+    public $verificationCode;
 
     /**
      * Create a new message instance.
      */
-    public function __construct($token)
+    public function __construct(string $verificationCode)
     {
-        $this->token = $token;
+        $this->verificationCode = $verificationCode;
     }
 
     /**
@@ -29,7 +29,7 @@ class UserRegisterMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Verifikasi akun Huehuy',
+            subject: 'Kode Verifikasi Email - ' . config('app.name'),
         );
     }
 
@@ -39,9 +39,10 @@ class UserRegisterMail extends Mailable
     public function content(): Content
     {
         return new Content(
-            view: 'mail.user-register',
+            view: 'mail.verification-code',
             with: [
-                'token' => $this->token,
+                'code' => $this->verificationCode,
+                'appName' => config('app.name'),
             ],
         );
     }

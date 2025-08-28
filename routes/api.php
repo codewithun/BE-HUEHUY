@@ -2,6 +2,7 @@
 
     use App\Http\Controllers\AppConfigController;
     use Illuminate\Support\Facades\Route;
+    use App\Http\Controllers\EmailVerificationController;
 
     // =========================>
     // ## Auth controller
@@ -54,6 +55,14 @@
     Route::post('/auth/edit-profile', [AuthController::class, 'editProfile'])->middleware('auth:sanctum');
     Route::post('/auth/change-password', [AuthController::class, 'changePassword'])->middleware('auth:sanctum');
     Route::post('/auth/login-firebase', [AuthController::class, 'login_firebase']);
+
+    // =========================>
+    // * Email Verification
+    // =========================>
+    Route::post('/email/send-verification-code', [EmailVerificationController::class, 'sendCode']);
+    Route::post('/email/verify-code', [EmailVerificationController::class, 'verifyCode']);
+    Route::post('/email/resend-code', [EmailVerificationController::class, 'resendCode']);
+    Route::get('/email/verification-status', [EmailVerificationController::class, 'checkStatus']);
 
     Route::post('/account/forgot-password/send-email', [AuthController::class, 'forgotPasswordSendEmail']);
     Route::post('/account/forgot-password/token-verify', [AuthController::class, 'forgotPasswordTokenVerify']);

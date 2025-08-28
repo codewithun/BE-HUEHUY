@@ -39,6 +39,13 @@ class User extends Authenticatable
     ];
 
     // =========================>
+    // ## Casts
+    // =========================>
+    protected $casts = [
+        'verified_at' => 'datetime',
+    ];
+
+    // =========================>
     // ## Searchable
     // =========================>
     public $searchable = [
@@ -100,6 +107,30 @@ class User extends Authenticatable
         $toArray['picture_source'] = $this->picture_source ? asset('storage/' . $this->picture_source) : null;
 
         return $toArray;
+    }
+
+    /**
+     * Check if user's email is verified
+     */
+    public function hasVerifiedEmail(): bool
+    {
+        return !is_null($this->verified_at);
+    }
+
+    /**
+     * Mark the user's email as verified
+     */
+    public function markEmailAsVerified(): bool
+    {
+        return $this->update(['verified_at' => now()]);
+    }
+
+    /**
+     * Get verification codes for this user's email
+     */
+    public function verificationCodes()
+    {
+        return EmailVerificationCode::where('email', $this->email);
     }
 
     /**

@@ -18,6 +18,7 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Kreait\Firebase\Exception\Auth\FailedToVerifyToken;
 use Kreait\Firebase\Factory;
+use Illuminate\Support\Facades\Log;
 
 class AuthController extends Controller
 {
@@ -119,98 +120,103 @@ class AuthController extends Controller
      */
     public function register(Request $request)
     {
+        // Debug: Log incoming request
+        Log::info('Registration attempt:', $request->all());
+
         // request validation
         $validate = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
-            'email' => 'nullable|email',
-            'phone' => 'nullable|string|max:100',
-            'password' => 'nullable|string|min:8|max:50|confirmed',
+            'email' => 'required|email|unique:users,email',
+            'phone' => 'required|string|max:100',
+            'password' => 'required|string|min:8|max:50|confirmed',
             'image' => 'nullable'
         ]);
 
         if ($validate->fails()) {
+            Log::error('Validation failed:', $validate->errors()->toArray());
             return response()->json([
                 'message' => "Error: Unprocessable Entity! Validation Error",
                 'errors' => $validate->errors(),
             ], 422);
         }
 
-        // check user and delete the same email with not verified yet
-        $checkUser = User::where('email', $request->email)->whereNull('verified_at')->first();
-        if ($checkUser) {
-            UserTokenVerify::where('user_id', $checkUser->id)->delete();
-            $checkUser->delete();
-        } else {
-            $checkUser = User::where('email', $request->email)->whereNotNull('verified_at')->first();
-
-            if($checkUser) {
-                return response()->json([
-                    'message' => "Error: Unprocessable Entity! Validation Error",
-                    'errors' => ['email' => ['Email sudah digunakan']],
-                ], 422);
-            }
-        }
-
-        // process
-        $user = new User();
-        $user->role_id = 2; //default role for 'user'
-        $user->name = $request->name;
-        $user->email = $request->email;
-        $user->phone = $request->phone;
-        $user->password = Hash::make($request->password);
-
-        // Check if has upload file
-        if ($request->hasFile('image')) {
-            $user->picture_source = $this->upload_file($request->file('image'), 'profile');
-        }
-
         DB::beginTransaction();
 
         try {
+            // process
+            $user = new User();
+            $user->role_id = 2; //default role for 'user'
+            $user->name = $request->name;
+            $user->email = $request->email;
+            $user->phone = $request->phone;
+            $user->password = Hash::make($request->password);
+
+            // Check if has upload file
+            if ($request->hasFile('image')) {
+                try {
+                    $user->picture_source = $this->upload_file($request->file('image'), 'profile');
+                } catch (\Throwable $th) {
+                    DB::rollback();
+                    Log::error('Image upload failed:', ['error' => $th->getMessage()]);
+                    return response([
+                        'message' => "Error: failed to upload image",
+                        'error' => config('app.debug') ? $th->getMessage() : null
+                    ], 500);
+                }
+            }
+
             $user->save();
-        } catch (\Throwable $th) {
-            DB::rollback();
+            Log::info('User created successfully:', ['user_id' => $user->id]);
 
-            return response([
-                'message' => "Error: failed to insert new user record!",
-            ], 500);
-        }
+            // insert token - FIX: expired_at should be in the future
+            $token = random_int(10000, 99999);
 
-        // insert token
-        $token = random_int(10000, 99999);
+            UserTokenVerify::where('user_id', $user->id)->whereNull(['used_at', 'email_recipient'])->delete();
 
-        UserTokenVerify::where('user_id', $user->id)->whereNull(['used_at', 'email_recipient'])->delete();
+            $tokenVerify = new UserTokenVerify();
+            $tokenVerify->user_id = $user->id;
+            $tokenVerify->email_recipient = $user->email;
+            $tokenVerify->token = Hash::make($token);
+            $tokenVerify->expired_at = Carbon::now()->addHours(1)->format("Y-m-d H:i:s");
 
-        $tokenVerify = new UserTokenVerify();
-        $tokenVerify->user_id = $user->id;
-        $tokenVerify->email_recipient = $user->email;
-        $tokenVerify->token = Hash::make($token);
-        $tokenVerify->expired_at = Carbon::now()->subHours(1)->format("Y-m-d H:i:s");
-
-        try {
             $tokenVerify->save();
-        } catch (\Throwable $th) {
-            DB::rollback();
+            Log::info('Token created successfully:', ['token_id' => $tokenVerify->id]);
+
+            // send mail verify
+            try {
+                Mail::to($user->email)->send(new UserRegisterMail($token));
+                Log::info('Email sent successfully to:', ['email' => $user->email]);
+            } catch (\Throwable $th) {
+                DB::rollback();
+                Log::error('Email sending failed:', ['error' => $th->getMessage()]);
+                
+                return response([
+                    'message' => "Error: failed to send verification email",
+                    'error' => config('app.debug') ? $th->getMessage() : null
+                ], 500);
+            }
+
+            DB::commit();
+
+            //  set user token
+            $userToken = $user->createToken('sanctum')->plainTextToken;
 
             return response([
-                'message' => "Error: failed to insert new token verify",
+                'message' => 'Success',
+                'data' => $user,
+                'role' => $user->role,
+                'user_token' => $userToken
+            ]);
+
+        } catch (\Throwable $th) {
+            DB::rollback();
+            Log::error('Registration failed:', ['error' => $th->getMessage(), 'trace' => $th->getTraceAsString()]);
+            
+            return response([
+                'message' => "Error: Registration failed",
+                'error' => config('app.debug') ? $th->getMessage() : 'Internal server error'
             ], 500);
         }
-
-        // send mail verify
-        Mail::to($user->email)->send(new UserRegisterMail($token));
-
-        DB::commit();
-
-        //  set user token
-        $userToken = $user->createToken('sanctum')->plainTextToken;
-
-        return response([
-            'message' => 'Success',
-            'data' => $user,
-            'role' => $user->role,
-            'user_token' => $userToken
-        ]);
     }
 
     /**
@@ -234,7 +240,7 @@ class AuthController extends Controller
         $tokenVerify->user_id = $user->id;
         $tokenVerify->email_recipient = $user->email;
         $tokenVerify->token = Hash::make($token);
-        $tokenVerify->expired_at = Carbon::now()->subHours(1)->format("Y-m-d H:i:s");
+        $tokenVerify->expired_at = Carbon::now()->addHours(1)->format("Y-m-d H:i:s");
         $tokenVerify->save();
 
         // send mail verify
@@ -328,7 +334,15 @@ class AuthController extends Controller
 
         // * Check if has upload file
         if ($request->hasFile('image')) {
-            $model->picture_source = $this->upload_file($request->file('image'), 'profile');
+            try {
+                $model->picture_source = $this->upload_file($request->file('image'), 'profile');
+            } catch (\Throwable $th) {
+                DB::rollback();
+                return response([
+                    'message' => "Error: failed to upload image",
+                    'error' => config('app.debug') ? $th->getMessage() : null
+                ], 500);
+            }
 
             if ($oldPicture) {
                 $this->delete_file($oldPicture ?? '');

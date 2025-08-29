@@ -15,20 +15,23 @@ return [
     |
     */
 
-    'paths' => ['api/*', 'sanctum/csrf-cookie'],
+    'paths' => ['api/*','sanctum/csrf-cookie','login/*','logout'],
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['*'],
+    'allowed_origins' => ['https://fe-huehuy.vercel.app',
+  'https://app-159-223-48-146.nip.io',
+  'http://localhost:3000',
+  'http://localhost:5173',],
 
     'allowed_origins_patterns' => [],
 
-    'allowed_headers' => ['*'],
+    'allowed_headers' => ['Content-Type','X-Requested-With','X-XSRF-TOKEN','Authorization','Accept','Origin'],
 
     'exposed_headers' => [],
 
     'max_age' => 0,
 
-    'supports_credentials' => false,
+    'supports_credentials' => true,
 
 ];

@@ -53,7 +53,7 @@ Route::prefix('/script')->group(function () {
  */
 Route::post('/auth/login', [AuthController::class, 'login']);
 Route::post('/auth/register', [AuthController::class, 'register'])->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
-Route::post('/auth/resend-mail', [AuthController::class, 'resendMail'])->middleware('auth:sanctum');
+Route::post('/auth/resend-mail', [AuthController::class, 'resendMail'])->middleware('auth:sanctum')->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
 Route::post('/auth/verify-mail', [AuthController::class, 'mailVerify'])->middleware('auth:sanctum')->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
 Route::post('/auth/edit-profile', [AuthController::class, 'editProfile'])->middleware('auth:sanctum');
 Route::post('/auth/change-password', [AuthController::class, 'changePassword'])->middleware('auth:sanctum');

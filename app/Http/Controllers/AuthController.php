@@ -120,10 +120,10 @@ class AuthController extends Controller
      */
     public function register(Request $request)
     {
-        // Debug: Log incoming request
+        // Log request masuk (untuk debugging)
         Log::info('Registration attempt:', $request->all());
-
-        // request validation
+    
+        // 1) Validasi input
         $validate = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email',
@@ -131,7 +131,7 @@ class AuthController extends Controller
             'password' => 'required|string|min:8|max:50|confirmed',
             'image' => 'nullable'
         ]);
-
+    
         if ($validate->fails()) {
             Log::error('Validation failed:', $validate->errors()->toArray());
             return response()->json([
@@ -139,80 +139,84 @@ class AuthController extends Controller
                 'errors' => $validate->errors(),
             ], 422);
         }
-
+    
         DB::beginTransaction();
-
+    
         try {
-            // process
+            // 2) Buat user
             $user = new User();
-            $user->role_id = 2; //default role for 'user'
+            $user->role_id = 2; // default role 'user'
             $user->name = $request->name;
             $user->email = $request->email;
             $user->phone = $request->phone;
             $user->password = Hash::make($request->password);
-
-            // Check if has upload file
+    
+            // Upload foto jika ada
             if ($request->hasFile('image')) {
                 try {
                     $user->picture_source = $this->upload_file($request->file('image'), 'profile');
                 } catch (\Throwable $th) {
-                    DB::rollback();
+                    DB::rollBack();
                     Log::error('Image upload failed:', ['error' => $th->getMessage()]);
-                    return response([
+                    return response()->json([
                         'message' => "Error: failed to upload image",
-                        'error' => config('app.debug') ? $th->getMessage() : null
                     ], 500);
                 }
             }
-
+    
             $user->save();
             Log::info('User created successfully:', ['user_id' => $user->id]);
-
-            // insert token - FIX: expired_at should be in the future
-            $token = random_int(10000, 99999);
-
-            UserTokenVerify::where('user_id', $user->id)->whereNull(['used_at', 'email_recipient'])->delete();
-
+    
+            // 3) Buat token verifikasi (disimpan hashed)
+            $rawToken = random_int(10000, 99999);
+    
+            // Hapus token yang lama (jika ada) yang belum dipakai
+            UserTokenVerify::where('user_id', $user->id)
+                ->whereNull(['used_at', 'email_recipient'])
+                ->delete();
+    
             $tokenVerify = new UserTokenVerify();
             $tokenVerify->user_id = $user->id;
             $tokenVerify->email_recipient = $user->email;
-            $tokenVerify->token = Hash::make($token);
-            $tokenVerify->expired_at = Carbon::now()->addHours(1)->format("Y-m-d H:i:s");
-
+            $tokenVerify->token = Hash::make($rawToken);
+            $tokenVerify->expired_at = Carbon::now()->addHours(1)->format('Y-m-d H:i:s');
             $tokenVerify->save();
+    
             Log::info('Token created successfully:', ['token_id' => $tokenVerify->id]);
-
-            // send mail verify
-            try {
-                Mail::to($user->email)->send(new UserRegisterMail($token));
-                Log::info('Email sent successfully to:', ['email' => $user->email]);
-            } catch (\Throwable $th) {
-                DB::rollback();
-                Log::error('Email sending failed:', ['error' => $th->getMessage()]);
-                
-                return response([
-                    'message' => "Error: failed to send verification email",
-                    'error' => config('app.debug') ? $th->getMessage() : null
-                ], 500);
-            }
-
+    
+            // 4) Commit dulu transaksi (supaya data user fix),
+            //    pengiriman email dilakukan di luar transaksi agar
+            //    kegagalan email TIDAK membatalkan register.
             DB::commit();
-
-            //  set user token
+    
+            // 5) Kirim email verifikasi (BEST EFFORT, jangan bikin 500 kalau gagal)
+            try {
+                // Kalau mau asynchronous, kamu bisa ganti ke Mail::to(...)->queue(...)
+                Mail::to($user->email)->send(new UserRegisterMail($rawToken));
+                Log::info('Email sent successfully to:', ['email' => $user->email]);
+                $emailStatus = 'Verification email sent';
+            } catch (\Throwable $th) {
+                Log::error('Email sending failed (ignored):', ['error' => $th->getMessage()]);
+                // Jangan return 500—cukup beri info ke client kalau email gagal dikirim
+                $emailStatus = 'Registered, but failed to send verification email';
+            }
+    
+            // 6) Buat token Sanctum untuk auto-login setelah register (opsional)
             $userToken = $user->createToken('sanctum')->plainTextToken;
-
-            return response([
+    
+            return response()->json([
                 'message' => 'Success',
+                'email_status' => $emailStatus,
                 'data' => $user,
                 'role' => $user->role,
-                'user_token' => $userToken
-            ]);
-
+                'user_token' => $userToken,
+            ], 201);
+    
         } catch (\Throwable $th) {
-            DB::rollback();
+            DB::rollBack();
             Log::error('Registration failed:', ['error' => $th->getMessage(), 'trace' => $th->getTraceAsString()]);
-            
-            return response([
+    
+            return response()->json([
                 'message' => "Error: Registration failed",
                 'error' => config('app.debug') ? $th->getMessage() : 'Internal server error'
             ], 500);

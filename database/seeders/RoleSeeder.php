@@ -34,8 +34,14 @@ class RoleSeeder extends Seeder
                 'name' => 'Staff Mitra',
                 'is_corporate' => 1
             ],
+            [
+                'name' => 'Manager Tenant',
+                'is_corporate' => 0
+            ],
         ];
 
+        // Hapus data lama dan insert ulang
+        DB::table('roles')->truncate();
         DB::table('roles')->insert($data);
     }
 }

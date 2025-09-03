@@ -16,4 +16,9 @@ class Community extends Model
     {
         return $this->hasMany(CommunityCategory::class);
     }
+
+    public function events()
+    {
+        return $this->hasMany(Event::class);
+    }
 }

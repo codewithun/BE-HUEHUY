@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\AdCategory;
+use App\Models\Community;
 use App\Models\Corporate;
 use App\Models\Cube;
 use App\Models\CubeType;
@@ -93,5 +94,10 @@ class PicklistController extends Controller
         }
 
         return User::orderBy('name', 'asc')->get(['id as value', DB::raw('CONCAT(name, " (", email, ")") as label'), 'picture_source']);
+    }
+
+    public function community()
+    {
+        return Community::get(['id as value', 'name as label']);
     }
 }

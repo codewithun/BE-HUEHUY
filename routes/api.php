@@ -22,6 +22,7 @@ use App\Http\Controllers\Admin\GenerateOTPController;
 use App\Http\Controllers\Admin\CommunityWidgetController;
 use App\Http\Controllers\Admin\PromoController;
 use App\Http\Controllers\Admin\VoucherController;
+use App\Http\Controllers\Admin\EventController;
 
 /**
  * Route Unauthorized (dipakai jika perlu redirect/abort)
@@ -86,6 +87,12 @@ Route::get('/admin-contact', [HomeController::class, 'adminContact']);
 Route::get('/primary-category', [AdController::class, 'getPrimaryCategory']);
 Route::get('/categories', [AdController::class, 'getCategory']);
 Route::get('/get-cube-by-code-general/{code}', [AdController::class, 'getCubeByCodeGeneral']);
+
+// Public Event routes
+Route::get('/events', [EventController::class, 'index']);
+Route::get('/events/{id}', [EventController::class, 'show']);
+Route::get('/communities/{communityId}/events', [EventController::class, 'indexByCommunity']);
+Route::get('/events/community/{communityId}', [EventController::class, 'indexByCommunity']);
 
 /**
  * Protected endpoints (Sanctum)
@@ -163,6 +170,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::post('/vouchers/validate', [VoucherController::class, 'validateCode']);
     Route::get('vouchers/{voucher}/history', [VoucherController::class, 'history']);
+
+    // Event registration (requires auth)
+    Route::post('/events/{id}/register', [EventController::class, 'register']);
+    Route::get('/events/{id}/registrations', [EventController::class, 'registrations']);
 
     Route::get('/user/promo-validations', [PromoController::class, 'userValidationHistory']);
     Route::get('/user/voucher-validations', [VoucherController::class, 'userValidationHistory']);

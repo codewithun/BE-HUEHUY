@@ -150,7 +150,7 @@ class AuthController extends Controller
             'password' => 'required|string|min:8|max:50|confirmed',
             'image' => 'nullable',
             'role_id' => [
-                'required',
+                'nullable', // Ubah dari 'required' ke 'nullable'
                 'integer',
                 Rule::in([1, 2, 6]) // 1=admin, 2=user, 6=manager_tenant
             ],
@@ -173,7 +173,7 @@ class AuthController extends Controller
         try {
             // 2) Buat user
             $user = new User();
-            $user->role_id = $request->role_id; // gunakan role_id dari request
+            $user->role_id = $request->role_id ?? 2; // Default ke role_id = 2 (user biasa)
             $user->name = $request->name;
             $user->email = $request->email;
             $user->phone = $request->phone;

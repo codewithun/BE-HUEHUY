@@ -4,9 +4,12 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Community;
+use App\Models\CommunityMembership;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\DB;
 
 class CommunityController extends Controller
 {
@@ -42,6 +45,156 @@ public function index(Request $request)
         ]);
     }
 }
+
+    /**
+     * Get communities with membership status for the authenticated user
+     */
+    public function withMembership(Request $request)
+    {
+        try {
+            $user = $request->user();
+            
+            $communities = Community::select([
+                'communities.*',
+                DB::raw('(SELECT COUNT(*) FROM community_memberships WHERE community_id = communities.id AND status = "active") as members'),
+                DB::raw('CASE WHEN community_memberships.id IS NOT NULL THEN 1 ELSE 0 END as isJoined')
+            ])
+            ->leftJoin('community_memberships', function($join) use ($user) {
+                $join->on('communities.id', '=', 'community_memberships.community_id')
+                     ->where('community_memberships.user_id', '=', $user->id)
+                     ->where('community_memberships.status', '=', 'active');
+            })
+            ->get()
+            ->map(function($community) {
+                // Convert isJoined to proper boolean
+                $community->isJoined = (bool) $community->isJoined;
+                return $community;
+            });
+
+            return response()->json($communities);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch communities: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Join a community
+     */
+    public function join(Request $request, $id)
+    {
+        try {
+            $user = $request->user();
+            $community = Community::findOrFail($id);
+
+            // Check if user is already a member
+            if ($community->hasMember($user)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Anda sudah menjadi anggota komunitas ini',
+                    'already_joined' => true
+                ], 422);
+            }
+
+            // Add user to community
+            $membership = $community->addMember($user);
+
+            // Get updated community with member count
+            $updatedCommunity = Community::select([
+                'communities.*',
+                DB::raw('(SELECT COUNT(*) FROM community_memberships WHERE community_id = communities.id AND status = "active") as members')
+            ])
+            ->where('communities.id', $id)
+            ->first();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Berhasil bergabung dengan komunitas',
+                'data' => [
+                    'community' => $updatedCommunity,
+                    'membership' => $membership,
+                    'isJoined' => true
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal bergabung dengan komunitas: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Leave a community
+     */
+    public function leave(Request $request, $id)
+    {
+        try {
+            $user = $request->user();
+            $community = Community::findOrFail($id);
+
+            // Check if user is a member
+            if (!$community->hasMember($user)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Anda bukan anggota komunitas ini'
+                ], 422);
+            }
+
+            // Remove user from community
+            $removed = $community->removeMember($user);
+
+            if ($removed) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Berhasil keluar dari komunitas'
+                ]);
+            } else {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Gagal keluar dari komunitas'
+                ], 500);
+            }
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal keluar dari komunitas: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Get user's joined communities
+     */
+    public function userCommunities(Request $request)
+    {
+        try {
+            $user = $request->user();
+            
+            $communities = Community::select([
+                'communities.*',
+                DB::raw('(SELECT COUNT(*) FROM community_memberships WHERE community_id = communities.id AND status = "active") as members'),
+                'community_memberships.joined_at'
+            ])
+            ->join('community_memberships', 'communities.id', '=', 'community_memberships.community_id')
+            ->where('community_memberships.user_id', $user->id)
+            ->where('community_memberships.status', 'active')
+            ->orderBy('community_memberships.joined_at', 'desc')
+            ->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => $communities
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch user communities: ' . $e->getMessage()
+            ], 500);
+        }
+    }
 
     // Store a new community
     public function store(Request $request)

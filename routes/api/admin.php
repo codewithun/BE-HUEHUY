@@ -12,6 +12,7 @@ use App\Http\Controllers\Admin\CubeController;
 use App\Http\Controllers\Admin\CubeTypeController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\DynamicContentController;
+use App\Http\Controllers\Admin\EventController;
 use App\Http\Controllers\Admin\FaqController;
 use App\Http\Controllers\Admin\GrabController;
 use App\Http\Controllers\Admin\HuehuyAdController;
@@ -43,6 +44,7 @@ Route::prefix('/admin')->group(function() {
         Route::get('/corporate', [PicklistController::class, 'corporate']);
         Route::get('/world', [PicklistController::class, 'world']);
         Route::get('/user', [PicklistController::class, 'user']);
+        Route::get('/community', [PicklistController::class, 'community']);
     });
 
     // Moved to public routes in main api.php for public access
@@ -123,5 +125,10 @@ Route::prefix('/admin')->group(function() {
     Route::post('/promos/{promoId}/items', [PromoItemController::class, 'storeForPromo']);
 
     Route::apiResource('/communities', CommunityController::class);
+
+    // Event routes
+    Route::apiResource('/events', EventController::class);
+    Route::post('/events/{id}/register', [EventController::class, 'register']);
+    Route::get('/events/{id}/registrations', [EventController::class, 'registrations']);
 
 });

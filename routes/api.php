@@ -22,6 +22,8 @@ use App\Http\Controllers\Admin\GenerateOTPController;
 use App\Http\Controllers\Admin\CommunityWidgetController;
 use App\Http\Controllers\Admin\PromoController;
 use App\Http\Controllers\Admin\VoucherController;
+use App\Http\Controllers\Admin\EventController;
+use App\Http\Controllers\Admin\CommunityController;
 
 /**
  * Route Unauthorized (dipakai jika perlu redirect/abort)
@@ -52,9 +54,9 @@ Route::prefix('/script')->group(function () {
  * - Login Google (ID Token) & Logout ADA DI web.php (butuh session).
  */
 Route::post('/auth/login', [AuthController::class, 'login']);
-Route::post('/auth/register', [AuthController::class, 'register']);
-Route::post('/auth/resend-mail', [AuthController::class, 'resendMail'])->middleware('auth:sanctum');
-Route::post('/auth/verify-mail', [AuthController::class, 'mailVerify'])->middleware('auth:sanctum');
+Route::post('/auth/register', [AuthController::class, 'register'])->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
+Route::post('/auth/resend-mail', [AuthController::class, 'resendMail'])->middleware('auth:sanctum')->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
+Route::post('/auth/verify-mail', [AuthController::class, 'mailVerify'])->middleware('auth:sanctum')->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
 Route::post('/auth/edit-profile', [AuthController::class, 'editProfile'])->middleware('auth:sanctum');
 Route::post('/auth/change-password', [AuthController::class, 'changePassword'])->middleware('auth:sanctum');
 
@@ -86,6 +88,18 @@ Route::get('/admin-contact', [HomeController::class, 'adminContact']);
 Route::get('/primary-category', [AdController::class, 'getPrimaryCategory']);
 Route::get('/categories', [AdController::class, 'getCategory']);
 Route::get('/get-cube-by-code-general/{code}', [AdController::class, 'getCubeByCodeGeneral']);
+
+// Public Event routes
+Route::get('/events', [EventController::class, 'index']);
+Route::get('/events/{id}', [EventController::class, 'show']);
+Route::get('/communities/{communityId}/events', [EventController::class, 'indexByCommunity']);
+Route::get('/events/community/{communityId}', [EventController::class, 'indexByCommunity']);
+
+// Public Community routes
+Route::get('/communities/with-membership', [CommunityController::class, 'withMembership'])->middleware('auth:sanctum');
+Route::get('/communities/user-communities', [CommunityController::class, 'userCommunities'])->middleware('auth:sanctum');
+Route::get('/communities', [CommunityController::class, 'index']);
+Route::get('/communities/{id}', [CommunityController::class, 'show']);
 
 /**
  * Protected endpoints (Sanctum)
@@ -132,6 +146,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/cube-huehuy-ads', [HuehuyAdController::class, 'cube_ad']);
     Route::get('/huehuy-ads/{id}', [HuehuyAdController::class, 'show']);
 
+    // Community join/leave routes (keep these here as they need auth)
+    Route::post('/communities/{id}/join', [CommunityController::class, 'join']);
+    Route::post('/communities/{id}/leave', [CommunityController::class, 'leave']);
+
     // Admin
     require __DIR__.'/api/admin.php';
 
@@ -163,6 +181,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::post('/vouchers/validate', [VoucherController::class, 'validateCode']);
     Route::get('vouchers/{voucher}/history', [VoucherController::class, 'history']);
+
+    // Event registration (requires auth)
+    Route::post('/events/{id}/register', [EventController::class, 'register']);
+    Route::get('/events/{id}/registrations', [EventController::class, 'registrations']);
 
     Route::get('/user/promo-validations', [PromoController::class, 'userValidationHistory']);
     Route::get('/user/voucher-validations', [VoucherController::class, 'userValidationHistory']);

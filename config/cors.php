@@ -15,11 +15,11 @@ return [
     |
     */
 
-    'paths' => ['api/*','sanctum/csrf-cookie','login/*','logout'],
+    'paths' => ['api/*','sanctum/csrf-cookie','login','logout'],
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['https://fe-huehuy.vercel.app',
+    'allowed_origins' => ['https://fe-huehuy-ig6k.vercel.app',
   'https://app-159-223-48-146.nip.io',
   'http://localhost:3000',
   'http://localhost:5173',],

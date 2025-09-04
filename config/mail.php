@@ -37,13 +37,24 @@ return [
         'smtp' => [
             'transport' => 'smtp',
             'url' => env('MAIL_URL'),
-            'host' => env('MAIL_HOST', 'smtp.mailgun.org'),
+            'host' => env('MAIL_HOST', 'smtp.gmail.com'),
             'port' => env('MAIL_PORT', 587),
             'encryption' => env('MAIL_ENCRYPTION', 'tls'),
             'username' => env('MAIL_USERNAME'),
             'password' => env('MAIL_PASSWORD'),
-            'timeout' => null,
+            'timeout' => 15, // jangan null biar cepat gagal bila bermasalah
             'local_domain' => env('MAIL_EHLO_DOMAIN'),
+            // Paksa koneksi outbound pakai IPv4 dari PHP-FPM (bukan hanya dari CLI)
+            'stream' => [
+                'socket' => [
+                    'bindto' => '0.0.0.0:0',
+                ],
+                'ssl' => [
+                    'crypto_method' => STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT,
+                    'verify_peer' => true,
+                    'verify_peer_name' => true,
+                ],
+            ],
         ],
 
         'ses' => [

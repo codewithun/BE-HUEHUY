@@ -123,9 +123,9 @@ class EventController extends Controller
         $validator = Validator::make($request->all(), [
             'title' => 'required|string|max:255',
             'subtitle' => 'nullable|string|max:500',
-            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
+            'image' => 'nullable|image|mimes:jpeg,jpg,png,gif,svg,webp,bmp,tiff,ico,heic,heif|max:5120', // Diperluas format dan ukuran
             'organizer_name' => 'required|string|max:255',
-            'organizer_logo' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
+            'organizer_logo' => 'nullable|image|mimes:jpeg,jpg,png,gif,svg,webp,bmp,tiff,ico,heic,heif|max:5120', // Diperluas format dan ukuran
             'organizer_type' => 'nullable|string|max:255',
             'date' => 'required|date|after_or_equal:today',
             'time' => 'nullable|string|max:100',
@@ -142,7 +142,7 @@ class EventController extends Controller
             'contact_phone' => 'nullable|string|max:50',
             'contact_email' => 'nullable|email|max:100',
             'tags' => 'nullable|string',
-            'community_id' => 'required|exists:communities,id', // Ubah jadi required
+            'community_id' => 'required|exists:communities,id',
         ]);
 
         if ($validator->fails()) {
@@ -163,14 +163,20 @@ class EventController extends Controller
             
             $data = $request->except(['image', 'organizer_logo']);
             
-            // Handle image uploads
+            // Handle image uploads with better file handling
             if ($request->hasFile('image')) {
-                $path = $request->file('image')->store('events', 'public');
+                $file = $request->file('image');
+                $extension = $file->getClientOriginalExtension();
+                $filename = 'event_' . time() . '_' . uniqid() . '.' . $extension;
+                $path = $file->storeAs('events', $filename, 'public');
                 $data['image'] = $path;
             }
 
             if ($request->hasFile('organizer_logo')) {
-                $path = $request->file('organizer_logo')->store('events/organizers', 'public');
+                $file = $request->file('organizer_logo');
+                $extension = $file->getClientOriginalExtension();
+                $filename = 'organizer_' . time() . '_' . uniqid() . '.' . $extension;
+                $path = $file->storeAs('events/organizers', $filename, 'public');
                 $data['organizer_logo'] = $path;
             }
 
@@ -207,9 +213,9 @@ class EventController extends Controller
         $validator = Validator::make($request->all(), [
             'title' => 'required|string|max:255',
             'subtitle' => 'nullable|string',
-            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
+            'image' => 'nullable|image|mimes:jpeg,jpg,png,gif,svg,webp,bmp,tiff,ico,heic,heif|max:5120', // Diperluas format dan ukuran
             'organizer_name' => 'required|string|max:255',
-            'organizer_logo' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
+            'organizer_logo' => 'nullable|image|mimes:jpeg,jpg,png,gif,svg,webp,bmp,tiff,ico,heic,heif|max:5120', // Diperluas format dan ukuran
             'organizer_type' => 'nullable|string|max:255',
             'date' => 'required|date',
             'time' => 'nullable|string|max:100',
@@ -243,23 +249,29 @@ class EventController extends Controller
             $model = Event::findOrFail($id);
             $data = $request->except(['image', 'organizer_logo']);
             
-            // Handle event image upload
+            // Handle event image upload with better file handling
             if ($request->hasFile('image')) {
                 // Delete old image if exists
                 if ($model->image && Storage::disk('public')->exists($model->image)) {
                     Storage::disk('public')->delete($model->image);
                 }
-                $path = $request->file('image')->store('events', 'public');
+                $file = $request->file('image');
+                $extension = $file->getClientOriginalExtension();
+                $filename = 'event_' . time() . '_' . uniqid() . '.' . $extension;
+                $path = $file->storeAs('events', $filename, 'public');
                 $data['image'] = $path;
             }
 
-            // Handle organizer logo upload
+            // Handle organizer logo upload with better file handling
             if ($request->hasFile('organizer_logo')) {
                 // Delete old logo if exists
                 if ($model->organizer_logo && Storage::disk('public')->exists($model->organizer_logo)) {
                     Storage::disk('public')->delete($model->organizer_logo);
                 }
-                $path = $request->file('organizer_logo')->store('events/organizers', 'public');
+                $file = $request->file('organizer_logo');
+                $extension = $file->getClientOriginalExtension();
+                $filename = 'organizer_' . time() . '_' . uniqid() . '.' . $extension;
+                $path = $file->storeAs('events/organizers', $filename, 'public');
                 $data['organizer_logo'] = $path;
             }
 

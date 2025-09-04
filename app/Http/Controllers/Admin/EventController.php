@@ -9,6 +9,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Log;
 
 class EventController extends Controller
 {
@@ -109,6 +110,16 @@ class EventController extends Controller
     // Store a newly created resource in storage
     public function store(Request $request)
     {
+        // Tambahkan logging untuk debugging
+        Log::info('Event store request:', [
+            'data' => $request->except(['image', 'organizer_logo']),
+            'files' => [
+                'image' => $request->hasFile('image'),
+                'organizer_logo' => $request->hasFile('organizer_logo')
+            ],
+            'content_type' => $request->header('Content-Type')
+        ]);
+
         $validator = Validator::make($request->all(), [
             'title' => 'required|string|max:255',
             'subtitle' => 'nullable|string',
@@ -135,10 +146,17 @@ class EventController extends Controller
         ]);
 
         if ($validator->fails()) {
+            // Tambahkan detail error untuk debugging
+            Log::error('Event validation failed:', [
+                'errors' => $validator->errors()->toArray(),
+                'request_data' => $request->all()
+            ]);
+            
             return response()->json([
                 'success' => false,
                 'message' => 'Validasi gagal',
-                'errors' => $validator->errors()
+                'errors' => $validator->errors(),
+                'debug_data' => config('app.debug') ? $request->all() : null
             ], 422);
         }
 

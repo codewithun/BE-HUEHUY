@@ -23,6 +23,7 @@ use App\Http\Controllers\Admin\CommunityWidgetController;
 use App\Http\Controllers\Admin\PromoController;
 use App\Http\Controllers\Admin\VoucherController;
 use App\Http\Controllers\Admin\EventController;
+use App\Http\Controllers\Admin\CommunityController;
 
 /**
  * Route Unauthorized (dipakai jika perlu redirect/abort)
@@ -94,6 +95,12 @@ Route::get('/events/{id}', [EventController::class, 'show']);
 Route::get('/communities/{communityId}/events', [EventController::class, 'indexByCommunity']);
 Route::get('/events/community/{communityId}', [EventController::class, 'indexByCommunity']);
 
+// Public Community routes
+Route::get('/communities/with-membership', [CommunityController::class, 'withMembership'])->middleware('auth:sanctum');
+Route::get('/communities/user-communities', [CommunityController::class, 'userCommunities'])->middleware('auth:sanctum');
+Route::get('/communities', [CommunityController::class, 'index']);
+Route::get('/communities/{id}', [CommunityController::class, 'show']);
+
 /**
  * Protected endpoints (Sanctum)
  */
@@ -138,6 +145,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/huehuy-ads', [HuehuyAdController::class, 'index']);
     Route::get('/cube-huehuy-ads', [HuehuyAdController::class, 'cube_ad']);
     Route::get('/huehuy-ads/{id}', [HuehuyAdController::class, 'show']);
+
+    // Community join/leave routes (keep these here as they need auth)
+    Route::post('/communities/{id}/join', [CommunityController::class, 'join']);
+    Route::post('/communities/{id}/leave', [CommunityController::class, 'leave']);
 
     // Admin
     require __DIR__.'/api/admin.php';

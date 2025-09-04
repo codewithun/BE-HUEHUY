@@ -110,9 +110,9 @@ class EventController extends Controller
     // Store a newly created resource in storage
     public function store(Request $request)
     {
-        // Tambahkan logging untuk debugging
-        Log::info('Event store request:', [
-            'data' => $request->except(['image', 'organizer_logo']),
+        // Debug logging
+        Log::info('Event store request data:', [
+            'all_data' => $request->all(),
             'files' => [
                 'image' => $request->hasFile('image'),
                 'organizer_logo' => $request->hasFile('organizer_logo')
@@ -122,15 +122,15 @@ class EventController extends Controller
 
         $validator = Validator::make($request->all(), [
             'title' => 'required|string|max:255',
-            'subtitle' => 'nullable|string',
+            'subtitle' => 'nullable|string|max:500',
             'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
             'organizer_name' => 'required|string|max:255',
             'organizer_logo' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
             'organizer_type' => 'nullable|string|max:255',
-            'date' => 'required|date',
+            'date' => 'required|date|after_or_equal:today',
             'time' => 'nullable|string|max:100',
             'location' => 'required|string|max:255',
-            'address' => 'nullable|string',
+            'address' => 'nullable|string|max:500',
             'category' => 'nullable|string|max:100',
             'participants' => 'nullable|integer|min:0',
             'max_participants' => 'nullable|integer|min:1',
@@ -142,21 +142,19 @@ class EventController extends Controller
             'contact_phone' => 'nullable|string|max:50',
             'contact_email' => 'nullable|email|max:100',
             'tags' => 'nullable|string',
-            'community_id' => 'nullable|exists:communities,id',
+            'community_id' => 'required|exists:communities,id', // Ubah jadi required
         ]);
 
         if ($validator->fails()) {
-            // Tambahkan detail error untuk debugging
             Log::error('Event validation failed:', [
                 'errors' => $validator->errors()->toArray(),
-                'request_data' => $request->all()
+                'request_data' => $request->except(['image', 'organizer_logo'])
             ]);
             
             return response()->json([
                 'success' => false,
                 'message' => 'Validasi gagal',
-                'errors' => $validator->errors(),
-                'debug_data' => config('app.debug') ? $request->all() : null
+                'errors' => $validator->errors()
             ], 422);
         }
 
@@ -165,19 +163,18 @@ class EventController extends Controller
             
             $data = $request->except(['image', 'organizer_logo']);
             
-            // Handle event image upload
+            // Handle image uploads
             if ($request->hasFile('image')) {
                 $path = $request->file('image')->store('events', 'public');
                 $data['image'] = $path;
             }
 
-            // Handle organizer logo upload
             if ($request->hasFile('organizer_logo')) {
                 $path = $request->file('organizer_logo')->store('events/organizers', 'public');
                 $data['organizer_logo'] = $path;
             }
 
-            // Set default values
+            // Set default values jika kosong
             $data['participants'] = $data['participants'] ?? 0;
             $data['max_participants'] = $data['max_participants'] ?? 100;
 
@@ -188,10 +185,15 @@ class EventController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Event berhasil dibuat',
-                'data' => $model
+                'data' => $model->load('community')
             ], 201);
         } catch (\Exception $e) {
             DB::rollBack();
+            Log::error('Event creation failed:', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
             return response()->json([
                 'success' => false,
                 'message' => 'Gagal membuat event: ' . $e->getMessage()

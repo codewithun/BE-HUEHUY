@@ -460,6 +460,33 @@ Route::middleware('auth:sanctum')->group(function () {
         ];
     });
 
+    // DEBUG: Test endpoint untuk debugging account error
+    Route::get('/debug/account-simple', function (Request $request) {
+        try {
+            $user = Auth::user();
+            
+            if (!$user) {
+                return response()->json(['error' => 'No user found'], 401);
+            }
+            
+            // Return minimal user data
+            return response()->json([
+                'success' => true,
+                'user_id' => $user->id,
+                'email' => $user->email,
+                'name' => $user->name ?? 'No name',
+                'debug' => 'Account debug endpoint works'
+            ]);
+            
+        } catch (\Throwable $e) {
+            return response()->json([
+                'error' => 'Debug error: ' . $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ], 200);
+        }
+    });
+
     // Account endpoints yang butuh authentication
     Route::get('/account', [AuthController::class, 'account']);
     Route::get('/account-authenticated', [AuthController::class, 'account']); // Backup untuk compatibility

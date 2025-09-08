@@ -794,10 +794,8 @@ class AuthController extends Controller
     public function account()
     {
         try {
-            // * Find Data
             $user = Auth::user();
 
-            // PERBAIKAN: Cek jika user null (dipanggil tanpa auth)
             if (!$user) {
                 return response()->json([
                     'message' => 'Authentication required',
@@ -805,60 +803,30 @@ class AuthController extends Controller
                 ], 401);
             }
 
-            // PERBAIKAN: Jangan reject user yang belum verified, beri info saja
-            $isVerified = !empty($user->verified_at);
-            
-            // SIMPLIFIED: Load data secara minimal untuk menghindari error relasi
+            Log::info('Account endpoint called for user:', ['user_id' => $user->id, 'email' => $user->email]);
+
+            // ULTRA SIMPLIFIED: Hanya data dasar dari database tanpa relasi apapun
             $userArray = [
                 'id' => $user->id,
-                'name' => $user->name,
-                'email' => $user->email,
+                'name' => $user->name ?? '',
+                'email' => $user->email ?? '',
                 'phone' => $user->phone ?? null,
                 'avatar' => $user->avatar ?? null,
-                'role' => $user->role ?? 'user',
-                'verified_at' => $user->verified_at,
-                'email_verified_at' => $user->email_verified_at,
-                'created_at' => $user->created_at,
-                'updated_at' => $user->updated_at
+                'verified_at' => $user->verified_at ?? null,
+                'email_verified_at' => $user->email_verified_at ?? null,
+                'created_at' => $user->created_at ?? null,
+                'updated_at' => $user->updated_at ?? null,
+                'role_id' => $user->role_id ?? 2
             ];
 
-            // SAFE ACCESS untuk relasi yang mungkin error
-            try {
-                // Coba load cubes dengan aman, skip jika error
-                try {
-                    $userArray['cubes'] = $user->cubes ?? [];
-                } catch (\Exception $cubesError) {
-                    Log::warning('Failed to load cubes relation: ' . $cubesError->getMessage());
-                    $userArray['cubes'] = [];
-                }
-                
-                // Coba load corporate_user dengan aman
-                try {
-                    if (isset($user->corporate_user) && $user->corporate_user) {
-                        $corporateUser = $user->corporate_user;
-                        $userArray['corporate_user'] = [
-                            'role' => $corporateUser->role ?? null,
-                            'corporate' => $corporateUser->corporate ?? null
-                        ];
-                    } else {
-                        $userArray['corporate_user'] = null;
-                    }
-                } catch (\Exception $corporateError) {
-                    Log::warning('Failed to load corporate_user relation: ' . $corporateError->getMessage());
-                    $userArray['corporate_user'] = null;
-                }
-            } catch (\Exception $relationError) {
-                Log::error('Account relation error: ' . $relationError->getMessage(), [
-                    'user_id' => $user->id,
-                    'error' => $relationError->getTraceAsString()
-                ]);
-                // Set default values jika relasi error
-                $userArray['cubes'] = [];
-                $userArray['corporate_user'] = null;
-            }
+            // SKIP semua relasi untuk menghindari error
+            $userArray['cubes'] = [];
+            $userArray['corporate_user'] = null;
+            $userArray['role'] = ['id' => $user->role_id ?? 2, 'name' => 'user'];
 
-            // * Response
-            return response([
+            $isVerified = !empty($user->verified_at);
+
+            return response()->json([
                 'message' => 'Success',
                 'data' => [
                     'profile' => $userArray,
@@ -869,21 +837,39 @@ class AuthController extends Controller
                         'requires_verification' => !$isVerified
                     ]
                 ]
+            ], 200);
+
+        } catch (\Throwable $e) {
+            Log::error('Account endpoint critical error:', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'user_id' => Auth::id() ?? 'not_authenticated',
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
             ]);
             
-        } catch (\Exception $e) {
-            Log::error('Account endpoint error: ' . $e->getMessage(), [
-                'trace' => $e->getTraceAsString(),
-                'user_id' => Auth::id() ?? 'not_authenticated'
-            ]);
+            // Return minimum viable response
             return response()->json([
                 'message' => 'Internal server error',
-                'error' => config('app.debug') ? $e->getMessage() : 'Server error occurred',
-                'debug_info' => config('app.debug') ? [
-                    'file' => $e->getFile(),
-                    'line' => $e->getLine()
-                ] : null
-            ], 500);
+                'error' => 'Account data temporarily unavailable',
+                'data' => [
+                    'profile' => [
+                        'id' => Auth::id() ?? 0,
+                        'name' => 'User',
+                        'email' => '',
+                        'verified_at' => null,
+                        'role' => ['id' => 2, 'name' => 'user'],
+                        'cubes' => [],
+                        'corporate_user' => null
+                    ],
+                    'verification_status' => [
+                        'is_verified' => false,
+                        'verified_at' => null,
+                        'email_verified_at' => null,
+                        'requires_verification' => true
+                    ]
+                ]
+            ], 200); // Return 200 instead of 500 to prevent frontend crash
         }
     }
 

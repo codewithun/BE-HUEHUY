@@ -4,10 +4,12 @@ namespace App\Http\Controllers;
 
 use App\Mail\ResetPasswordMail;
 use App\Mail\UserRegisterMail;
+use App\Mail\VerificationCodeMail;
 use App\Models\PasswordReset;
 use App\Models\PersonalAccessToken;
 use App\Models\User;
 use App\Models\UserTokenVerify;
+use App\Models\EmailVerificationCode;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -167,41 +169,23 @@ class AuthController extends Controller
             $user->save();
             Log::info('User created successfully:', ['user_id' => $user->id]);
     
-            // 3) Buat token verifikasi (disimpan hashed)
-            $rawToken = random_int(10000, 99999);
-    
-            // Hapus token yang lama (jika ada) yang belum dipakai
-            UserTokenVerify::where('user_id', $user->id)
-                ->whereNull(['used_at', 'email_recipient'])
-                ->delete();
-    
-            $tokenVerify = new UserTokenVerify();
-            $tokenVerify->user_id = $user->id;
-            $tokenVerify->email_recipient = $user->email;
-            $tokenVerify->token = Hash::make($rawToken);
-            $tokenVerify->expired_at = Carbon::now()->addHours(1)->format('Y-m-d H:i:s');
-            $tokenVerify->save();
-    
-            Log::info('Token created successfully:', ['token_id' => $tokenVerify->id]);
-    
-            // 4) Commit dulu transaksi (supaya data user fix),
-            //    pengiriman email dilakukan di luar transaksi agar
-            //    kegagalan email TIDAK membatalkan register.
+            // 3) Commit dulu transaksi (supaya data user fix)
             DB::commit();
     
-            // 5) Kirim email verifikasi (BEST EFFORT, jangan bikin 500 kalau gagal)
+            // 4) Buat kode verifikasi dengan sistem baru (di luar transaksi)
             try {
-                // Kalau mau asynchronous, kamu bisa ganti ke Mail::to(...)->queue(...)
-                Mail::to($user->email)->send(new UserRegisterMail($rawToken));
+                $verificationCode = EmailVerificationCode::createForEmail($user->email);
+                
+                // 5) Kirim email verifikasi
+                Mail::to($user->email)->send(new VerificationCodeMail($verificationCode->code));
                 Log::info('Email sent successfully to:', ['email' => $user->email]);
                 $emailStatus = 'Verification email sent';
             } catch (\Throwable $th) {
                 Log::error('Email sending failed (ignored):', ['error' => $th->getMessage()]);
-                // Jangan return 500—cukup beri info ke client kalau email gagal dikirim
                 $emailStatus = 'Registered, but failed to send verification email';
             }
     
-            // 6) Buat token Sanctum untuk auto-login setelah register (opsional)
+            // 6) Buat token Sanctum untuk auto-login setelah register
             $userToken = $user->createToken('sanctum')->plainTextToken;
     
             return response()->json([
@@ -225,6 +209,7 @@ class AuthController extends Controller
 
     /**
      * Re-send email verification for specific user.
+     * Uses new verification system with 6-digit codes.
      *
      * @param  \Illuminate\Http\Request  $request
      * @return \Illuminate\Http\Response
@@ -233,30 +218,36 @@ class AuthController extends Controller
     {
         $user = Auth::user();
 
-        // generate token key
-        $token = random_int(10000, 99999);
+        try {
+            // Create new verification code using the new system
+            $verificationCode = EmailVerificationCode::createForEmail($user->email);
 
-        // delete old mail tokens
-        UserTokenVerify::where('user_id', $user->id)->whereNull('used_at')->delete();
+            // Send email verification
+            Mail::to($user->email)->send(new VerificationCodeMail($verificationCode->code));
 
-        // create new mail token
-        $tokenVerify = new UserTokenVerify();
-        $tokenVerify->user_id = $user->id;
-        $tokenVerify->email_recipient = $user->email;
-        $tokenVerify->token = Hash::make($token);
-        $tokenVerify->expired_at = Carbon::now()->addHours(1)->format("Y-m-d H:i:s");
-        $tokenVerify->save();
+            Log::info('Verification email resent successfully to:', ['email' => $user->email]);
 
-        // send mail verify
-        Mail::to($user->email)->send(new UserRegisterMail($token));
+            return response([
+                'message' => "Email verify has been sent!",
+                'data' => [
+                    'email' => $user->email,
+                    'expires_at' => $verificationCode->expires_at->toISOString()
+                ]
+            ]);
 
-        return response([
-            'message' => "Email verify has been sending!",
-        ]);
+        } catch (\Throwable $th) {
+            Log::error('Failed to resend verification email:', ['error' => $th->getMessage()]);
+            
+            return response([
+                'message' => "Error: Failed to send verification email",
+                'error' => config('app.debug') ? $th->getMessage() : null
+            ], 500);
+        }
     }
 
     /**
      * Verify token verification from email.
+     * Supports both old (5-digit hashed) and new (6-digit plain) verification systems.
      * 
      * @param  \Illuminate\Http\Request  $request
      * @return \Illuminate\Http\Response
@@ -276,42 +267,66 @@ class AuthController extends Controller
         }
 
         $user = User::where('id', Auth::user()->id)->firstOrFail();
-
-        $userTokenVerify = UserTokenVerify::where('user_id', Auth::user()->id)->whereNull('used_at')->latest()->first();
-
-        if (!$userTokenVerify) {
-            return response()->json([
-                'message' => 'Token invalid'
-            ], 422);
-        }
+        $token = $request->token;
 
         DB::beginTransaction();
 
-        // check valid token
-        if (Hash::check($request->token, $userTokenVerify->token)) {
+        try {
+            // Try new system first (6-digit plain code)
+            if (strlen($token) === 6 && ctype_digit($token)) {
+                $isValid = EmailVerificationCode::verifyCode($user->email, $token);
+                
+                if ($isValid) {
+                    $user->verified_at = now();
+                    $user->save();
+                    
+                    DB::commit();
+                    return response([
+                        'message' => 'Success',
+                        'data' => $user
+                    ]);
+                }
+            }
 
-            // update token verify
-            $userTokenVerify->used_at = now();
-            $userTokenVerify->save();
+            // Fallback to old system (5-digit hashed)
+            $userTokenVerify = UserTokenVerify::where('user_id', Auth::user()->id)
+                ->whereNull('used_at')
+                ->latest()
+                ->first();
 
-            // update user
-            $user->verified_at = now();
-            $user->save();
-        } else {
+            if ($userTokenVerify && Hash::check($token, $userTokenVerify->token)) {
+                // update token verify
+                $userTokenVerify->used_at = now();
+                $userTokenVerify->save();
+
+                // update user
+                $user->verified_at = now();
+                $user->save();
+                
+                DB::commit();
+                return response([
+                    'message' => 'Success',
+                    'data' => $user
+                ]);
+            }
+
+            // Token tidak valid
+            DB::rollBack();
             return response()->json([
                 'message' => "Token Invalid!",
                 'errors' => [
-                    'token' => ['Token tidak valid!']
+                    'token' => ['Token tidak valid atau sudah kadaluarsa!']
                 ]
             ], 422);
+
+        } catch (\Throwable $th) {
+            DB::rollBack();
+            Log::error('Mail verification failed:', ['error' => $th->getMessage()]);
+            return response()->json([
+                'message' => "Error: Verification failed",
+                'error' => config('app.debug') ? $th->getMessage() : 'Internal server error'
+            ], 500);
         }
-
-        DB::commit();
-
-        return response([
-            'message' => 'Success',
-            'data' => $user
-        ]);
     }
 
     public function editProfile(Request $request)

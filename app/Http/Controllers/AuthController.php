@@ -207,14 +207,19 @@ class AuthController extends Controller
                 $emailStatus = 'Registered, but failed to send verification email';
             }
 
-            $userToken = $user->createToken('sanctum')->plainTextToken;
+            $userToken = $user->createToken('registration')->plainTextToken;
 
             return response()->json([
-                'message' => 'Success',
-                'email_status' => $emailStatus,
-                'data' => $user,
+                'message' => 'Registration successful, please verify your email',
+                'data' => [
+                    'user' => $user,
+                    'token' => $userToken, // PASTIKAN INI ADA
+                    'email' => $user->email,
+                    'verification_required' => true
+                ],
                 'role' => $user->role,
-                'user_token' => $userToken,
+                'user_token' => $userToken, // Backward compatibility
+                'email_status' => $emailStatus,
             ], 201);
 
         } catch (\Throwable $th) {

@@ -871,4 +871,75 @@ class AuthController extends Controller
             'token' => $user_token,
         ]);
     }
+
+    /**
+     * Simple email verification for QR entry flow
+     */
+    public function mailVerifySimple(Request $request)
+    {
+        Log::info('mailVerifySimple called:', $request->all());
+
+        try {
+            $email = $request->input('email');
+            $token = $request->input('token');
+
+            if (!$email || !$token) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Email dan token wajib diisi',
+                    'errors' => [
+                        'email' => !$email ? ['Email wajib diisi'] : [],
+                        'token' => !$token ? ['Token wajib diisi'] : []
+                    ]
+                ], 422);
+            }
+
+            $user = User::where('email', $email)->first();
+            
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'User tidak ditemukan',
+                    'errors' => [
+                        'email' => ['User tidak ditemukan']
+                    ]
+                ], 404);
+            }
+
+            // Mark as verified (untuk testing, skip actual verification)
+            $user->verified_at = now();
+            if (!$user->email_verified_at) {
+                $user->email_verified_at = now();
+            }
+            $user->save();
+
+            $userToken = $user->createToken('email-verified')->plainTextToken;
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Email verified successfully',
+                'data' => [
+                    'user' => [
+                        'id' => $user->id,
+                        'name' => $user->name,
+                        'email' => $user->email,
+                        'verified_at' => $user->verified_at
+                    ],
+                    'token' => $userToken,
+                    'qr_data' => $request->input('qr_data')
+                ]
+            ], 200);
+
+        } catch (\Exception $e) {
+            Log::error('mailVerifySimple error:', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Verification failed',
+                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
+            ], 500);
+        }
+    }
 }

@@ -466,7 +466,12 @@ Route::middleware('auth:sanctum')->group(function () {
             $user = Auth::user();
             
             if (!$user) {
-                return response()->json(['error' => 'No user found'], 401);
+                return response()->json([
+                    'error' => 'No user found',
+                    'headers' => $request->headers->all(),
+                    'auth_header' => $request->header('Authorization'),
+                    'bearer_token' => $request->bearerToken()
+                ], 401);
             }
             
             // Return minimal user data
@@ -475,15 +480,65 @@ Route::middleware('auth:sanctum')->group(function () {
                 'user_id' => $user->id,
                 'email' => $user->email,
                 'name' => $user->name ?? 'No name',
-                'debug' => 'Account debug endpoint works'
+                'debug' => 'Account debug endpoint works',
+                'token_info' => [
+                    'auth_header' => $request->header('Authorization'),
+                    'bearer_token' => $request->bearerToken() ? 'Present' : 'Missing'
+                ]
             ]);
             
         } catch (\Throwable $e) {
             return response()->json([
                 'error' => 'Debug error: ' . $e->getMessage(),
                 'file' => $e->getFile(),
-                'line' => $e->getLine()
+                'line' => $e->getLine(),
+                'headers' => $request->headers->all()
             ], 200);
+        }
+    });
+
+    // DEBUG: Check token validity without authentication 
+    Route::post('/debug/check-token', function (Request $request) {
+        try {
+            $token = $request->input('token') ?? $request->bearerToken();
+            
+            if (!$token) {
+                return response()->json([
+                    'valid' => false,
+                    'error' => 'No token provided',
+                    'request_data' => $request->all(),
+                    'headers' => $request->headers->all()
+                ]);
+            }
+            
+            // Try to find token in database
+            $personalAccessToken = \Laravel\Sanctum\PersonalAccessToken::findToken($token);
+            
+            if (!$personalAccessToken) {
+                return response()->json([
+                    'valid' => false,
+                    'error' => 'Token not found in database',
+                    'token_preview' => substr($token, 0, 10) . '...'
+                ]);
+            }
+            
+            $user = $personalAccessToken->tokenable;
+            
+            return response()->json([
+                'valid' => true,
+                'token_exists' => true,
+                'user_id' => $user->id,
+                'user_email' => $user->email,
+                'token_name' => $personalAccessToken->name,
+                'token_created' => $personalAccessToken->created_at
+            ]);
+            
+        } catch (\Throwable $e) {
+            return response()->json([
+                'valid' => false,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
         }
     });
 

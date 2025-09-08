@@ -133,9 +133,6 @@ Route::post('/auth/verify-mail', function (Request $request) {
 })->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
 
 // SIMPLE VERSION: untuk bypass masalah validasi kompleks
-Route::post('/auth/verify-mail-simple', [AuthController::class, 'mailVerifySimple'])->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
-
-// TEMPORARY SIMPLE ENDPOINT: untuk bypass validasi kompleks
 Route::post('/auth/verify-mail-simple', function (Request $request) {
     Log::info('Simple verify-mail called:', $request->all());
     

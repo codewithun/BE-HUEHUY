@@ -70,7 +70,7 @@ Route::post('/account/forgot-password/new-password', [AuthController::class, 'fo
 /**
  * Account endpoints that don't require authentication
  */
-Route::get('/account-unverified', [AuthController::class, 'account_unverified'])->middleware('auth:sanctum');
+Route::get('/account-unverified', [AuthController::class, 'account_unverified']);
 
 /**
  * QR Entry System (for QR-based registration and verification)

@@ -268,19 +268,33 @@ class AuthController extends Controller
      */
     public function mailVerify(Request $request)
     {
+        // Add initial logging to see what's being sent
+        Log::info('mailVerify called with request data:', [
+            'all_data' => $request->all(),
+            'headers' => $request->headers->all(),
+            'content_type' => $request->header('Content-Type')
+        ]);
+
         $validate = Validator::make($request->all(), [
             'email' => 'required|email',
-            'token' => 'required|string'
+            'token' => 'required_without:code|string',
+            'code' => 'required_without:token|string'
         ]);
 
         // check validate
         if ($validate->fails()) {
             Log::error('Mail verification validation failed:', [
                 'errors' => $validate->errors()->toArray(),
-                'request_data' => $request->all()
+                'request_data' => $request->all(),
+                'validation_rules' => [
+                    'email' => 'required|email',
+                    'token' => 'required_without:code|string',
+                    'code' => 'required_without:token|string'
+                ]
             ]);
             return response()->json([
-                'message' => "Error: Unprocessable Entity! Validation Error",
+                'success' => false,
+                'message' => "Validation failed",
                 'errors' => $validate->errors(),
             ], 422);
         }
@@ -290,6 +304,7 @@ class AuthController extends Controller
         if (!$user) {
             Log::warning('Mail verification attempted for non-existent user:', ['email' => $request->email]);
             return response()->json([
+                'success' => false,
                 'message' => "User not found",
                 'errors' => [
                     'email' => ['User dengan email ini tidak ditemukan!']
@@ -297,7 +312,8 @@ class AuthController extends Controller
             ], 404);
         }
 
-        $token = $request->token;
+        // Accept both 'token' and 'code' field names
+        $token = $request->token ?? $request->code;
 
         DB::beginTransaction();
 

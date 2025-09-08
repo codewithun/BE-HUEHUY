@@ -269,7 +269,8 @@ class AuthController extends Controller
     public function mailVerify(Request $request)
     {
         $validate = Validator::make($request->all(), [
-            'token' => 'required'
+            'email' => 'required|email',
+            'token' => 'required|string'
         ]);
 
         // check validate
@@ -284,7 +285,18 @@ class AuthController extends Controller
             ], 422);
         }
 
-        $user = User::where('id', Auth::user()->id)->firstOrFail();
+        $user = User::where('email', $request->email)->first();
+        
+        if (!$user) {
+            Log::warning('Mail verification attempted for non-existent user:', ['email' => $request->email]);
+            return response()->json([
+                'message' => "User not found",
+                'errors' => [
+                    'email' => ['User dengan email ini tidak ditemukan!']
+                ]
+            ], 404);
+        }
+
         $token = $request->token;
 
         DB::beginTransaction();
@@ -298,16 +310,26 @@ class AuthController extends Controller
                     $user->verified_at = now();
                     $user->save();
                     
+                    // Create token for user to continue with QR flow
+                    $userToken = $user->createToken('email-verified')->plainTextToken;
+                    
                     DB::commit();
-                    return response([
-                        'message' => 'Success',
-                        'data' => $user
-                    ]);
+                    Log::info('Email verification successful for user:', ['email' => $user->email]);
+                    
+                    return response()->json([
+                        'success' => true,
+                        'message' => 'Email verified successfully',
+                        'data' => [
+                            'user' => $user,
+                            'token' => $userToken,
+                            'qr_data' => $request->input('qr_data')
+                        ]
+                    ], 200);
                 }
             }
 
             // Fallback to old system (5-digit hashed)
-            $userTokenVerify = UserTokenVerify::where('user_id', Auth::user()->id)
+            $userTokenVerify = UserTokenVerify::where('user_id', $user->id)
                 ->whereNull('used_at')
                 ->latest()
                 ->first();
@@ -321,14 +343,28 @@ class AuthController extends Controller
                 $user->verified_at = now();
                 $user->save();
                 
+                // Create token for user to continue with QR flow
+                $userToken = $user->createToken('email-verified')->plainTextToken;
+                
                 DB::commit();
-                return response([
-                    'message' => 'Success',
-                    'data' => $user
-                ]);
+                Log::info('Email verification successful (old system) for user:', ['email' => $user->email]);
+                
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Email verified successfully',
+                    'data' => [
+                        'user' => $user,
+                        'token' => $userToken,
+                        'qr_data' => $request->input('qr_data')
+                    ]
+                ], 200);
             }
 
+            DB::rollBack();
+            Log::warning('Invalid verification token provided for user:', ['email' => $user->email]);
+
             return response()->json([
+                'success' => false,
                 'message' => "Token Invalid!",
                 'errors' => [
                     'token' => ['Token tidak valid atau sudah kadaluarsa!']
@@ -337,8 +373,13 @@ class AuthController extends Controller
 
         } catch (\Throwable $th) {
             DB::rollBack();
-            Log::error('Mail verification failed:', ['error' => $th->getMessage()]);
+            Log::error('Mail verification failed:', [
+                'error' => $th->getMessage(),
+                'trace' => $th->getTraceAsString(),
+                'request_data' => $request->all()
+            ]);
             return response()->json([
+                'success' => false,
                 'message' => "Error: Verification failed",
                 'error' => config('app.debug') ? $th->getMessage() : 'Internal server error'
             ], 500);

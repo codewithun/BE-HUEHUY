@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Auth;
 
 // Controllers
 use App\Http\Controllers\AppConfigController;
@@ -597,6 +598,33 @@ Route::middleware('auth:sanctum')->group(function () {
     // Account endpoints yang butuh authentication
     Route::get('/account', [AuthController::class, 'account']);
     Route::get('/account-authenticated', [AuthController::class, 'account']); // Backup untuk compatibility
+    
+    // Account untuk user yang baru register (belum verified) 
+    Route::get('/account-pending', function (Request $request) {
+        $user = Auth::user();
+        
+        if (!$user) {
+            return response()->json([
+                'message' => 'Authentication required'
+            ], 401);
+        }
+        
+        // Return user info meskipun belum verified
+        return response()->json([
+            'message' => 'Success',
+            'data' => [
+                'profile' => [
+                    'id' => $user->id,
+                    'name' => $user->name,
+                    'email' => $user->email,
+                    'verified_at' => $user->verified_at,
+                    'email_verified_at' => $user->email_verified_at,
+                    'status' => $user->verified_at ? 'verified' : 'pending_verification'
+                ]
+            ],
+            'verification_required' => !$user->verified_at
+        ]);
+    });
 
     // Client
     Route::get('/notification', [NotificationController::class, 'index']);

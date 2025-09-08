@@ -774,9 +774,8 @@ class AuthController extends Controller
             ], 401);
         }
 
-        if(!$user->verified_at){
-            return response(['unauthorized'], 401);
-        }
+        // PERBAIKAN: Jangan reject user yang belum verified, beri info saja
+        $isVerified = !empty($user->verified_at);
         
         $user->role = $user->role;
         $user->cubes = $user->cubes;
@@ -789,7 +788,13 @@ class AuthController extends Controller
         return response([
             'message' => 'Success',
             'data' => [
-                'profile' => $user
+                'profile' => $user,
+                'verification_status' => [
+                    'is_verified' => $isVerified,
+                    'verified_at' => $user->verified_at,
+                    'email_verified_at' => $user->email_verified_at,
+                    'requires_verification' => !$isVerified
+                ]
             ]
         ]);
     }

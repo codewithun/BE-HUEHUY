@@ -101,13 +101,43 @@ Route::post('/auth/verify-mail-simple', function (Request $request) {
             ], 200); // Return 200 bukan 404
         }
         
-        // UNTUK TESTING: Langsung anggap berhasil tanpa validasi token
+        // SIMPLE: Langsung anggap berhasil tanpa validasi token ketat
         $user->email_verified_at = now();
         $user->verified_at = now();
         $user->save();
         
         // Generate token untuk user
         $userToken = $user->createToken('email-verified-simple')->plainTextToken;
+        
+        // Parse QR data untuk mendapatkan informasi voucher/promo
+        $qrData = $allData['qr_data'] ?? null;
+        $redirectInfo = null;
+        
+        if ($qrData) {
+            try {
+                // Coba parse JSON QR data
+                $parsedQrData = json_decode($qrData, true);
+                
+                if ($parsedQrData && isset($parsedQrData['type'])) {
+                    if ($parsedQrData['type'] === 'voucher' && isset($parsedQrData['voucherId'])) {
+                        $redirectInfo = [
+                            'type' => 'voucher',
+                            'voucher_id' => $parsedQrData['voucherId'],
+                            'community_id' => $parsedQrData['communityId'] ?? null,
+                            'redirect_url' => '/voucher/' . $parsedQrData['voucherId']
+                        ];
+                    } elseif ($parsedQrData['type'] === 'promo' && isset($parsedQrData['promoId'])) {
+                        $redirectInfo = [
+                            'type' => 'promo', 
+                            'promo_id' => $parsedQrData['promoId'],
+                            'redirect_url' => '/promo/' . $parsedQrData['promoId']
+                        ];
+                    }
+                }
+            } catch (\Exception $e) {
+                Log::warning('Failed to parse QR data:', ['qr_data' => $qrData, 'error' => $e->getMessage()]);
+            }
+        }
         
         return response()->json([
             'success' => true,
@@ -121,7 +151,9 @@ Route::post('/auth/verify-mail-simple', function (Request $request) {
                     'email_verified_at' => $user->email_verified_at
                 ],
                 'token' => $userToken,
-                'qr_data' => $allData['qr_data'] ?? null
+                'qr_data' => $qrData,
+                'redirect_info' => $redirectInfo,
+                'next_action' => $redirectInfo ? 'redirect_to_promo' : 'continue_normal_flow'
             ]
         ], 200);
         
@@ -193,6 +225,34 @@ Route::post('/auth/verify-mail', function (Request $request) {
         // Generate token untuk user
         $userToken = $user->createToken('email-verified')->plainTextToken;
         
+        // Parse QR data untuk redirect info (sama seperti verify-mail-simple)
+        $qrData = $allData['qr_data'] ?? null;
+        $redirectInfo = null;
+        
+        if ($qrData) {
+            try {
+                $parsedQrData = json_decode($qrData, true);
+                if ($parsedQrData && isset($parsedQrData['type'])) {
+                    if ($parsedQrData['type'] === 'voucher' && isset($parsedQrData['voucherId'])) {
+                        $redirectInfo = [
+                            'type' => 'voucher',
+                            'voucher_id' => $parsedQrData['voucherId'],
+                            'community_id' => $parsedQrData['communityId'] ?? null,
+                            'redirect_url' => '/voucher/' . $parsedQrData['voucherId']
+                        ];
+                    } elseif ($parsedQrData['type'] === 'promo' && isset($parsedQrData['promoId'])) {
+                        $redirectInfo = [
+                            'type' => 'promo',
+                            'promo_id' => $parsedQrData['promoId'], 
+                            'redirect_url' => '/promo/' . $parsedQrData['promoId']
+                        ];
+                    }
+                }
+            } catch (\Exception $e) {
+                Log::warning('Failed to parse QR data in verify-mail:', ['qr_data' => $qrData, 'error' => $e->getMessage()]);
+            }
+        }
+        
         return response()->json([
             'success' => true,
             'message' => 'Email berhasil diverifikasi!',
@@ -206,7 +266,9 @@ Route::post('/auth/verify-mail', function (Request $request) {
                     'email_verified_at' => $user->email_verified_at
                 ],
                 'token' => $userToken,
-                'qr_data' => $allData['qr_data'] ?? null
+                'qr_data' => $qrData,
+                'redirect_info' => $redirectInfo,
+                'next_action' => $redirectInfo ? 'redirect_to_promo' : 'continue_normal_flow'
             ]
         ], 200);
         

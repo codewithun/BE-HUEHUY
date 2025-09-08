@@ -22,8 +22,6 @@ use App\Http\Controllers\Admin\GenerateOTPController;
 use App\Http\Controllers\Admin\CommunityWidgetController;
 use App\Http\Controllers\Admin\PromoController;
 use App\Http\Controllers\Admin\VoucherController;
-use App\Http\Controllers\Admin\EventController;
-use App\Http\Controllers\Admin\CommunityController;
 
 /**
  * Route Unauthorized (dipakai jika perlu redirect/abort)
@@ -66,6 +64,21 @@ Route::post('/auth/login-firebase', [AuthController::class, 'login_firebase']);
 Route::post('/account/forgot-password/send-email', [AuthController::class, 'forgotPasswordSendEmail']);
 Route::post('/account/forgot-password/token-verify', [AuthController::class, 'forgotPasswordTokenVerify']);
 Route::post('/account/forgot-password/new-password', [AuthController::class, 'forgotPasswordNewPassword']);
+
+/**
+ * QR Entry System (for QR-based registration and verification)
+ */
+Route::post('/qr-entry/register', [QrEntryController::class, 'qrRegisterAndVerify']);
+Route::post('/qr-entry/verify-email', [QrEntryController::class, 'qrVerifyEmail']);
+Route::get('/qr-entry/status', [QrEntryController::class, 'qrEntryStatus']);
+
+/**
+ * Email Verification (New System)
+ */
+Route::post('/email-verification/send-code', [EmailVerificationController::class, 'sendCode']);
+Route::post('/email-verification/verify-code', [EmailVerificationController::class, 'verifyCode']);
+Route::post('/email-verification/resend-code', [EmailVerificationController::class, 'resendCode']);
+Route::get('/email-verification/check-status', [EmailVerificationController::class, 'checkStatus']);
 
 /**
  * Public endpoints

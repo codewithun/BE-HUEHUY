@@ -768,40 +768,64 @@ class AuthController extends Controller
 
     public function account()
     {
-        // * Find Data
-        $user = Auth::user();
+        try {
+            // * Find Data
+            $user = Auth::user();
 
-        // PERBAIKAN: Cek jika user null (dipanggil tanpa auth)
-        if (!$user) {
-            return response()->json([
-                'message' => 'Authentication required',
-                'error' => 'No authenticated user found'
-            ], 401);
-        }
+            // PERBAIKAN: Cek jika user null (dipanggil tanpa auth)
+            if (!$user) {
+                return response()->json([
+                    'message' => 'Authentication required',
+                    'error' => 'No authenticated user found'
+                ], 401);
+            }
 
-        // PERBAIKAN: Jangan reject user yang belum verified, beri info saja
-        $isVerified = !empty($user->verified_at);
-        
-        $user->role = $user->role;
-        $user->cubes = $user->cubes;
-        if ($user->corporate_user) {
-            $user->corporate_user->role = $user->corporate_user->role;
-            $user->corporate_user = $user->corporate_user->corporate;
-        }
+            // PERBAIKAN: Jangan reject user yang belum verified, beri info saja
+            $isVerified = !empty($user->verified_at);
+            
+            // SAFE ACCESS untuk relasi yang mungkin error
+            try {
+                $user->role = $user->role;
+                // Safe load relasi cubes - cek apakah method cubes exists
+                if (method_exists($user, 'cubes')) {
+                    $user->cubes = $user->cubes;
+                } else {
+                    $user->cubes = [];
+                }
+                
+                if ($user->corporate_user) {
+                    $corporateUser = $user->corporate_user;
+                    $corporateUser->role = $corporateUser->role ?? null;
+                    $user->corporate_user = $corporateUser->corporate ?? null;
+                }
+            } catch (\Exception $relationError) {
+                Log::error('Account relation error: ' . $relationError->getMessage());
+                // Set default values jika relasi error
+                $user->cubes = [];
+                $user->corporate_user = null;
+            }
 
-        // * Response
-        return response([
-            'message' => 'Success',
-            'data' => [
-                'profile' => $user,
-                'verification_status' => [
-                    'is_verified' => $isVerified,
-                    'verified_at' => $user->verified_at,
-                    'email_verified_at' => $user->email_verified_at,
-                    'requires_verification' => !$isVerified
+            // * Response
+            return response([
+                'message' => 'Success',
+                'data' => [
+                    'profile' => $user,
+                    'verification_status' => [
+                        'is_verified' => $isVerified,
+                        'verified_at' => $user->verified_at,
+                        'email_verified_at' => $user->email_verified_at,
+                        'requires_verification' => !$isVerified
+                    ]
                 ]
-            ]
-        ]);
+            ]);
+            
+        } catch (\Exception $e) {
+            Log::error('Account endpoint error: ' . $e->getMessage());
+            return response()->json([
+                'message' => 'Internal server error',
+                'error' => config('app.debug') ? $e->getMessage() : 'Server error occurred'
+            ], 500);
+        }
     }
 
     public function account_unverified()

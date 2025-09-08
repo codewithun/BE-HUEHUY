@@ -766,6 +766,14 @@ class AuthController extends Controller
         // * Find Data
         $user = Auth::user();
 
+        // PERBAIKAN: Cek jika user null (dipanggil tanpa auth)
+        if (!$user) {
+            return response()->json([
+                'message' => 'Authentication required',
+                'error' => 'No authenticated user found'
+            ], 401);
+        }
+
         if(!$user->verified_at){
             return response(['unauthorized'], 401);
         }

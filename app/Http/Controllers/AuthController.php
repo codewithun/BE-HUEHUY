@@ -32,75 +32,91 @@ class AuthController extends Controller
      */
     public function login(Request $request)
     {
+        // Log request masuk untuk debugging
+        Log::info('Login attempt:', [
+            'request_data' => $request->all(),
+            'headers' => $request->headers->all(),
+            'content_type' => $request->header('Content-Type')
+        ]);
+
         // =========================>
         // ## validate request
         // =========================>
         $validate = Validator::make($request->all(), [
-            "email" => 'required|string|max:255|exists:users,email',
+            "email" => 'required|string|email|max:255',
             "password" => 'required',
-            "scope" => ['required', 'string', Rule::in(['admin', 'corporate', 'user'])]
+            "scope" => ['nullable', 'string', Rule::in(['admin', 'corporate', 'user'])] // Make scope optional
         ]);
 
         if ($validate->fails()) {
+            Log::error('Login validation failed:', [
+                'errors' => $validate->errors()->toArray(),
+                'request_data' => $request->all()
+            ]);
             return response()->json([
                 'message' => "Error: Validation Error!",
                 'errors' => $validate->errors(),
             ], 422);
         }
 
+        // Set default scope if not provided
+        $scope = $request->scope ?? 'user';
+
         // =========================>
         // ## get user request
         // =========================>
-        $user = User::select('users.*')
-            ->where('email', $request->email);
-
-        switch ($request->scope) {
-            case 'admin': {
-                $user = $user->where('role_id', 1)
+        Log::info('Searching user with email: ' . $request->email . ' and scope: ' . $scope);
+        
+        switch ($scope) {
+            case 'admin':
+                $user = User::where('email', $request->email)
+                    ->where('role_id', 1)
                     ->first();
-            } break;
-            case 'corporate': {
-                $user = $user->join('corporate_users', 'corporate_users.user_id', 'users.id')
+                break;
+            case 'corporate':
+                $user = User::where('email', $request->email)
+                    ->join('corporate_users', 'corporate_users.user_id', 'users.id')
                     ->first();
-            } break;
-            default: {
-                $user = $user
-                    ->where('role_id', 2)
+                break;
+            default: // 'user' scope - terima user biasa (role_id: 2) dan manager tenant (role_id: 6)
+                $user = User::where('email', $request->email)
+                    ->whereIn('role_id', [2, 6]) // 2 = User, 6 = Manager Tenant
                     ->first();
-            } break;
+                break;
         }
 
+        Log::info('User found:', ['user' => $user ? $user->toArray() : null]);
+
         if (!$user) {
+            Log::warning('User not found for email: ' . $request->email . ' with scope: ' . $scope);
             return response([
                 'message' => 'User not found',
                 'errors' => [
-                    'email' => ['Data tidak ditemukan']
+                    'email' => ['Data tidak ditemukan untuk scope ' . $scope]
                 ]
             ], 422);
         }
 
         // =========================>
-        // ## check active user
-        // =========================>
-        // if (empty($user->verified_at)) {
-        //     return response()->json([
-        //         'message' => 'User inactive. please contact administrator',
-        //         'errors' => ['email' => ['Akun di non-aktifkan, silahkan menghubungi administrator!']],
-        //     ], 422);
-        // }
-
-        // =========================>
         // ## check password
         // =========================>
+        Log::info('Checking password for user:', [
+            'email' => $user->email,
+            'hash_prefix' => substr($user->password, 0, 20) . '...'
+        ]);
+        
         if (!Hash::check($request->password, $user->password)) {
+            Log::warning('Password check failed for user:', ['email' => $user->email]);
             return response()->json([
                 'message' => 'Wrong username or password in our records',
                 'errors' => ['password' => ['Password salah!']],
             ], 422);
         }
+        
+        Log::info('Password check successful for user:', ['email' => $user->email]);
 
         // =========================>
-        // ## create password
+        // ## create token
         // =========================>
         $user_token = $user->createToken('sanctum')->plainTextToken;
 
@@ -109,7 +125,7 @@ class AuthController extends Controller
             'data' => [
                 "token" => $user_token,
                 "role" => $user->role,
-                "scope" => $request->scope
+                "scope" => $scope
             ]
         ]);
     }
@@ -122,37 +138,49 @@ class AuthController extends Controller
      */
     public function register(Request $request)
     {
-        // Log request masuk (untuk debugging)
-        Log::info('Registration attempt:', $request->all());
-    
+        Log::info('Registration attempt:', [
+            'request_data' => $request->all(),
+            'headers' => $request->headers->all(),
+            'content_type' => $request->header('Content-Type')
+        ]);
+
         // 1) Validasi input
         $validate = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email',
             'phone' => 'required|string|max:100',
             'password' => 'required|string|min:8|max:50|confirmed',
-            'image' => 'nullable'
+            'image' => 'nullable',
+            'role_id' => [
+                'nullable', // Ubah dari 'required' ke 'nullable'
+                'integer',
+                Rule::in([1, 2, 6]) // 1=admin, 2=user, 6=manager_tenant
+            ],
         ]);
-    
+
         if ($validate->fails()) {
+            Log::error('Registration validation failed:', [
+                'errors' => $validate->errors()->toArray(),
+                'request_data' => $request->all()
+            ]);
             Log::error('Validation failed:', $validate->errors()->toArray());
             return response()->json([
                 'message' => "Error: Unprocessable Entity! Validation Error",
                 'errors' => $validate->errors(),
             ], 422);
         }
-    
+
         DB::beginTransaction();
-    
+
         try {
             // 2) Buat user
             $user = new User();
-            $user->role_id = 2; // default role 'user'
+            $user->role_id = $request->role_id ?? 2; // Default ke role_id = 2 (user biasa)
             $user->name = $request->name;
             $user->email = $request->email;
             $user->phone = $request->phone;
             $user->password = Hash::make($request->password);
-    
+
             // Upload foto jika ada
             if ($request->hasFile('image')) {
                 try {
@@ -165,14 +193,8 @@ class AuthController extends Controller
                     ], 500);
                 }
             }
-    
+
             $user->save();
-            Log::info('User created successfully:', ['user_id' => $user->id]);
-    
-            // 3) Commit dulu transaksi (supaya data user fix)
-            DB::commit();
-    
-            // 4) Buat kode verifikasi dengan sistem baru (di luar transaksi)
             try {
                 $verificationCode = EmailVerificationCode::createForEmail($user->email);
                 
@@ -184,10 +206,9 @@ class AuthController extends Controller
                 Log::error('Email sending failed (ignored):', ['error' => $th->getMessage()]);
                 $emailStatus = 'Registered, but failed to send verification email';
             }
-    
-            // 6) Buat token Sanctum untuk auto-login setelah register
+
             $userToken = $user->createToken('sanctum')->plainTextToken;
-    
+
             return response()->json([
                 'message' => 'Success',
                 'email_status' => $emailStatus,
@@ -195,11 +216,11 @@ class AuthController extends Controller
                 'role' => $user->role,
                 'user_token' => $userToken,
             ], 201);
-    
+
         } catch (\Throwable $th) {
             DB::rollBack();
             Log::error('Registration failed:', ['error' => $th->getMessage(), 'trace' => $th->getTraceAsString()]);
-    
+
             return response()->json([
                 'message' => "Error: Registration failed",
                 'error' => config('app.debug') ? $th->getMessage() : 'Internal server error'
@@ -227,13 +248,6 @@ class AuthController extends Controller
 
             Log::info('Verification email resent successfully to:', ['email' => $user->email]);
 
-            return response([
-                'message' => "Email verify has been sent!",
-                'data' => [
-                    'email' => $user->email,
-                    'expires_at' => $verificationCode->expires_at->toISOString()
-                ]
-            ]);
 
         } catch (\Throwable $th) {
             Log::error('Failed to resend verification email:', ['error' => $th->getMessage()]);
@@ -260,8 +274,12 @@ class AuthController extends Controller
 
         // check validate
         if ($validate->fails()) {
+            Log::error('Mail verification validation failed:', [
+                'errors' => $validate->errors()->toArray(),
+                'request_data' => $request->all()
+            ]);
             return response()->json([
-                'message' => "Error: Unprocessable Entity!",
+                'message' => "Error: Unprocessable Entity! Validation Error",
                 'errors' => $validate->errors(),
             ], 422);
         }
@@ -310,8 +328,6 @@ class AuthController extends Controller
                 ]);
             }
 
-            // Token tidak valid
-            DB::rollBack();
             return response()->json([
                 'message' => "Token Invalid!",
                 'errors' => [
@@ -357,6 +373,7 @@ class AuthController extends Controller
                 $model->picture_source = $this->upload_file($request->file('image'), 'profile');
             } catch (\Throwable $th) {
                 DB::rollback();
+                Log::error('Image upload failed:', ['error' => $th->getMessage()]);
                 return response([
                     'message' => "Error: failed to upload image",
                     'error' => config('app.debug') ? $th->getMessage() : null
@@ -373,6 +390,7 @@ class AuthController extends Controller
             $model->save();
         } catch (\Throwable $th) {
             DB::rollBack();
+            Log::error('Failed to save user:', ['error' => $th->getMessage()]);
             return response([
                 "message" => "Error: server side having problem!",
             ], 500);
@@ -400,6 +418,10 @@ class AuthController extends Controller
         ]);
 
         if ($validate->fails()) {
+            Log::error('Password change validation failed:', [
+                'errors' => $validate->errors()->toArray(),
+                'request_data' => $request->all()
+            ]);
             return response()->json([
                 'message' => "Error: Unprocessable Entity! Validation Error",
                 'errors' => $validate->errors(),
@@ -416,6 +438,7 @@ class AuthController extends Controller
                 'password' => Hash::make($request->password)
             ]);
         } else {
+            Log::error('Invalid old password:', ['old_password' => $request->old_password]);
             return response()->json([
                 'message' => "Error: validation error, wrong old password",
                 'errors' => [
@@ -442,6 +465,10 @@ class AuthController extends Controller
         ]);
 
         if ($validate->fails()) {
+            Log::error('Forgot password validation failed:', [
+                'errors' => $validate->errors()->toArray(),
+                'request_data' => $request->all()
+            ]);
             return response()->json([
                 'message' => "Error: Unprocessable Entity! Validation Error",
                 'errors' => $validate->errors(),
@@ -479,6 +506,7 @@ class AuthController extends Controller
                 $passwordReset->save();
             } catch (\Throwable $th) {
                 DB::rollback();
+                Log::error('Failed to create new reset password record:', ['error' => $th->getMessage()]);
                 return response([
                     'message' => "Error: failed to create new reset password redord",
                 ], 500);
@@ -491,6 +519,7 @@ class AuthController extends Controller
                 ]);
             } catch (\Throwable $th) {
                 DB::rollback();
+                Log::error('Failed to update reset password record:', ['error' => $th->getMessage()]);
                 return response([
                     'message' => "Error: failed to update reset password redord",
                 ], 500);
@@ -526,6 +555,10 @@ class AuthController extends Controller
 
         // check validate
         if ($validator->fails()) {
+            Log::error('Forgot password token validation failed:', [
+                'errors' => $validator->errors()->toArray(),
+                'request_data' => $request->all()
+            ]);
             return response()->json([
                 'message' => "Error: Unprocessable Entity! Validation Error",
                 'errors' => $validator->errors(),
@@ -553,6 +586,7 @@ class AuthController extends Controller
             $resetPassword->save();
         } catch (\Throwable $th) {
             DB::rollback();
+            Log::error('Failed to update reset password record:', ['error' => $th->getMessage()]);
             return response([
                 'message' => "Error: failed to update reset password redord",
             ], 500);
@@ -579,6 +613,10 @@ class AuthController extends Controller
         ]);
 
         if ($validator->fails()) {
+            Log::error('New password validation failed:', [
+                'errors' => $validator->errors()->toArray(),
+                'request_data' => $request->all()
+            ]);
             return response()->json([
                 'message' => "Error: Unprocessable Entity! Validation Error",
                 'errors' => $validator->errors(),
@@ -618,6 +656,7 @@ class AuthController extends Controller
             ]);
         } catch (\Throwable $th) {
             DB::rollback();
+            Log::error('Failed to update user password:', ['error' => $th->getMessage()]);
             return response([
                 'message' => "Error: failed to update reset password redord",
             ], 500);

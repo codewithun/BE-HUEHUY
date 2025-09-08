@@ -272,37 +272,72 @@ class AuthController extends Controller
         Log::info('mailVerify called with request data:', [
             'all_data' => $request->all(),
             'headers' => $request->headers->all(),
-            'content_type' => $request->header('Content-Type')
+            'content_type' => $request->header('Content-Type'),
+            'method' => $request->method()
         ]);
 
-        $validate = Validator::make($request->all(), [
-            'email' => 'required|email',
-            'token' => 'required_without:code|string',
-            'code' => 'required_without:token|string'
-        ]);
+        // More flexible validation - accept either token or code
+        $rules = [];
+        
+        if ($request->has('email')) {
+            $rules['email'] = 'required|email';
+        }
+        
+        if ($request->has('token')) {
+            $rules['token'] = 'required|string';
+        } elseif ($request->has('code')) {
+            $rules['code'] = 'required|string';
+        } else {
+            Log::error('No token or code field found in request');
+            return response()->json([
+                'success' => false,
+                'message' => "Validation failed",
+                'errors' => [
+                    'token' => ['Token atau code wajib diisi'],
+                    'code' => ['Token atau code wajib diisi']
+                ]
+            ], 422);
+        }
+
+        $validate = Validator::make($request->all(), $rules);
 
         // check validate
         if ($validate->fails()) {
             Log::error('Mail verification validation failed:', [
                 'errors' => $validate->errors()->toArray(),
                 'request_data' => $request->all(),
-                'validation_rules' => [
-                    'email' => 'required|email',
-                    'token' => 'required_without:code|string',
-                    'code' => 'required_without:token|string'
-                ]
+                'validation_rules' => $rules
             ]);
             return response()->json([
                 'success' => false,
                 'message' => "Validation failed",
                 'errors' => $validate->errors(),
+                'debug_info' => [
+                    'received_fields' => array_keys($request->all()),
+                    'required_fields' => array_keys($rules)
+                ]
             ], 422);
         }
 
-        $user = User::where('email', $request->email)->first();
+        // Get email from request
+        $email = $request->email;
+        
+        // If no email provided, try to get it from other sources or return error
+        if (!$email) {
+            Log::error('No email provided in request');
+            return response()->json([
+                'success' => false,
+                'message' => "Email is required",
+                'errors' => [
+                    'email' => ['Email wajib diisi']
+                ]
+            ], 422);
+        }
+
+        $user = User::where('email', $email)->first();
         
         if (!$user) {
-            Log::warning('Mail verification attempted for non-existent user:', ['email' => $request->email]);
+            Log::warning('Mail verification attempted for non-existent user:', ['email' => $email]);
             return response()->json([
                 'success' => false,
                 'message' => "User not found",

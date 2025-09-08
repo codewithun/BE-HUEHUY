@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 // Controllers
 use App\Http\Controllers\AppConfigController;
@@ -61,6 +62,25 @@ Route::post('/auth/resend-mail', [AuthController::class, 'resendMail'])->without
 
 // SUDAH BENAR: verify-mail tanpa auth
 Route::post('/auth/verify-mail', [AuthController::class, 'mailVerify'])->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
+
+// DEBUG ENDPOINT: untuk melihat data yang dikirim frontend
+Route::post('/debug/verify-mail', function (Request $request) {
+    Log::info('DEBUG verify-mail endpoint called:', [
+        'all_data' => $request->all(),
+        'headers' => $request->headers->all(),
+        'content_type' => $request->header('Content-Type'),
+        'method' => $request->method(),
+        'input' => $request->input(),
+        'json' => $request->json()->all() ?? null
+    ]);
+    
+    return response()->json([
+        'received_data' => $request->all(),
+        'headers' => $request->headers->all(),
+        'content_type' => $request->header('Content-Type'),
+        'method' => $request->method()
+    ]);
+})->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
 
 Route::post('/auth/edit-profile', [AuthController::class, 'editProfile'])->middleware('auth:sanctum');
 Route::post('/auth/change-password', [AuthController::class, 'changePassword'])->middleware('auth:sanctum');

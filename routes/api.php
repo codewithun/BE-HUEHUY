@@ -466,9 +466,7 @@ Route::post('/account/forgot-password/new-password', [AuthController::class, 'fo
 Route::get('/account-unverified', [AuthController::class, 'account_unverified'])
     ->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
 
-// PERBAIKAN: Tambahkan endpoint account tanpa auth untuk flow registrasi
-Route::get('/account', [AuthController::class, 'account'])
-    ->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
+// PERBAIKAN: account endpoint sekarang butuh authentication - moved to auth:sanctum middleware group
 
 /**
  * QR Entry System (for QR-based registration and verification)
@@ -534,8 +532,9 @@ Route::middleware('auth:sanctum')->group(function () {
         ];
     });
 
-    // Account untuk user yang sudah login (berbeda dengan account tanpa auth di atas)
-    Route::get('/account-authenticated', [AuthController::class, 'account']);
+    // Account endpoints yang butuh authentication
+    Route::get('/account', [AuthController::class, 'account']);
+    Route::get('/account-authenticated', [AuthController::class, 'account']); // Backup untuk compatibility
 
     // Client
     Route::get('/notification', [NotificationController::class, 'index']);

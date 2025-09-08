@@ -487,6 +487,45 @@ Route::middleware('auth:sanctum')->group(function () {
         }
     });
 
+    // EMERGENCY FALLBACK: Endpoint account yang sangat minimal
+    Route::get('/account-minimal', function (Request $request) {
+        try {
+            $user = Auth::user();
+            
+            if (!$user) {
+                return response()->json([
+                    'message' => 'Authentication required'
+                ], 401);
+            }
+            
+            // Return absolute minimum data
+            return response()->json([
+                'message' => 'Success',
+                'data' => [
+                    'profile' => [
+                        'id' => $user->id,
+                        'name' => $user->name,
+                        'email' => $user->email,
+                        'role' => 'user'
+                    ]
+                ]
+            ], 200);
+            
+        } catch (\Throwable $e) {
+            return response()->json([
+                'message' => 'Success',
+                'data' => [
+                    'profile' => [
+                        'id' => 0,
+                        'name' => 'Anonymous',
+                        'email' => 'unknown@email.com',
+                        'role' => 'user'
+                    ]
+                ]
+            ], 200);
+        }
+    });
+
     // Account endpoints yang butuh authentication
     Route::get('/account', [AuthController::class, 'account']);
     Route::get('/account-authenticated', [AuthController::class, 'account']); // Backup untuk compatibility

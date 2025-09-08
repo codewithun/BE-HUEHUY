@@ -783,33 +783,60 @@ class AuthController extends Controller
             // PERBAIKAN: Jangan reject user yang belum verified, beri info saja
             $isVerified = !empty($user->verified_at);
             
+            // SIMPLIFIED: Load data secara minimal untuk menghindari error relasi
+            $userArray = [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'phone' => $user->phone ?? null,
+                'avatar' => $user->avatar ?? null,
+                'role' => $user->role ?? 'user',
+                'verified_at' => $user->verified_at,
+                'email_verified_at' => $user->email_verified_at,
+                'created_at' => $user->created_at,
+                'updated_at' => $user->updated_at
+            ];
+
             // SAFE ACCESS untuk relasi yang mungkin error
             try {
-                $user->role = $user->role;
-                // Safe load relasi cubes - cek apakah method cubes exists
-                if (method_exists($user, 'cubes')) {
-                    $user->cubes = $user->cubes;
-                } else {
-                    $user->cubes = [];
+                // Coba load cubes dengan aman, skip jika error
+                try {
+                    $userArray['cubes'] = $user->cubes ?? [];
+                } catch (\Exception $cubesError) {
+                    Log::warning('Failed to load cubes relation: ' . $cubesError->getMessage());
+                    $userArray['cubes'] = [];
                 }
                 
-                if ($user->corporate_user) {
-                    $corporateUser = $user->corporate_user;
-                    $corporateUser->role = $corporateUser->role ?? null;
-                    $user->corporate_user = $corporateUser->corporate ?? null;
+                // Coba load corporate_user dengan aman
+                try {
+                    if (isset($user->corporate_user) && $user->corporate_user) {
+                        $corporateUser = $user->corporate_user;
+                        $userArray['corporate_user'] = [
+                            'role' => $corporateUser->role ?? null,
+                            'corporate' => $corporateUser->corporate ?? null
+                        ];
+                    } else {
+                        $userArray['corporate_user'] = null;
+                    }
+                } catch (\Exception $corporateError) {
+                    Log::warning('Failed to load corporate_user relation: ' . $corporateError->getMessage());
+                    $userArray['corporate_user'] = null;
                 }
             } catch (\Exception $relationError) {
-                Log::error('Account relation error: ' . $relationError->getMessage());
+                Log::error('Account relation error: ' . $relationError->getMessage(), [
+                    'user_id' => $user->id,
+                    'error' => $relationError->getTraceAsString()
+                ]);
                 // Set default values jika relasi error
-                $user->cubes = [];
-                $user->corporate_user = null;
+                $userArray['cubes'] = [];
+                $userArray['corporate_user'] = null;
             }
 
             // * Response
             return response([
                 'message' => 'Success',
                 'data' => [
-                    'profile' => $user,
+                    'profile' => $userArray,
                     'verification_status' => [
                         'is_verified' => $isVerified,
                         'verified_at' => $user->verified_at,
@@ -820,10 +847,17 @@ class AuthController extends Controller
             ]);
             
         } catch (\Exception $e) {
-            Log::error('Account endpoint error: ' . $e->getMessage());
+            Log::error('Account endpoint error: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString(),
+                'user_id' => Auth::id() ?? 'not_authenticated'
+            ]);
             return response()->json([
                 'message' => 'Internal server error',
-                'error' => config('app.debug') ? $e->getMessage() : 'Server error occurred'
+                'error' => config('app.debug') ? $e->getMessage() : 'Server error occurred',
+                'debug_info' => config('app.debug') ? [
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine()
+                ] : null
             ], 500);
         }
     }

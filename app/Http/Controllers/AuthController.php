@@ -242,7 +242,27 @@ class AuthController extends Controller
      */
     public function resendMail(Request $request)
     {
-        $user = Auth::user();
+        // PERBAIKAN: Gunakan email dari request, bukan Auth::user()
+        $validate = Validator::make($request->all(), [
+            'email' => 'required|email|exists:users,email'
+        ]);
+
+        if ($validate->fails()) {
+            return response()->json([
+                'message' => "Validation Error",
+                'errors' => $validate->errors(),
+            ], 422);
+        }
+
+        // PERBAIKAN: Cari user berdasarkan email dari request
+        $user = User::where('email', $request->email)->first();
+        
+        if (!$user) {
+            return response()->json([
+                'message' => 'User tidak ditemukan',
+                'errors' => ['email' => ['User tidak ditemukan']]
+            ], 404);
+        }
 
         try {
             // Create new verification code using the new system
@@ -253,13 +273,18 @@ class AuthController extends Controller
 
             Log::info('Verification email resent successfully to:', ['email' => $user->email]);
 
+            return response()->json([
+                'message' => 'Kode verifikasi telah dikirim ulang',
+                'email' => $user->email,
+                'success' => true
+            ], 200);
 
         } catch (\Throwable $th) {
             Log::error('Failed to resend verification email:', ['error' => $th->getMessage()]);
             
-            return response([
+            return response()->json([
                 'message' => "Error: Failed to send verification email",
-                'error' => config('app.debug') ? $th->getMessage() : null
+                'error' => config('app.debug') ? $th->getMessage() : 'Internal server error'
             ], 500);
         }
     }
@@ -862,25 +887,73 @@ class AuthController extends Controller
         }
     }
 
-    public function account_unverified()
+    public function account_unverified(Request $request)
     {
-        // * Find Data
-        $user = Auth::user();
-        
-        $user->role = $user->role;
-        $user->cubes = $user->cubes;
-        if ($user->corporate_user) {
-            $user->corporate_user->role = $user->corporate_user->role;
-            $user->corporate_user = $user->corporate_user->corporate;
+        try {
+            // PERBAIKAN: Jika ada email di query parameter
+            $email = $request->query('email');
+            
+            if ($email) {
+                $user = User::where('email', $email)->first();
+                
+                if ($user) {
+                    return response()->json([
+                        'message' => 'Success',
+                        'data' => [
+                            'profile' => [
+                                'id' => $user->id,
+                                'name' => $user->name,
+                                'email' => $user->email,
+                                'phone' => $user->phone ?? null,
+                                'avatar' => $user->avatar ?? null,
+                                'verified_at' => $user->verified_at,
+                                'email_verified_at' => $user->email_verified_at,
+                                'status' => $user->verified_at ? 'verified' : 'pending_verification'
+                            ]
+                        ],
+                        'verification_required' => !$user->verified_at
+                    ]);
+                }
+            }
+            
+            // FALLBACK: Jika ada auth user
+            $user = Auth::user();
+            
+            if ($user) {
+                return response()->json([
+                    'message' => 'Success',
+                    'data' => [
+                        'profile' => [
+                            'id' => $user->id,
+                            'name' => $user->name,
+                            'email' => $user->email,
+                            'phone' => $user->phone ?? null,
+                            'avatar' => $user->avatar ?? null,
+                            'verified_at' => $user->verified_at,
+                            'email_verified_at' => $user->email_verified_at,
+                            'status' => $user->verified_at ? 'verified' : 'pending_verification'
+                        ]
+                    ],
+                    'verification_required' => !$user->verified_at
+                ]);
+            }
+            
+            // DEFAULT: Return empty response
+            return response()->json([
+                'message' => 'Please provide email parameter or authenticate',
+                'data' => ['profile' => null],
+                'verification_required' => true
+            ], 200);
+            
+        } catch (\Exception $e) {
+            Log::error('account_unverified error:', ['error' => $e->getMessage()]);
+            
+            return response()->json([
+                'message' => 'Internal server error',
+                'error' => config('app.debug') ? $e->getMessage() : 'Server error',
+                'data' => ['profile' => null]
+            ], 200); // Return 200 bukan 500
         }
-
-        // * Response
-        return response([
-            'message' => 'Success',
-            'data' => [
-                'profile' => $user
-            ]
-        ]);
     }
 
     public function login_firebase(Request $request)

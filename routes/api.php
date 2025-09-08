@@ -6,6 +6,8 @@ use Illuminate\Http\Request;
 // Controllers
 use App\Http\Controllers\AppConfigController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\QrEntryController;
+use App\Http\Controllers\EmailVerificationController;
 use App\Http\Controllers\Client\AdController;
 use App\Http\Controllers\Client\ChatController;
 use App\Http\Controllers\Client\CubeController;
@@ -66,6 +68,11 @@ Route::post('/account/forgot-password/token-verify', [AuthController::class, 'fo
 Route::post('/account/forgot-password/new-password', [AuthController::class, 'forgotPasswordNewPassword']);
 
 /**
+ * Account endpoints that don't require authentication
+ */
+Route::get('/account-unverified', [AuthController::class, 'account_unverified'])->middleware('auth:sanctum');
+
+/**
  * QR Entry System (for QR-based registration and verification)
  */
 Route::post('/qr-entry/register', [QrEntryController::class, 'qrRegisterAndVerify']);
@@ -102,17 +109,17 @@ Route::get('/primary-category', [AdController::class, 'getPrimaryCategory']);
 Route::get('/categories', [AdController::class, 'getCategory']);
 Route::get('/get-cube-by-code-general/{code}', [AdController::class, 'getCubeByCodeGeneral']);
 
-// Public Event routes
-Route::get('/events', [EventController::class, 'index']);
-Route::get('/events/{id}', [EventController::class, 'show']);
-Route::get('/communities/{communityId}/events', [EventController::class, 'indexByCommunity']);
-Route::get('/events/community/{communityId}', [EventController::class, 'indexByCommunity']);
+// Public Event routes (commented until EventController is created)
+// Route::get('/events', [EventController::class, 'index']);
+// Route::get('/events/{id}', [EventController::class, 'show']);
+// Route::get('/communities/{communityId}/events', [EventController::class, 'indexByCommunity']);
+// Route::get('/events/community/{communityId}', [EventController::class, 'indexByCommunity']);
 
-// Public Community routes
-Route::get('/communities/with-membership', [CommunityController::class, 'withMembership'])->middleware('auth:sanctum');
-Route::get('/communities/user-communities', [CommunityController::class, 'userCommunities'])->middleware('auth:sanctum');
-Route::get('/communities', [CommunityController::class, 'index']);
-Route::get('/communities/{id}', [CommunityController::class, 'show']);
+// Public Community routes (commented until CommunityController is created)
+// Route::get('/communities/with-membership', [CommunityController::class, 'withMembership'])->middleware('auth:sanctum');
+// Route::get('/communities/user-communities', [CommunityController::class, 'userCommunities'])->middleware('auth:sanctum');
+// Route::get('/communities', [CommunityController::class, 'index']);
+// Route::get('/communities/{id}', [CommunityController::class, 'show']);
 
 /**
  * Protected endpoints (Sanctum)
@@ -131,7 +138,6 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Account
     Route::get('/account', [AuthController::class, 'account']);
-    Route::get('/account-unverified', [AuthController::class, 'account_unverified']);
 
     // Client
     Route::get('/notification', [NotificationController::class, 'index']);
@@ -159,9 +165,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/cube-huehuy-ads', [HuehuyAdController::class, 'cube_ad']);
     Route::get('/huehuy-ads/{id}', [HuehuyAdController::class, 'show']);
 
-    // Community join/leave routes (keep these here as they need auth)
-    Route::post('/communities/{id}/join', [CommunityController::class, 'join']);
-    Route::post('/communities/{id}/leave', [CommunityController::class, 'leave']);
+    // Community join/leave routes (commented until CommunityController is created)
+    // Route::post('/communities/{id}/join', [CommunityController::class, 'join']);
+    // Route::post('/communities/{id}/leave', [CommunityController::class, 'leave']);
 
     // Admin
     require __DIR__.'/api/admin.php';
@@ -195,9 +201,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/vouchers/validate', [VoucherController::class, 'validateCode']);
     Route::get('vouchers/{voucher}/history', [VoucherController::class, 'history']);
 
-    // Event registration (requires auth)
-    Route::post('/events/{id}/register', [EventController::class, 'register']);
-    Route::get('/events/{id}/registrations', [EventController::class, 'registrations']);
+    // Event registration (commented until EventController is created)
+    // Route::post('/events/{id}/register', [EventController::class, 'register']);
+    // Route::get('/events/{id}/registrations', [EventController::class, 'registrations']);
 
     Route::get('/user/promo-validations', [PromoController::class, 'userValidationHistory']);
     Route::get('/user/voucher-validations', [VoucherController::class, 'userValidationHistory']);

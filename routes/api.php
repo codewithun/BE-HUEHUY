@@ -55,8 +55,13 @@ Route::prefix('/script')->group(function () {
  */
 Route::post('/auth/login', [AuthController::class, 'login']);
 Route::post('/auth/register', [AuthController::class, 'register'])->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
-Route::post('/auth/resend-mail', [AuthController::class, 'resendMail'])->middleware('auth:sanctum')->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
-Route::post('/auth/verify-mail', [AuthController::class, 'mailVerify'])->middleware('auth:sanctum')->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
+
+// PERBAIKAN: Hapus middleware auth dari resend-mail untuk user baru
+Route::post('/auth/resend-mail', [AuthController::class, 'resendMail'])->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
+
+// SUDAH BENAR: verify-mail tanpa auth
+Route::post('/auth/verify-mail', [AuthController::class, 'mailVerify'])->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
+
 Route::post('/auth/edit-profile', [AuthController::class, 'editProfile'])->middleware('auth:sanctum');
 Route::post('/auth/change-password', [AuthController::class, 'changePassword'])->middleware('auth:sanctum');
 
@@ -68,9 +73,15 @@ Route::post('/account/forgot-password/token-verify', [AuthController::class, 'fo
 Route::post('/account/forgot-password/new-password', [AuthController::class, 'forgotPasswordNewPassword']);
 
 /**
- * Account endpoints that don't require authentication
+ * Account endpoints that don't require authentication for user registration flow
  */
-Route::get('/account-unverified', [AuthController::class, 'account_unverified']);
+// PERBAIKAN: Pastikan account-unverified tidak butuh auth
+Route::get('/account-unverified', [AuthController::class, 'account_unverified'])
+    ->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
+
+// PERBAIKAN: Tambahkan endpoint account tanpa auth untuk flow registrasi
+Route::get('/account', [AuthController::class, 'account'])
+    ->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
 
 /**
  * QR Entry System (for QR-based registration and verification)
@@ -122,7 +133,7 @@ Route::get('/get-cube-by-code-general/{code}', [AdController::class, 'getCubeByC
 // Route::get('/communities/{id}', [CommunityController::class, 'show']);
 
 /**
- * Protected endpoints (Sanctum)
+ * Protected endpoints (Sanctum) - endpoints yang MEMANG butuh authentication
  */
 Route::middleware('auth:sanctum')->group(function () {
     // Cek profil cepat (tambahan supaya FE gampang validasi sesi)
@@ -136,8 +147,8 @@ Route::middleware('auth:sanctum')->group(function () {
         ];
     });
 
-    // Account
-    Route::get('/account', [AuthController::class, 'account']);
+    // Account untuk user yang sudah login (berbeda dengan account tanpa auth di atas)
+    Route::get('/account-authenticated', [AuthController::class, 'account']);
 
     // Client
     Route::get('/notification', [NotificationController::class, 'index']);

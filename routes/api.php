@@ -26,6 +26,8 @@ use App\Http\Controllers\Admin\GenerateOTPController;
 use App\Http\Controllers\Admin\CommunityWidgetController;
 use App\Http\Controllers\Admin\PromoController;
 use App\Http\Controllers\Admin\VoucherController;
+use App\Http\Controllers\Admin\CommunityController;
+use App\Http\Controllers\Admin\EventController; // Tambahkan Admin namespace
 
 /**
  * Route Unauthorized (dipakai jika perlu redirect/abort)
@@ -164,11 +166,11 @@ Route::get('/categories', [AdController::class, 'getCategory']);
 Route::get('/get-cube-by-code-general/{code}', [AdController::class, 'getCubeByCodeGeneral']);
 
 // Future Public Routes (Commented - Waiting for Controllers)
-// Route::get('/events', [EventController::class, 'index']);
-// Route::get('/events/{id}', [EventController::class, 'show']);
-// Route::get('/communities/{communityId}/events', [EventController::class, 'indexByCommunity']);
-// Route::get('/communities', [CommunityController::class, 'index']);
-// Route::get('/communities/{id}', [CommunityController::class, 'show']);
+Route::get('/events', [EventController::class, 'index']);
+Route::get('/events/{id}', [EventController::class, 'show']);
+Route::get('/communities/{communityId}/events', [EventController::class, 'indexByCommunity']);
+Route::get('/communities', [CommunityController::class, 'index']);
+Route::get('/communities/{id}', [CommunityController::class, 'show']);
 
 /**
  * =======================================================

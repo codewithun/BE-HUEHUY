@@ -240,8 +240,22 @@ public function index(Request $request)
     // Show a single community
     public function show($id)
     {
-        $community = Community::with('categories')->findOrFail($id);
-        return response()->json($community);
+        try {
+            $community = Community::select([
+                'communities.*',
+                DB::raw('(SELECT COUNT(*) FROM community_memberships WHERE community_id = communities.id AND status = "active") as members')
+            ])->findOrFail($id);
+
+            return response()->json([
+                'success' => true,
+                'data' => $community
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Community not found'
+            ], 404);
+        }
     }
 
     // Update a community

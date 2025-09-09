@@ -123,6 +123,26 @@ Route::prefix('ads')->group(function () {
     Route::get('/promo-nearest/{lat}/{long}', [AdController::class, 'getPromoNearest']);
 });
 
+/**
+ * =======================================================
+ * PUBLIC PROMO & VOUCHER ACCESS (For QR Entry)
+ * =======================================================
+ */
+Route::prefix('communities/{communityId}')->group(function () {
+    // Public access untuk QR scan
+    Route::get('/promos/{id}', [PromoController::class, 'showForCommunity'])->name('community.promo.show');
+    Route::get('/vouchers/{id}', [VoucherController::class, 'showForCommunity'])->name('community.voucher.show');
+});
+
+// Alternative: Direct promo access (fallback) for public QR access
+Route::get('/promos/{id}/public', [PromoController::class, 'showPublic'])->name('promo.show.public');
+Route::get('/vouchers/{id}/public', [VoucherController::class, 'showPublic'])->name('voucher.show.public');
+
+/**
+ * =======================================================
+ * ADMIN & CONFIG ROUTES
+ * =======================================================
+ */
 // App Configuration
 Route::get('/app-config/{id}', [AppConfigController::class, 'show']);
 Route::get('/admin/app-config', [AppConfigController::class, 'index']);
@@ -243,6 +263,15 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{id}', [PromoController::class, 'showForCommunity']);
             Route::put('/{id}', [PromoController::class, 'update']);
             Route::delete('/{id}', [PromoController::class, 'destroy']);
+        });
+        
+        // Community Vouchers
+        Route::prefix('vouchers')->group(function () {
+            Route::get('/', [VoucherController::class, 'indexByCommunity']);
+            Route::post('/', [VoucherController::class, 'storeForCommunity']);
+            Route::get('/{id}', [VoucherController::class, 'showForCommunity']);
+            Route::put('/{id}', [VoucherController::class, 'update']);
+            Route::delete('/{id}', [VoucherController::class, 'destroy']);
         });
     });
     

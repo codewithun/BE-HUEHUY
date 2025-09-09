@@ -30,9 +30,11 @@ class EventController extends Controller
 
         // Search
         if ($request->get("search") != "") {
-            $query = $query->where('title', 'like', '%' . $request->get("search") . '%')
-                          ->orWhere('organizer_name', 'like', '%' . $request->get("search") . '%')
-                          ->orWhere('location', 'like', '%' . $request->get("search") . '%');
+            $query = $query->where(function($q) use ($request) {
+                $q->where('title', 'like', '%' . $request->get("search") . '%')
+                  ->orWhere('organizer_name', 'like', '%' . $request->get("search") . '%')
+                  ->orWhere('location', 'like', '%' . $request->get("search") . '%');
+            });
         }
 
         // Filter
@@ -70,9 +72,14 @@ class EventController extends Controller
                 ], 200);
             }
 
+            // Transform image URLs for each event
+            $transformedData = collect($result->items())->map(function ($event) {
+                return $this->transformEventImageUrls($event);
+            });
+
             return response([
                 "message" => "success",
-                "data" => $result->items(),
+                "data" => $transformedData,
                 "total_row" => $result->total(),
                 "current_page" => $result->currentPage(),
                 "last_page" => $result->lastPage(),
@@ -80,10 +87,13 @@ class EventController extends Controller
         } else {
             // Return all events
             $events = $query->get();
+            $transformedEvents = $events->map(function ($event) {
+                return $this->transformEventImageUrls($event);
+            });
             
             return response([
                 "message" => "success",
-                "data" => $events,
+                "data" => $transformedEvents,
                 "total_row" => $events->count(),
             ]);
         }
@@ -100,6 +110,9 @@ class EventController extends Controller
                 'message' => 'Data not found'
             ], 404);
         }
+
+        // Transform image URLs
+        $model = $this->transformEventImageUrls($model);
 
         return response([
             'message' => 'Success',
@@ -123,9 +136,9 @@ class EventController extends Controller
         $validator = Validator::make($request->all(), [
             'title' => 'required|string|max:255',
             'subtitle' => 'nullable|string|max:500',
-            'image' => 'nullable|image|mimes:jpeg,jpg,png,gif,svg,webp,bmp,tiff,ico,heic,heif|max:5120', // Diperluas format dan ukuran
+            'image' => 'nullable|image|mimes:jpeg,jpg,png|max:5120', // Hanya JPG, JPEG, PNG
             'organizer_name' => 'required|string|max:255',
-            'organizer_logo' => 'nullable|image|mimes:jpeg,jpg,png,gif,svg,webp,bmp,tiff,ico,heic,heif|max:5120', // Diperluas format dan ukuran
+            'organizer_logo' => 'nullable|image|mimes:jpeg,jpg,png|max:5120', // Hanya JPG, JPEG, PNG
             'organizer_type' => 'nullable|string|max:255',
             'date' => 'required|date|after_or_equal:today',
             'time' => 'nullable|string|max:100',
@@ -163,10 +176,16 @@ class EventController extends Controller
             
             $data = $request->except(['image', 'organizer_logo']);
             
-            // Handle image uploads with better file handling
+            // Handle image uploads with JPG/PNG only
             if ($request->hasFile('image')) {
                 $file = $request->file('image');
-                $extension = $file->getClientOriginalExtension();
+                $extension = strtolower($file->getClientOriginalExtension());
+                
+                // Ensure extension is jpg, jpeg, or png
+                if (!in_array($extension, ['jpg', 'jpeg', 'png'])) {
+                    $extension = 'jpg';
+                }
+                
                 $filename = 'event_' . time() . '_' . uniqid() . '.' . $extension;
                 $path = $file->storeAs('events', $filename, 'public');
                 $data['image'] = $path;
@@ -174,7 +193,13 @@ class EventController extends Controller
 
             if ($request->hasFile('organizer_logo')) {
                 $file = $request->file('organizer_logo');
-                $extension = $file->getClientOriginalExtension();
+                $extension = strtolower($file->getClientOriginalExtension());
+                
+                // Ensure extension is jpg, jpeg, or png
+                if (!in_array($extension, ['jpg', 'jpeg', 'png'])) {
+                    $extension = 'png';
+                }
+                
                 $filename = 'organizer_' . time() . '_' . uniqid() . '.' . $extension;
                 $path = $file->storeAs('events/organizers', $filename, 'public');
                 $data['organizer_logo'] = $path;
@@ -186,12 +211,15 @@ class EventController extends Controller
 
             $model = Event::create($data);
             
+            // Transform image URLs before returning
+            $model = $this->transformEventImageUrls($model->load('community'));
+            
             DB::commit();
             
             return response()->json([
                 'success' => true,
                 'message' => 'Event berhasil dibuat',
-                'data' => $model->load('community')
+                'data' => $model
             ], 201);
         } catch (\Exception $e) {
             DB::rollBack();
@@ -213,9 +241,9 @@ class EventController extends Controller
         $validator = Validator::make($request->all(), [
             'title' => 'required|string|max:255',
             'subtitle' => 'nullable|string',
-            'image' => 'nullable|image|mimes:jpeg,jpg,png,gif,svg,webp,bmp,tiff,ico,heic,heif|max:5120', // Diperluas format dan ukuran
+            'image' => 'nullable|image|mimes:jpeg,jpg,png|max:5120', // Hanya JPG, JPEG, PNG
             'organizer_name' => 'required|string|max:255',
-            'organizer_logo' => 'nullable|image|mimes:jpeg,jpg,png,gif,svg,webp,bmp,tiff,ico,heic,heif|max:5120', // Diperluas format dan ukuran
+            'organizer_logo' => 'nullable|image|mimes:jpeg,jpg,png|max:5120', // Hanya JPG, JPEG, PNG
             'organizer_type' => 'nullable|string|max:255',
             'date' => 'required|date',
             'time' => 'nullable|string|max:100',
@@ -249,27 +277,39 @@ class EventController extends Controller
             $model = Event::findOrFail($id);
             $data = $request->except(['image', 'organizer_logo']);
             
-            // Handle event image upload with better file handling
+            // Handle event image upload with JPG/PNG only
             if ($request->hasFile('image')) {
                 // Delete old image if exists
                 if ($model->image && Storage::disk('public')->exists($model->image)) {
                     Storage::disk('public')->delete($model->image);
                 }
                 $file = $request->file('image');
-                $extension = $file->getClientOriginalExtension();
+                $extension = strtolower($file->getClientOriginalExtension());
+                
+                // Ensure extension is jpg, jpeg, or png
+                if (!in_array($extension, ['jpg', 'jpeg', 'png'])) {
+                    $extension = 'jpg';
+                }
+                
                 $filename = 'event_' . time() . '_' . uniqid() . '.' . $extension;
                 $path = $file->storeAs('events', $filename, 'public');
                 $data['image'] = $path;
             }
 
-            // Handle organizer logo upload with better file handling
+            // Handle organizer logo upload with JPG/PNG only
             if ($request->hasFile('organizer_logo')) {
                 // Delete old logo if exists
                 if ($model->organizer_logo && Storage::disk('public')->exists($model->organizer_logo)) {
                     Storage::disk('public')->delete($model->organizer_logo);
                 }
                 $file = $request->file('organizer_logo');
-                $extension = $file->getClientOriginalExtension();
+                $extension = strtolower($file->getClientOriginalExtension());
+                
+                // Ensure extension is jpg, jpeg, or png
+                if (!in_array($extension, ['jpg', 'jpeg', 'png'])) {
+                    $extension = 'png';
+                }
+                
                 $filename = 'organizer_' . time() . '_' . uniqid() . '.' . $extension;
                 $path = $file->storeAs('events/organizers', $filename, 'public');
                 $data['organizer_logo'] = $path;
@@ -277,12 +317,15 @@ class EventController extends Controller
 
             $model->update($data);
             
+            // Transform image URLs before returning
+            $model = $this->transformEventImageUrls($model->fresh());
+            
             DB::commit();
             
             return response()->json([
                 'success' => true,
                 'message' => 'Event berhasil diupdate',
-                'data' => $model->fresh()
+                'data' => $model
             ]);
         } catch (\Exception $e) {
             DB::rollBack();
@@ -433,9 +476,13 @@ class EventController extends Controller
         if ($request->get("paginate") && $request->get("paginate") != "all") {
             $result = $query->paginate($paginate);
             
+            $transformedData = collect($result->items())->map(function ($event) {
+                return $this->transformEventImageUrls($event);
+            });
+            
             return response([
                 "message" => "success",
-                "data" => $result->items(),
+                "data" => $transformedData,
                 "total_row" => $result->total(),
                 "current_page" => $result->currentPage(),
                 "last_page" => $result->lastPage(),
@@ -443,12 +490,37 @@ class EventController extends Controller
         } else {
             // Return all events for the community
             $events = $query->get();
+            $transformedEvents = $events->map(function ($event) {
+                return $this->transformEventImageUrls($event);
+            });
             
             return response([
                 "message" => "success",
-                "data" => $events,
+                "data" => $transformedEvents,
                 "total_row" => $events->count(),
             ]);
         }
+    }
+
+    // Helper method to transform image URLs
+    private function transformEventImageUrls($event)
+    {
+        if ($event->image) {
+            $event->image_url = Storage::disk('public')->exists($event->image) 
+                ? asset('storage/' . $event->image)
+                : asset('images/event/default-event.jpg');
+        } else {
+            $event->image_url = asset('images/event/default-event.jpg');
+        }
+
+        if ($event->organizer_logo) {
+            $event->organizer_logo_url = Storage::disk('public')->exists($event->organizer_logo)
+                ? asset('storage/' . $event->organizer_logo)
+                : asset('images/organizer/default-organizer.png');
+        } else {
+            $event->organizer_logo_url = asset('images/organizer/default-organizer.png');
+        }
+
+        return $event;
     }
 }

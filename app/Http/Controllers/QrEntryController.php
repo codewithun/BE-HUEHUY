@@ -212,12 +212,14 @@ class QrEntryController extends Controller
                 switch ($decoded['type']) {
                     case 'voucher':
                         if (isset($decoded['voucherId'])) {
-                            return "/app/voucher/{$decoded['voucherId']}";
+                            // Use public endpoint for QR access
+                            return "/api/vouchers/{$decoded['voucherId']}/public";
                         }
                         break;
                     case 'promo':
                         if (isset($decoded['promoId'])) {
-                            return "/app/promo/{$decoded['promoId']}";
+                            // Use public endpoint for QR access
+                            return "/api/promos/{$decoded['promoId']}/public";
                         }
                         break;
                 }

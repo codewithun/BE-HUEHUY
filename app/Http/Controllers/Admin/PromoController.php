@@ -45,6 +45,111 @@ class PromoController extends Controller
         ]);
     }
 
+    /**
+     * Show promo for public access (QR entry) - No authentication required
+     */
+    public function showPublic($id)
+    {
+        try {
+            // Check if promo relation exists first, if not use without relation
+            $query = Promo::where('id', $id);
+            
+            // Only add with() if relations exist in your model
+            try {
+                // Try to load relations if they exist
+                $promo = $query->with(['community'])->first();
+            } catch (\Exception $e) {
+                // If relations don't exist, load without them
+                Log::warning('Relations not available for Promo model, loading without them');
+                $promo = $query->first();
+            }
+
+            if (!$promo) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Promo tidak ditemukan'
+                ], 404);
+            }
+
+            // Check if promo is active (if status column exists)
+            if (isset($promo->status) && $promo->status !== 'active') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Promo tidak aktif'
+                ], 404);
+            }
+
+            // Build response data with safe access to properties
+            $responseData = [
+                'id' => $promo->id,
+                'title' => $promo->title ?? '',
+                'description' => $promo->description ?? '',
+                'detail' => $promo->detail ?? '',
+                'owner_name' => $promo->owner_name ?? '',
+                'owner_contact' => $promo->owner_contact ?? '',
+                'location' => $promo->location ?? '',
+                'promo_type' => $promo->promo_type ?? '',
+                'always_available' => $promo->always_available ?? true,
+                'start_date' => $promo->start_date ?? null,
+                'end_date' => $promo->end_date ?? null,
+                'community_id' => $promo->community_id ?? null,
+                'stock' => $promo->stock ?? null,
+                'code' => $promo->code ?? null,
+                'created_at' => $promo->created_at ?? null,
+                'updated_at' => $promo->updated_at ?? null,
+            ];
+
+            // Add image URL if image exists
+            if (isset($promo->image) && $promo->image) {
+                $responseData['image_url'] = asset('storage/' . $promo->image);
+            } else {
+                $responseData['image_url'] = null;
+            }
+
+            // Add community data if relation was loaded successfully
+            if (isset($promo->community)) {
+                $responseData['community'] = $promo->community;
+            }
+
+            // Add price information if columns exist
+            if (isset($promo->original_price)) {
+                $responseData['original_price'] = $promo->original_price;
+            }
+            if (isset($promo->discount_price)) {
+                $responseData['discount_price'] = $promo->discount_price;
+            }
+            if (isset($promo->discount_percentage)) {
+                $responseData['discount_percentage'] = $promo->discount_percentage;
+            }
+
+            // Count claimed if promo_items relation exists
+            try {
+                $claimedCount = $promo->promo_validations()->count();
+                $responseData['claimed_count'] = $claimedCount;
+            } catch (\Exception $e) {
+                // If relation doesn't exist, set to 0
+                $responseData['claimed_count'] = 0;
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $responseData
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Error showing public promo:', [
+                'promo_id' => $id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Terjadi kesalahan saat mengambil data promo'
+            ], 500);
+        }
+    }
+
     public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
@@ -369,7 +474,7 @@ class PromoController extends Controller
                 'success' => true,
                 'message' => 'Kode promo valid',
                 'data' => [
-                    'promo' => $promo, // HAPUS ->load('cube.cube_type')
+                    'promo' => $promo,
                     'validation' => $validation
                 ]
             ]);
@@ -388,7 +493,6 @@ class PromoController extends Controller
         Log::info("Fetching history for promo ID: " . $promoId);
         
         try {
-            // HAPUS relasi cube yang tidak ada
             $promo = Promo::with(['validations.user'])->find($promoId);
             
             Log::info("Promo found: " . ($promo ? 'yes' : 'no'));
@@ -403,10 +507,9 @@ class PromoController extends Controller
                 ], 404);
             }
 
-            // HAPUS relasi cube
             $validations = $promo->validations()->with([
                 'user',
-                'promo' // HAPUS .cube.cube_type
+                'promo'
             ])->get();
 
             return response()->json([

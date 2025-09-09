@@ -17,107 +17,117 @@ class Community extends Model
         'logo',
         'category',
         'privacy',
-        'is_verified'
+        'is_verified',
     ];
 
     protected $casts = [
         'is_verified' => 'boolean',
     ];
 
-    public function categories()
+    /**
+     * ===== Relasi dasar =====
+     */
+    public function categories(): HasMany
     {
         return $this->hasMany(CommunityCategory::class);
     }
 
-    public function events()
+    public function events(): HasMany
     {
         return $this->hasMany(Event::class);
     }
 
     /**
-     * Relationship dengan community memberships
+     * Relasi ke tabel memberships (1..n)
+     * Tabel: community_memberships (kolom minimal: id, community_id, user_id, status, joined_at, timestamps)
      */
     public function memberships(): HasMany
     {
-        return $this->hasMany(CommunityMembership::class);
+        return $this->hasMany(CommunityMembership::class, 'community_id', 'id');
     }
 
     /**
-     * Relationship dengan users (members)
+     * Relasi many-to-many ke users via pivot community_memberships
+     * Hanya mengambil member dengan status 'active'
      */
     public function members(): BelongsToMany
     {
-        return $this->belongsToMany(User::class, 'community_memberships')
-                    ->wherePivot('status', 'active')
-                    ->withPivot('status', 'joined_at')
-                    ->withTimestamps();
+        return $this->belongsToMany(User::class, 'community_memberships', 'community_id', 'user_id')
+            ->wherePivot('status', 'active')
+            ->withPivot(['status', 'joined_at'])
+            ->withTimestamps();
     }
 
     /**
-     * Get active memberships for this community.
+     * Active memberships (tanpa pakai scope yang belum pasti ada)
      */
     public function activeMemberships(): HasMany
     {
-        return $this->memberships()->active();
+        return $this->memberships()
+            ->where('status', 'active');
     }
 
     /**
-     * Check if user is already a member
+     * Cek apakah user sudah menjadi member aktif
      */
     public function hasMember(User $user): bool
     {
         return $this->memberships()
-                    ->where('user_id', $user->id)
-                    ->where('status', 'active')
-                    ->exists();
+            ->where('user_id', $user->id)
+            ->where('status', 'active')
+            ->exists();
     }
 
     /**
-     * Add user as member
+     * Tambahkan user sebagai member (aktif).
+     * - Jika membership sudah ada tapi non-aktif → re-activate
+     * - Jika belum ada → create baru
      */
     public function addMember(User $user): CommunityMembership
     {
-        // Check if membership already exists
-        $existingMembership = $this->memberships()
-                                   ->where('user_id', $user->id)
-                                   ->first();
+        $existing = $this->memberships()
+            ->where('user_id', $user->id)
+            ->first();
 
-        if ($existingMembership) {
-            // If exists but inactive, reactivate
-            if ($existingMembership->status !== 'active') {
-                $existingMembership->update([
-                    'status' => 'active',
-                    'joined_at' => now()
+        if ($existing) {
+            if ($existing->status !== 'active') {
+                $existing->update([
+                    'status'    => 'active',
+                    'joined_at' => now(),
                 ]);
-                return $existingMembership;
             }
-            return $existingMembership;
+            return $existing->refresh();
         }
 
-        // Create new membership
         return $this->memberships()->create([
-            'user_id' => $user->id,
-            'status' => 'active',
-            'joined_at' => now()
+            'user_id'   => $user->id,
+            'status'    => 'active',
+            'joined_at' => now(),
         ]);
     }
 
     /**
-     * Remove user from community
+     * Keluarkan user dari komunitas (set non-aktif).
+     * Return: bool
      */
     public function removeMember(User $user): bool
     {
-        return $this->memberships()
-                    ->where('user_id', $user->id)
-                    ->where('status', 'active')
-                    ->update(['status' => 'inactive']);
+        $updated = $this->memberships()
+            ->where('user_id', $user->id)
+            ->where('status', 'active')
+            ->update(['status' => 'inactive']);
+
+        return (bool) $updated;
     }
 
     /**
-     * Get the count of active members.
+     * Accessor: members_count (jumlah active members)
+     * Bisa diakses sebagai $community->members_count
      */
     public function getMembersCountAttribute(): int
     {
-        return $this->memberships()->where('status', 'active')->count();
+        return $this->memberships()
+            ->where('status', 'active')
+            ->count();
     }
 }

@@ -16,11 +16,11 @@ return new class extends Migration
             $table->string('email');
             $table->string('code', 6);
             $table->timestamp('expires_at');
-            $table->boolean('is_used')->default(false);
+            $table->timestamp('used_at')->nullable(); // PERBAIKAN: Ubah dari boolean ke timestamp nullable
             $table->timestamps();
             
             $table->index(['email', 'code']);
-            $table->index('expires_at');
+            $table->index(['email', 'expires_at']); // PERBAIKAN: Tambah index pada email juga
         });
     }
 

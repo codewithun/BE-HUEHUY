@@ -2,16 +2,26 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class Community extends Model
 {
+    use HasFactory;
+
     protected $fillable = [
         'name',
         'description',
-        'logo', // opsional
+        'logo',
+        'category',
+        'privacy',
+        'is_verified'
+    ];
+
+    protected $casts = [
+        'is_verified' => 'boolean',
     ];
 
     public function categories()
@@ -25,11 +35,22 @@ class Community extends Model
     }
 
     /**
-     * Get all memberships for this community.
+     * Relationship dengan community memberships
      */
     public function memberships(): HasMany
     {
         return $this->hasMany(CommunityMembership::class);
+    }
+
+    /**
+     * Relationship dengan users (members)
+     */
+    public function members(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'community_memberships')
+                    ->wherePivot('status', 'active')
+                    ->withPivot('status', 'joined_at')
+                    ->withTimestamps();
     }
 
     /**
@@ -41,14 +62,55 @@ class Community extends Model
     }
 
     /**
-     * Get users who are members of this community.
+     * Check if user is already a member
      */
-    public function members(): BelongsToMany
+    public function hasMember(User $user): bool
     {
-        return $this->belongsToMany(User::class, 'community_memberships')
-                    ->withPivot(['status', 'joined_at'])
-                    ->withTimestamps()
-                    ->wherePivot('status', 'active');
+        return $this->memberships()
+                    ->where('user_id', $user->id)
+                    ->where('status', 'active')
+                    ->exists();
+    }
+
+    /**
+     * Add user as member
+     */
+    public function addMember(User $user): CommunityMembership
+    {
+        // Check if membership already exists
+        $existingMembership = $this->memberships()
+                                   ->where('user_id', $user->id)
+                                   ->first();
+
+        if ($existingMembership) {
+            // If exists but inactive, reactivate
+            if ($existingMembership->status !== 'active') {
+                $existingMembership->update([
+                    'status' => 'active',
+                    'joined_at' => now()
+                ]);
+                return $existingMembership;
+            }
+            return $existingMembership;
+        }
+
+        // Create new membership
+        return $this->memberships()->create([
+            'user_id' => $user->id,
+            'status' => 'active',
+            'joined_at' => now()
+        ]);
+    }
+
+    /**
+     * Remove user from community
+     */
+    public function removeMember(User $user): bool
+    {
+        return $this->memberships()
+                    ->where('user_id', $user->id)
+                    ->where('status', 'active')
+                    ->update(['status' => 'inactive']);
     }
 
     /**
@@ -56,40 +118,6 @@ class Community extends Model
      */
     public function getMembersCountAttribute(): int
     {
-        return $this->activeMemberships()->count();
-    }
-
-    /**
-     * Check if a user is a member of this community.
-     */
-    public function hasMember(User $user): bool
-    {
-        return $this->activeMemberships()
-                    ->where('user_id', $user->id)
-                    ->exists();
-    }
-
-    /**
-     * Add a user as a member of this community.
-     */
-    public function addMember(User $user): CommunityMembership
-    {
-        return $this->memberships()->firstOrCreate(
-            ['user_id' => $user->id],
-            [
-                'status' => 'active',
-                'joined_at' => now(),
-            ]
-        );
-    }
-
-    /**
-     * Remove a user from this community.
-     */
-    public function removeMember(User $user): bool
-    {
-        return $this->memberships()
-                    ->where('user_id', $user->id)
-                    ->delete() > 0;
+        return $this->memberships()->where('status', 'active')->count();
     }
 }

@@ -100,6 +100,25 @@ class User extends Authenticatable
         return $this->hasMany(UserWorld::class, 'user_id', 'id');
     }
 
+    /**
+     * Relationship dengan community memberships
+     */
+    public function communityMemberships()
+    {
+        return $this->hasMany(CommunityMembership::class);
+    }
+
+    /**
+     * Relationship dengan communities yang diikuti
+     */
+    public function communities()
+    {
+        return $this->belongsToMany(Community::class, 'community_memberships')
+                    ->wherePivot('status', 'active')
+                    ->withPivot('status', 'joined_at')
+                    ->withTimestamps();
+    }
+
     public function toArray()
     {
         $toArray = parent::toArray();

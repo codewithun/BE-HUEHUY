@@ -38,7 +38,7 @@ Route::get('/unauthorized', function () {
 })->name('unauthorized');
 
 /**
- * Health check (opsional)
+ * Health check
  */
 Route::get('/healthz', fn () => ['ok' => true]);
 
@@ -52,374 +52,84 @@ Route::prefix('/script')->group(function () {
 });
 
 /**
- * Auth (API-style). Catatan:
- * - Login Google (ID Token) & Logout ADA DI web.php (butuh session).
+ * =======================================================
+ * AUTHENTICATION ROUTES (Public - No Auth Required)
+ * =======================================================
  */
-Route::post('/auth/login', [AuthController::class, 'login']);
-Route::post('/auth/register', [AuthController::class, 'register'])->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
-
-// PERBAIKAN: Hapus middleware auth dari resend-mail untuk user baru
-Route::post('/auth/resend-mail', [AuthController::class, 'resendMail'])->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
-
-// SIMPLE VERIFY-MAIL: Endpoint yang sangat simple tanpa error 422
-Route::post('/auth/verify-mail-simple', function (Request $request) {
-    Log::info('Simple verify-mail called:', $request->all());
+Route::prefix('auth')->group(function () {
+    // Basic Auth
+    Route::post('/login', [AuthController::class, 'login']);
+    Route::post('/register', [AuthController::class, 'register']);
     
-    try {
-        // Terima semua data tanpa validasi ketat
-        $allData = $request->all();
-        $email = $allData['email'] ?? null;
-        $token = $allData['token'] ?? $allData['code'] ?? null;
-        
-        // Jika tidak ada email atau token, return success dengan pesan
-        if (!$email) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Email diperlukan',
-                'debug' => 'No email provided',
-                'received' => $allData
-            ], 200); // Return 200 bukan 422
-        }
-        
-        if (!$token) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Token diperlukan',
-                'debug' => 'No token provided',
-                'received' => $allData
-            ], 200); // Return 200 bukan 422
-        }
-        
-        // Cari user
-        $user = \App\Models\User::where('email', $email)->first();
-        
-        if (!$user) {
-            return response()->json([
-                'success' => false,
-                'message' => 'User tidak ditemukan, silakan daftar dulu',
-                'debug' => 'User not found in database',
-                'email' => $email
-            ], 200); // Return 200 bukan 404
-        }
-        
-        // SIMPLE: Langsung anggap berhasil tanpa validasi token ketat
-        $user->email_verified_at = now();
-        $user->verified_at = now();
-        $user->save();
-        
-        // Generate token untuk user
-        $userToken = $user->createToken('email-verified-simple')->plainTextToken;
-        
-        // Parse QR data untuk mendapatkan informasi voucher/promo
-        $qrData = $allData['qr_data'] ?? null;
-        $redirectInfo = null;
-        
-        if ($qrData) {
-            try {
-                // Coba parse JSON QR data
-                $parsedQrData = json_decode($qrData, true);
-                
-                if ($parsedQrData && isset($parsedQrData['type'])) {
-                    if ($parsedQrData['type'] === 'voucher' && isset($parsedQrData['voucherId'])) {
-                        $redirectInfo = [
-                            'type' => 'voucher',
-                            'voucher_id' => $parsedQrData['voucherId'],
-                            'community_id' => $parsedQrData['communityId'] ?? null,
-                            'redirect_url' => '/voucher/' . $parsedQrData['voucherId']
-                        ];
-                    } elseif ($parsedQrData['type'] === 'promo' && isset($parsedQrData['promoId'])) {
-                        $redirectInfo = [
-                            'type' => 'promo', 
-                            'promo_id' => $parsedQrData['promoId'],
-                            'redirect_url' => '/promo/' . $parsedQrData['promoId']
-                        ];
-                    }
-                }
-            } catch (\Exception $e) {
-                Log::warning('Failed to parse QR data:', ['qr_data' => $qrData, 'error' => $e->getMessage()]);
-            }
-        }
-        
-        return response()->json([
-            'success' => true,
-            'message' => 'Email berhasil diverifikasi!',
-            'data' => [
-                'user' => [
-                    'id' => $user->id,
-                    'name' => $user->name,
-                    'email' => $user->email,
-                    'verified_at' => $user->verified_at,
-                    'email_verified_at' => $user->email_verified_at
-                ],
-                'token' => $userToken,
-                'qr_data' => $qrData,
-                'redirect_info' => $redirectInfo,
-                'next_action' => $redirectInfo ? 'redirect_to_promo' : 'continue_normal_flow'
-            ]
-        ], 200);
-        
-    } catch (\Exception $e) {
-        Log::error('Simple verify-mail error:', [
-            'error' => $e->getMessage(),
-            'trace' => $e->getTraceAsString(),
-            'request' => $request->all()
-        ]);
-        
-        // Bahkan error pun return 200 untuk menghindari masalah frontend
-        return response()->json([
-            'success' => false,
-            'message' => 'Terjadi kesalahan, silakan coba lagi',
-            'debug' => config('app.debug') ? $e->getMessage() : 'Internal error',
-            'error_type' => 'exception'
-        ], 200);
-    }
-})->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
-
-// SUDAH BENAR: verify-mail tanpa auth - SIMPLE VERSION TANPA 422
-Route::post('/auth/verify-mail', function (Request $request) {
-    Log::info('Verify-mail called:', $request->all());
+    // Email Verification
+    Route::post('/resend-mail', [AuthController::class, 'resendMail']);
+    Route::post('/verify-mail', [AuthController::class, 'mailVerify']);
     
-    try {
-        // Terima semua data tanpa validasi ketat
-        $allData = $request->all();
-        $email = $allData['email'] ?? null;
-        $token = $allData['token'] ?? $allData['code'] ?? null;
-        
-        Log::info('Extracted data:', ['email' => $email, 'token' => $token, 'all_data' => $allData]);
-        
-        // Jika tidak ada email atau token, return 200 dengan pesan (bukan 422)
-        if (!$email) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Email diperlukan',
-                'debug' => 'No email provided',
-                'received_data' => $allData
-            ], 200); // Return 200 bukan 422
-        }
-        
-        if (!$token) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Token diperlukan',
-                'debug' => 'No token provided',
-                'received_data' => $allData
-            ], 200); // Return 200 bukan 422
-        }
-        
-        // Cari user
-        $user = \App\Models\User::where('email', $email)->first();
-        
-        if (!$user) {
-            return response()->json([
-                'success' => false,
-                'message' => 'User tidak ditemukan, silakan daftar dulu',
-                'debug' => 'User not found in database',
-                'email' => $email
-            ], 200); // Return 200 bukan 404
-        }
-        
-        // UNTUK TESTING: Langsung anggap berhasil tanpa validasi token
-        $user->email_verified_at = now();
-        $user->verified_at = now();
-        $user->save();
-        
-        // Generate token untuk user
-        $userToken = $user->createToken('email-verified')->plainTextToken;
-        
-        // Parse QR data untuk redirect info (sama seperti verify-mail-simple)
-        $qrData = $allData['qr_data'] ?? null;
-        $redirectInfo = null;
-        
-        if ($qrData) {
-            try {
-                $parsedQrData = json_decode($qrData, true);
-                if ($parsedQrData && isset($parsedQrData['type'])) {
-                    if ($parsedQrData['type'] === 'voucher' && isset($parsedQrData['voucherId'])) {
-                        $redirectInfo = [
-                            'type' => 'voucher',
-                            'voucher_id' => $parsedQrData['voucherId'],
-                            'community_id' => $parsedQrData['communityId'] ?? null,
-                            'redirect_url' => '/voucher/' . $parsedQrData['voucherId']
-                        ];
-                    } elseif ($parsedQrData['type'] === 'promo' && isset($parsedQrData['promoId'])) {
-                        $redirectInfo = [
-                            'type' => 'promo',
-                            'promo_id' => $parsedQrData['promoId'], 
-                            'redirect_url' => '/promo/' . $parsedQrData['promoId']
-                        ];
-                    }
-                }
-            } catch (\Exception $e) {
-                Log::warning('Failed to parse QR data in verify-mail:', ['qr_data' => $qrData, 'error' => $e->getMessage()]);
-            }
-        }
-        
-        return response()->json([
-            'success' => true,
-            'message' => 'Email berhasil diverifikasi!',
-            'data' => [
-                'user' => [
-                    'id' => $user->id,
-                    'name' => $user->name,
-                    'email' => $user->email,
-                    'avatar' => $user->avatar,
-                    'verified_at' => $user->verified_at,
-                    'email_verified_at' => $user->email_verified_at
-                ],
-                'token' => $userToken,
-                'qr_data' => $qrData,
-                'redirect_info' => $redirectInfo,
-                'next_action' => $redirectInfo ? 'redirect_to_promo' : 'continue_normal_flow'
-            ]
-        ], 200);
-        
-    } catch (\Exception $e) {
-        Log::error('Verify-mail error:', [
-            'error' => $e->getMessage(),
-            'trace' => $e->getTraceAsString(),
-            'request' => $request->all()
-        ]);
-        
-        // Bahkan error pun return 200 untuk menghindari masalah frontend
-        return response()->json([
-            'success' => false,
-            'message' => 'Terjadi kesalahan, silakan coba lagi',
-            'debug' => config('app.debug') ? $e->getMessage() : 'Internal error',
-            'error_type' => 'exception'
-        ], 200); // Return 200 bukan 500
-    }
-})->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
-
-// ENDPOINT SIMPLE UNTUK FRONTEND v2.huehuy.com
-// DEBUG ENDPOINT: TEMPORARY SOLUTION - bisa dipakai untuk verify email
-Route::post('/debug/verify-mail', function (Request $request) {
-    Log::info('DEBUG verify-mail endpoint called:', [
-        'all_data' => $request->all(),
-        'headers' => $request->headers->all(),
-        'content_type' => $request->header('Content-Type'),
-        'method' => $request->method(),
-        'input' => $request->input(),
-        'json' => $request->json()->all() ?? null
-    ]);
+    // Firebase Auth (Legacy)
+    Route::post('/login-firebase', [AuthController::class, 'login_firebase']);
     
-    try {
-        // TEMPORARY: Sebagai solusi sementara untuk masalah 422
-        $allData = $request->all();
-        $email = $allData['email'] ?? null;
-        $token = $allData['token'] ?? $allData['code'] ?? null;
-        
-        if (!$email) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Email diperlukan',
-                'received_data' => $allData
-            ], 200); // Return 200 bukan 422
-        }
-        
-        if (!$token) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Token diperlukan',
-                'received_data' => $allData  
-            ], 200); // Return 200 bukan 422
-        }
-        
-        // Cari user
-        $user = \App\Models\User::where('email', $email)->first();
-        
-        if (!$user) {
-            return response()->json([
-                'success' => false,
-                'message' => 'User tidak ditemukan, silakan daftar dulu',
-                'email' => $email,
-                'received_data' => $allData
-            ], 200); // Return 200 bukan 404
-        }
-        
-        // UNTUK TESTING: Langsung verify user
-        $user->email_verified_at = now();
-        $user->verified_at = now();
-        $user->save();
-        
-        // Generate token
-        $userToken = $user->createToken('email-verified-debug')->plainTextToken;
-        
-        return response()->json([
-            'success' => true,
-            'message' => 'Email berhasil diverifikasi! (via debug endpoint)',
-            'data' => [
-                'user' => [
-                    'id' => $user->id,
-                    'name' => $user->name,
-                    'email' => $user->email,
-                    'verified_at' => $user->verified_at,
-                    'email_verified_at' => $user->email_verified_at
-                ],
-                'token' => $userToken,
-                'qr_data' => $allData['qr_data'] ?? null
-            ],
-            'debug_info' => [
-                'endpoint' => 'debug/verify-mail',
-                'note' => 'This is temporary solution until main endpoint deployed'
-            ]
-        ], 200);
-        
-    } catch (\Exception $e) {
-        Log::error('DEBUG verify-mail error:', ['error' => $e->getMessage()]);
-        
-        return response()->json([
-            'success' => false,
-            'message' => 'Error terjadi',
-            'debug' => $e->getMessage(),
-            'received_data' => $request->all(),
-            'headers' => $request->headers->all()
-        ], 200); // Return 200 bahkan untuk error
-    }
-})->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
-
-Route::post('/auth/edit-profile', [AuthController::class, 'editProfile'])->middleware('auth:sanctum');
-Route::post('/auth/change-password', [AuthController::class, 'changePassword'])->middleware('auth:sanctum');
-
-/** (Legacy) Firebase login — kalau sudah migrasi ke Google Console, ini boleh dilooping ke deprecated atau dihapus nanti. */
-Route::post('/auth/login-firebase', [AuthController::class, 'login_firebase']);
-
-Route::post('/account/forgot-password/send-email', [AuthController::class, 'forgotPasswordSendEmail']);
-Route::post('/account/forgot-password/token-verify', [AuthController::class, 'forgotPasswordTokenVerify']);
-Route::post('/account/forgot-password/new-password', [AuthController::class, 'forgotPasswordNewPassword']);
+    // Protected Auth Routes (Require Authentication)
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::post('/edit-profile', [AuthController::class, 'editProfile']);
+        Route::post('/change-password', [AuthController::class, 'changePassword']);
+    });
+});
 
 /**
- * Account endpoints that don't require authentication for user registration flow
+ * =======================================================
+ * ACCOUNT & PASSWORD RECOVERY (Public)
+ * =======================================================
  */
-// PERBAIKAN: Pastikan account-unverified tidak butuh auth
-Route::get('/account-unverified', [AuthController::class, 'account_unverified'])
-    ->withoutMiddleware([\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class]);
+Route::prefix('account')->group(function () {
+    // Password Recovery
+    Route::post('/forgot-password/send-email', [AuthController::class, 'forgotPasswordSendEmail']);
+    Route::post('/forgot-password/token-verify', [AuthController::class, 'forgotPasswordTokenVerify']);
+    Route::post('/forgot-password/new-password', [AuthController::class, 'forgotPasswordNewPassword']);
+});
 
-// PERBAIKAN: account endpoint sekarang butuh authentication - moved to auth:sanctum middleware group
-
-/**
- * QR Entry System (for QR-based registration and verification)
- */
-Route::post('/qr-entry/register', [QrEntryController::class, 'qrRegisterAndVerify']);
-Route::post('/qr-entry/verify-email', [QrEntryController::class, 'qrVerifyEmail']);
-Route::get('/qr-entry/status', [QrEntryController::class, 'qrEntryStatus']);
-
-/**
- * Email Verification (New System)
- */
-Route::post('/email-verification/send-code', [EmailVerificationController::class, 'sendCode']);
-Route::post('/email-verification/verify-code', [EmailVerificationController::class, 'verifyCode']);
-Route::post('/email-verification/resend-code', [EmailVerificationController::class, 'resendCode']);
-Route::get('/email-verification/check-status', [EmailVerificationController::class, 'checkStatus']);
+// Account endpoints for unverified users (no auth required)
+Route::get('/account-unverified', [AuthController::class, 'account_unverified']);
 
 /**
- * Public endpoints
+ * =======================================================
+ * EMAIL VERIFICATION SYSTEM (Public)
+ * =======================================================
  */
-Route::get('/ads/promo-recommendation', [AdController::class, 'getPromoRecommendation']);
-Route::get('/ads/promo-nearest/{lat}/{long}', [AdController::class, 'getPromoNearest']);
-Route::get('/ads-category', [HomeController::class, 'category']);
+Route::prefix('email-verification')->group(function () {
+    Route::post('/send-code', [EmailVerificationController::class, 'sendCode']);
+    Route::post('/verify-code', [EmailVerificationController::class, 'verifyCode']);
+    Route::post('/resend-code', [EmailVerificationController::class, 'resendCode']);
+    Route::get('/status', [EmailVerificationController::class, 'checkStatus']);
+});
+
+/**
+ * =======================================================
+ * QR ENTRY SYSTEM (Public - For QR-based registration)
+ * =======================================================
+ */
+Route::prefix('qr-entry')->group(function () {
+    Route::post('/register', [QrEntryController::class, 'qrRegisterAndVerify']);
+    Route::post('/verify-email', [QrEntryController::class, 'qrVerifyEmail']);
+    Route::get('/status', [QrEntryController::class, 'qrEntryStatus']);
+});
+
+/**
+ * =======================================================
+ * PUBLIC CONTENT ROUTES (No Authentication Required)
+ * =======================================================
+ */
+Route::prefix('ads')->group(function () {
+    Route::get('/promo-recommendation', [AdController::class, 'getPromoRecommendation']);
+    Route::get('/promo-nearest/{lat}/{long}', [AdController::class, 'getPromoNearest']);
+});
+
+// App Configuration
 Route::get('/app-config/{id}', [AppConfigController::class, 'show']);
 Route::get('/admin/app-config', [AppConfigController::class, 'index']);
 Route::get('/admin/app-config/{id}', [AppConfigController::class, 'show']);
+
+// Content & Categories
+Route::get('/ads-category', [HomeController::class, 'category']);
 Route::get('/dynamic-content', [HomeController::class, 'getDynamicContentConfig']);
 Route::get('/banner', [HomeController::class, 'banner']);
 Route::get('/faq', [HomeController::class, 'faq']);
@@ -433,23 +143,23 @@ Route::get('/primary-category', [AdController::class, 'getPrimaryCategory']);
 Route::get('/categories', [AdController::class, 'getCategory']);
 Route::get('/get-cube-by-code-general/{code}', [AdController::class, 'getCubeByCodeGeneral']);
 
-// Public Event routes (commented until EventController is created)
+// Future Public Routes (Commented - Waiting for Controllers)
 // Route::get('/events', [EventController::class, 'index']);
 // Route::get('/events/{id}', [EventController::class, 'show']);
 // Route::get('/communities/{communityId}/events', [EventController::class, 'indexByCommunity']);
-// Route::get('/events/community/{communityId}', [EventController::class, 'indexByCommunity']);
-
-// Public Community routes (commented until CommunityController is created)
-// Route::get('/communities/with-membership', [CommunityController::class, 'withMembership'])->middleware('auth:sanctum');
-// Route::get('/communities/user-communities', [CommunityController::class, 'userCommunities'])->middleware('auth:sanctum');
 // Route::get('/communities', [CommunityController::class, 'index']);
 // Route::get('/communities/{id}', [CommunityController::class, 'show']);
 
 /**
- * Protected endpoints (Sanctum) - endpoints yang MEMANG butuh authentication
+ * =======================================================
+ * PROTECTED ROUTES (Authentication Required)
+ * =======================================================
  */
 Route::middleware('auth:sanctum')->group(function () {
-    // Cek profil cepat (tambahan supaya FE gampang validasi sesi)
+    
+    /**
+     * User Profile & Account Management
+     */
     Route::get('/me', function (Request $r) {
         $u = $r->user();
         return [
@@ -459,236 +169,135 @@ Route::middleware('auth:sanctum')->group(function () {
             'avatar' => $u->avatar ?? null,
         ];
     });
-
-    // DEBUG: Test endpoint untuk debugging account error
-    Route::get('/debug/account-simple', function (Request $request) {
-        try {
-            $user = Auth::user();
-            
-            if (!$user) {
-                return response()->json([
-                    'error' => 'No user found',
-                    'headers' => $request->headers->all(),
-                    'auth_header' => $request->header('Authorization'),
-                    'bearer_token' => $request->bearerToken()
-                ], 401);
-            }
-            
-            // Return minimal user data
-            return response()->json([
-                'success' => true,
-                'user_id' => $user->id,
-                'email' => $user->email,
-                'name' => $user->name ?? 'No name',
-                'debug' => 'Account debug endpoint works',
-                'token_info' => [
-                    'auth_header' => $request->header('Authorization'),
-                    'bearer_token' => $request->bearerToken() ? 'Present' : 'Missing'
-                ]
-            ]);
-            
-        } catch (\Throwable $e) {
-            return response()->json([
-                'error' => 'Debug error: ' . $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-                'headers' => $request->headers->all()
-            ], 200);
-        }
-    });
-
-    // DEBUG: Check token validity without authentication 
-    Route::post('/debug/check-token', function (Request $request) {
-        try {
-            $token = $request->input('token') ?? $request->bearerToken();
-            
-            if (!$token) {
-                return response()->json([
-                    'valid' => false,
-                    'error' => 'No token provided',
-                    'request_data' => $request->all(),
-                    'headers' => $request->headers->all()
-                ]);
-            }
-            
-            // Try to find token in database
-            $personalAccessToken = \Laravel\Sanctum\PersonalAccessToken::findToken($token);
-            
-            if (!$personalAccessToken) {
-                return response()->json([
-                    'valid' => false,
-                    'error' => 'Token not found in database',
-                    'token_preview' => substr($token, 0, 10) . '...'
-                ]);
-            }
-            
-            $user = $personalAccessToken->tokenable;
-            
-            return response()->json([
-                'valid' => true,
-                'token_exists' => true,
-                'user_id' => $user->id,
-                'user_email' => $user->email,
-                'token_name' => $personalAccessToken->name,
-                'token_created' => $personalAccessToken->created_at
-            ]);
-            
-        } catch (\Throwable $e) {
-            return response()->json([
-                'valid' => false,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-        }
-    });
-
-    // EMERGENCY FALLBACK: Endpoint account yang sangat minimal
-    Route::get('/account-minimal', function (Request $request) {
-        try {
-            $user = Auth::user();
-            
-            if (!$user) {
-                return response()->json([
-                    'message' => 'Authentication required'
-                ], 401);
-            }
-            
-            // Return absolute minimum data
-            return response()->json([
-                'message' => 'Success',
-                'data' => [
-                    'profile' => [
-                        'id' => $user->id,
-                        'name' => $user->name,
-                        'email' => $user->email,
-                        'role' => 'user'
-                    ]
-                ]
-            ], 200);
-            
-        } catch (\Throwable $e) {
-            return response()->json([
-                'message' => 'Success',
-                'data' => [
-                    'profile' => [
-                        'id' => 0,
-                        'name' => 'Anonymous',
-                        'email' => 'unknown@email.com',
-                        'role' => 'user'
-                    ]
-                ]
-            ], 200);
-        }
-    });
-
-    // Account endpoints yang butuh authentication
+    
     Route::get('/account', [AuthController::class, 'account']);
     Route::get('/account-authenticated', [AuthController::class, 'account']); // Backup untuk compatibility
-    
-    // Account untuk user yang baru register (belum verified) 
-    Route::get('/account-pending', function (Request $request) {
-        $user = Auth::user();
-        
-        if (!$user) {
-            return response()->json([
-                'message' => 'Authentication required'
-            ], 401);
-        }
-        
-        // Return user info meskipun belum verified
-        return response()->json([
-            'message' => 'Success',
-            'data' => [
-                'profile' => [
-                    'id' => $user->id,
-                    'name' => $user->name,
-                    'email' => $user->email,
-                    'verified_at' => $user->verified_at,
-                    'email_verified_at' => $user->email_verified_at,
-                    'status' => $user->verified_at ? 'verified' : 'pending_verification'
-                ]
-            ],
-            'verification_required' => !$user->verified_at
-        ]);
-    });
 
-    // Client
+    /**
+     * Client Features
+     */
+    // Notifications
     Route::get('/notification', [NotificationController::class, 'index']);
+    
+    // Cubes Management
     Route::apiResource('/cubes', CubeController::class);
+    Route::get('/get-cube-by-code/{code}', [AdController::class, 'getCubeByCode']);
+    Route::get('/menu-cube/{id}', [AdController::class, 'getMenuCubes']);
+    
+    // Opening Hours
     Route::apiResource('/opening-hours', OpeningHourController::class)->only(['store', 'update', 'destroy']);
-    Route::get('/grabs', [GrabController::class, 'index']);
-    Route::post('/grabs', [GrabController::class, 'store']);
-    Route::post('/grabs/validate', [GrabController::class, 'validateGrab']);
-    Route::get('/grabs/validated-history', [GrabController::class, 'validatedHistory']);
+    
+    // Grabs (Rewards/Points System)
+    Route::prefix('grabs')->group(function () {
+        Route::get('/', [GrabController::class, 'index']);
+        Route::post('/', [GrabController::class, 'store']);
+        Route::post('/validate', [GrabController::class, 'validateGrab']);
+        Route::get('/validated-history', [GrabController::class, 'validatedHistory']);
+    });
+    
+    // Location-based Features
     Route::get('/worlds', [HomeController::class, 'worlds']);
-
     Route::get('/ads/{lat}/{long}', [AdController::class, 'getAds']);
     Route::get('/shuffle-ads', [AdController::class, 'getShuffleAds']);
-    Route::get('/menu-cube/{id}', [AdController::class, 'getMenuCubes']);
-    Route::get('/get-cube-by-code/{code}', [AdController::class, 'getCubeByCode']);
-
+    
+    // Reports
     Route::apiResource('/report-content-ticket', ReportContentTicketController::class)->only(['index', 'store']);
-
-    Route::get('/chat-rooms', [ChatController::class, 'index']);
-    Route::post('/chat-rooms', [ChatController::class, 'store']);
-    Route::get('/chat-rooms/{id}', [ChatController::class, 'show']);
-    Route::post('/chats', [ChatController::class, 'createMessage']);
-
-    Route::get('/huehuy-ads', [HuehuyAdController::class, 'index']);
-    Route::get('/cube-huehuy-ads', [HuehuyAdController::class, 'cube_ad']);
-    Route::get('/huehuy-ads/{id}', [HuehuyAdController::class, 'show']);
-
-    // Community join/leave routes (commented until CommunityController is created)
+    
+    /**
+     * Chat System
+     */
+    Route::prefix('chat')->group(function () {
+        Route::get('/rooms', [ChatController::class, 'index']);
+        Route::post('/rooms', [ChatController::class, 'store']);
+        Route::get('/rooms/{id}', [ChatController::class, 'show']);
+        Route::post('/messages', [ChatController::class, 'createMessage']);
+    });
+    
+    /**
+     * Huehuy Ads System
+     */
+    Route::prefix('huehuy-ads')->group(function () {
+        Route::get('/', [HuehuyAdController::class, 'index']);
+        Route::get('/cube-ads', [HuehuyAdController::class, 'cube_ad']);
+        Route::get('/{id}', [HuehuyAdController::class, 'show']);
+    });
+    
+    /**
+     * Community Management
+     */
+    Route::prefix('communities/{communityId}')->group(function () {
+        // Community Categories
+        Route::prefix('categories')->group(function () {
+            Route::get('/', [CommunityWidgetController::class, 'index']);
+            Route::post('/', [CommunityWidgetController::class, 'store']);
+            Route::post('/{id}/attach', [CommunityWidgetController::class, 'attachExisting']);
+            Route::get('/{id}', [CommunityWidgetController::class, 'showCategory']);
+            Route::put('/{id}', [CommunityWidgetController::class, 'update']);
+            Route::delete('/{id}', [CommunityWidgetController::class, 'destroy']);
+        });
+        
+        // Community Promos
+        Route::prefix('promos')->group(function () {
+            Route::get('/', [PromoController::class, 'indexByCommunity']);
+            Route::post('/', [PromoController::class, 'storeForCommunity']);
+            Route::get('/{id}', [PromoController::class, 'showForCommunity']);
+            Route::put('/{id}', [PromoController::class, 'update']);
+            Route::delete('/{id}', [PromoController::class, 'destroy']);
+        });
+    });
+    
+    // Future Community Routes (Commented - Waiting for Controllers)
+    // Route::get('/communities/with-membership', [CommunityController::class, 'withMembership']);
+    // Route::get('/communities/user-communities', [CommunityController::class, 'userCommunities']);
     // Route::post('/communities/{id}/join', [CommunityController::class, 'join']);
     // Route::post('/communities/{id}/leave', [CommunityController::class, 'leave']);
-
-    // Admin
-    require __DIR__.'/api/admin.php';
-
-    // Corporate
-    require __DIR__.'/api/corporate.php';
-
-    // Communities - Categories
-    Route::prefix('communities/{communityId}/categories')->group(function () {
-        Route::get('/', [CommunityWidgetController::class, 'index']);
-        Route::post('/', [CommunityWidgetController::class, 'store']);
-        Route::post('{id}/attach', [CommunityWidgetController::class, 'attachExisting']);
-        Route::get('{id}', [CommunityWidgetController::class, 'showCategory']);
-        Route::put('{id}', [CommunityWidgetController::class, 'update']);
-        Route::delete('{id}', [CommunityWidgetController::class, 'destroy']);
+    
+    /**
+     * Promos & Vouchers System
+     */
+    Route::prefix('promos')->group(function () {
+        Route::post('/validate', [PromoController::class, 'validateCode']);
+        Route::get('/{promo}/history', [PromoController::class, 'history']);
     });
-
-    // Communities - Promos
-    Route::prefix('communities/{communityId}/promos')->group(function () {
-        Route::get('/', [PromoController::class, 'indexByCommunity']);
-        Route::post('/', [PromoController::class, 'storeForCommunity']);
-        Route::get('{id}', [PromoController::class, 'showForCommunity']); // pastikan cek community_id juga
-        Route::put('{id}', [PromoController::class, 'update']);
-        Route::delete('{id}', [PromoController::class, 'destroy']);
+    
+    Route::prefix('vouchers')->group(function () {
+        Route::post('/validate', [VoucherController::class, 'validateCode']);
+        Route::get('/{voucher}/history', [VoucherController::class, 'history']);
+        Route::get('/voucher-items', [VoucherController::class, 'voucherItems']);
     });
-
-    // Promos/Vouchers
-    Route::post('/promos/validate', [PromoController::class, 'validateCode']);
-    Route::get('promos/{promo}/history', [PromoController::class, 'history']);
-
-    Route::post('/vouchers/validate', [VoucherController::class, 'validateCode']);
-    Route::get('vouchers/{voucher}/history', [VoucherController::class, 'history']);
-
-    // Event registration (commented until EventController is created)
+    
+    /**
+     * User Activity History
+     */
+    Route::prefix('user')->group(function () {
+        Route::get('/promo-validations', [PromoController::class, 'userValidationHistory']);
+        Route::get('/voucher-validations', [VoucherController::class, 'userValidationHistory']);
+    });
+    
+    // Future Event Routes (Commented - Waiting for Controllers)
     // Route::post('/events/{id}/register', [EventController::class, 'register']);
     // Route::get('/events/{id}/registrations', [EventController::class, 'registrations']);
-
-    Route::get('/user/promo-validations', [PromoController::class, 'userValidationHistory']);
-    Route::get('/user/voucher-validations', [VoucherController::class, 'userValidationHistory']);
-
-    Route::get('/vouchers/voucher-items', [VoucherController::class, 'voucherItems']);
-
-    // Integrations
+    
+    /**
+     * Admin Routes
+     */
+    require __DIR__.'/api/admin.php';
+    
+    /**
+     * Corporate Routes
+     */
+    require __DIR__.'/api/corporate.php';
+    
+    /**
+     * Integration Routes
+     */
     require __DIR__.'/api/integration.php';
 });
 
 /**
- * Fallback JSON untuk semua route API yang tidak ada
+ * =======================================================
+ * FALLBACK ROUTE
+ * =======================================================
  */
 Route::fallback(function () {
     return response()->json(['message' => 'Not Found'], 404);

@@ -10,7 +10,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\RateLimiter;
-use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Log;
 
 class EmailVerificationController extends Controller
 {
@@ -53,6 +53,8 @@ class EmailVerificationController extends Controller
             // Hit rate limiter
             RateLimiter::hit($key, 60); // 60 seconds
 
+            Log::info('Verification code sent', ['email' => $email]);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Kode verifikasi telah dikirim ke email Anda.',
@@ -63,6 +65,11 @@ class EmailVerificationController extends Controller
             ]);
 
         } catch (\Exception $e) {
+            Log::error('Failed to send verification code', [
+                'email' => $email,
+                'error' => $e->getMessage()
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Gagal mengirim kode verifikasi. Silakan coba lagi.',
@@ -109,6 +116,11 @@ class EmailVerificationController extends Controller
             // Hit rate limiter for failed attempts
             RateLimiter::hit($key, 60);
 
+            Log::warning('Invalid verification code attempt', [
+                'email' => $email,
+                'code' => $code
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Kode verifikasi tidak valid atau sudah kadaluarsa.'
@@ -122,6 +134,7 @@ class EmailVerificationController extends Controller
         $user = User::where('email', $email)->first();
         if ($user && !$user->verified_at) {
             $user->update(['verified_at' => now()]);
+            Log::info('User email verified', ['user_id' => $user->id, 'email' => $email]);
         }
 
         return response()->json([
@@ -129,7 +142,13 @@ class EmailVerificationController extends Controller
             'message' => 'Email berhasil diverifikasi.',
             'data' => [
                 'email' => $email,
-                'verified_at' => now()->toISOString()
+                'verified_at' => now()->toISOString(),
+                'user' => $user ? [
+                    'id' => $user->id,
+                    'name' => $user->name,
+                    'email' => $user->email,
+                    'verified_at' => $user->verified_at?->toISOString()
+                ] : null
             ]
         ]);
     }
@@ -139,6 +158,19 @@ class EmailVerificationController extends Controller
      */
     public function resendCode(Request $request): JsonResponse
     {
+        // Add extra validation for resend
+        $validator = Validator::make($request->all(), [
+            'email' => 'required|email|max:255|exists:users,email', // Must be existing user
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
         return $this->sendCode($request);
     }
 
@@ -163,13 +195,16 @@ class EmailVerificationController extends Controller
         $user = User::where('email', $email)->first();
 
         $isVerified = $user && $user->verified_at;
+        $hasPendingCode = EmailVerificationCode::hasPendingVerification($email);
 
         return response()->json([
             'success' => true,
             'data' => [
                 'email' => $email,
+                'user_exists' => $user ? true : false,
                 'is_verified' => $isVerified,
-                'verified_at' => $isVerified ? $user->verified_at->toISOString() : null
+                'verified_at' => $isVerified ? $user->verified_at->toISOString() : null,
+                'has_pending_verification' => $hasPendingCode
             ]
         ]);
     }

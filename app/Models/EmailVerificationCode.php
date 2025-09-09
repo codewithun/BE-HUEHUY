@@ -71,4 +71,12 @@ class EmailVerificationCode extends Model
             ->where('expires_at', '>', now())
             ->exists();
     }
+
+    /**
+     * Clean up expired codes
+     */
+    public static function cleanupExpired(): int
+    {
+        return self::where('expires_at', '<', now())->delete();
+    }
 }

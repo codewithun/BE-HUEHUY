@@ -283,12 +283,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/communities/{id}/join', [CommunityController::class, 'join']);
     Route::post('/communities/{id}/leave', [CommunityController::class, 'leave']);
     
-    // Future Community Routes (Commented - Waiting for Controllers)
-    // Route::get('/communities/with-membership', [CommunityController::class, 'withMembership']);
-    // Route::get('/communities/user-communities', [CommunityController::class, 'userCommunities']);
-    // Route::post('/communities/{id}/join', [CommunityController::class, 'join']);
-    // Route::post('/communities/{id}/leave', [CommunityController::class, 'leave']);
-    
     /**
      * Promos & Vouchers System
      */

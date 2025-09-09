@@ -155,13 +155,13 @@ class AuthController extends Controller
         $validate = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email',
-            'phone' => 'required|string|max:100',
+            'phone' => 'required|string|max:100|unique:users,phone',
             'password' => 'required|string|min:8|max:50|confirmed',
             'image' => 'nullable',
             'role_id' => [
-                'nullable', // Ubah dari 'required' ke 'nullable'
+                'nullable',
                 'integer',
-                Rule::in([1, 2, 6]) // 1=admin, 2=user, 6=manager_tenant
+                Rule::in([1, 2, 6])
             ],
         ]);
 
@@ -170,7 +170,6 @@ class AuthController extends Controller
                 'errors' => $validate->errors()->toArray(),
                 'request_data' => $request->all()
             ]);
-            Log::error('Validation failed:', $validate->errors()->toArray());
             return response()->json([
                 'message' => "Error: Unprocessable Entity! Validation Error",
                 'errors' => $validate->errors(),
@@ -180,15 +179,15 @@ class AuthController extends Controller
         DB::beginTransaction();
 
         try {
-            // 2) Buat user
+            // 2) Buat user - SESUAI DATABASE SCHEMA
             $user = new User();
-            $user->role_id = $request->role_id ?? 2; // Default ke role_id = 2 (user biasa)
+            $user->role_id = $request->role_id ?? 2;
             $user->name = $request->name;
             $user->email = $request->email;
             $user->phone = $request->phone;
             $user->password = Hash::make($request->password);
 
-            // Upload foto jika ada
+            // Upload foto jika ada - GUNAKAN picture_source SESUAI DATABASE
             if ($request->hasFile('image')) {
                 try {
                     $user->picture_source = $this->upload_file($request->file('image'), 'profile');
@@ -202,10 +201,12 @@ class AuthController extends Controller
             }
 
             $user->save();
+
+            // 3) Create verification code
             try {
                 $verificationCode = EmailVerificationCode::createForEmail($user->email);
                 
-                // 5) Kirim email verifikasi
+                // 4) Kirim email verifikasi
                 Mail::to($user->email)->send(new VerificationCodeMail($verificationCode->code));
                 Log::info('Email sent successfully to:', ['email' => $user->email]);
                 $emailStatus = 'Verification email sent';
@@ -214,18 +215,20 @@ class AuthController extends Controller
                 $emailStatus = 'Registered, but failed to send verification email';
             }
 
+            DB::commit();
+
             $userToken = $user->createToken('registration')->plainTextToken;
 
             return response()->json([
                 'message' => 'Registration successful, please verify your email',
                 'data' => [
                     'user' => $user,
-                    'token' => $userToken, // PASTIKAN INI ADA
+                    'token' => $userToken,
                     'email' => $user->email,
                     'verification_required' => true
                 ],
                 'role' => $user->role,
-                'user_token' => $userToken, // Backward compatibility
+                'user_token' => $userToken,
                 'email_status' => $emailStatus,
             ], 201);
 
@@ -305,7 +308,6 @@ class AuthController extends Controller
      */
     public function mailVerify(Request $request)
     {
-        // Add initial logging to see what's being sent
         Log::info('mailVerify called with request data:', [
             'all_data' => $request->all(),
             'headers' => $request->headers->all(),
@@ -313,7 +315,6 @@ class AuthController extends Controller
             'method' => $request->method()
         ]);
 
-        // More flexible validation - accept either token or code
         $rules = [];
         
         if ($request->has('email')) {
@@ -338,7 +339,6 @@ class AuthController extends Controller
 
         $validate = Validator::make($request->all(), $rules);
 
-        // check validate
         if ($validate->fails()) {
             Log::error('Mail verification validation failed:', [
                 'errors' => $validate->errors()->toArray(),
@@ -349,17 +349,11 @@ class AuthController extends Controller
                 'success' => false,
                 'message' => "Validation failed",
                 'errors' => $validate->errors(),
-                'debug_info' => [
-                    'received_fields' => array_keys($request->all()),
-                    'required_fields' => array_keys($rules)
-                ]
-            ], 422);
+        ], 422);
         }
 
-        // Get email from request
         $email = $request->email;
         
-        // If no email provided, try to get it from other sources or return error
         if (!$email) {
             Log::error('No email provided in request');
             return response()->json([
@@ -384,7 +378,6 @@ class AuthController extends Controller
             ], 404);
         }
 
-        // Accept both 'token' and 'code' field names
         $token = $request->token ?? $request->code;
 
         DB::beginTransaction();
@@ -398,11 +391,13 @@ class AuthController extends Controller
                     $user->verified_at = now();
                     $user->save();
                     
-                    // Create token for user to continue with QR flow
                     $userToken = $user->createToken('email-verified')->plainTextToken;
                     
                     DB::commit();
                     Log::info('Email verification successful for user:', ['email' => $user->email]);
+                    
+                    // PERBAIKAN: Build redirect URL berdasarkan QR data
+                    $redirectUrl = $this->buildRedirectUrl($request->input('qr_data'));
                     
                     return response()->json([
                         'success' => true,
@@ -410,7 +405,8 @@ class AuthController extends Controller
                         'data' => [
                             'user' => $user,
                             'token' => $userToken,
-                            'qr_data' => $request->input('qr_data')
+                            'qr_data' => $request->input('qr_data'),
+                            'redirect_url' => $redirectUrl, // TAMBAHAN
                         ]
                     ], 200);
                 }
@@ -423,19 +419,19 @@ class AuthController extends Controller
                 ->first();
 
             if ($userTokenVerify && Hash::check($token, $userTokenVerify->token)) {
-                // update token verify
                 $userTokenVerify->used_at = now();
                 $userTokenVerify->save();
 
-                // update user
                 $user->verified_at = now();
                 $user->save();
                 
-                // Create token for user to continue with QR flow
                 $userToken = $user->createToken('email-verified')->plainTextToken;
                 
                 DB::commit();
                 Log::info('Email verification successful (old system) for user:', ['email' => $user->email]);
+                
+                // PERBAIKAN: Build redirect URL berdasarkan QR data
+                $redirectUrl = $this->buildRedirectUrl($request->input('qr_data'));
                 
                 return response()->json([
                     'success' => true,
@@ -443,7 +439,8 @@ class AuthController extends Controller
                     'data' => [
                         'user' => $user,
                         'token' => $userToken,
-                        'qr_data' => $request->input('qr_data')
+                        'qr_data' => $request->input('qr_data'),
+                        'redirect_url' => $redirectUrl, // TAMBAHAN
                     ]
                 ], 200);
             }
@@ -472,6 +469,39 @@ class AuthController extends Controller
                 'error' => config('app.debug') ? $th->getMessage() : 'Internal server error'
             ], 500);
         }
+    }
+
+    /**
+     * TAMBAHAN: Build redirect URL berdasarkan QR data
+     */
+    private function buildRedirectUrl($qrData)
+    {
+        if (!$qrData) {
+            return '/app'; // Default redirect
+        }
+
+        try {
+            $decoded = json_decode($qrData, true);
+            
+            if ($decoded && isset($decoded['type'])) {
+                switch ($decoded['type']) {
+                    case 'voucher':
+                        if (isset($decoded['voucherId'])) {
+                            return "/app/voucher/{$decoded['voucherId']}";
+                        }
+                        break;
+                    case 'promo':
+                        if (isset($decoded['promoId'])) {
+                            return "/app/promo/{$decoded['promoId']}";
+                        }
+                        break;
+                }
+            }
+        } catch (\Exception $e) {
+            Log::warning('Failed to parse QR data for redirect:', ['qr_data' => $qrData, 'error' => $e->getMessage()]);
+        }
+
+        return '/app'; // Fallback
     }
 
     public function editProfile(Request $request)
@@ -812,15 +842,14 @@ class AuthController extends Controller
 
             Log::info('Account endpoint called for user:', ['user_id' => $user->id, 'email' => $user->email]);
 
-            // ABSOLUTE MINIMAL: Hanya field yang pasti ada
+            // PERBAIKAN: SESUAI DENGAN DATABASE SCHEMA
             $userArray = [
                 'id' => (int) $user->id,
                 'name' => (string) ($user->name ?? 'User'),
                 'email' => (string) ($user->email ?? ''),
                 'phone' => $user->phone ?? null,
-                'avatar' => $user->avatar ?? null,
+                'picture_source' => $user->picture_source ?? null, // SESUAI DATABASE
                 'verified_at' => $user->verified_at ?? null,
-                'email_verified_at' => $user->email_verified_at ?? null,
                 'role_id' => (int) ($user->role_id ?? 2),
                 'role' => 'user',
                 'cubes' => [],
@@ -836,7 +865,6 @@ class AuthController extends Controller
                     'verification_status' => [
                         'is_verified' => $isVerified,
                         'verified_at' => $user->verified_at,
-                        'email_verified_at' => $user->email_verified_at,
                         'requires_verification' => !$isVerified
                     ]
                 ]
@@ -851,7 +879,6 @@ class AuthController extends Controller
                 'line' => $e->getLine()
             ]);
             
-            // ALWAYS return 200 with minimal data
             return response()->json([
                 'message' => 'Success',
                 'data' => [
@@ -866,11 +893,10 @@ class AuthController extends Controller
                     'verification_status' => [
                         'is_verified' => false,
                         'verified_at' => null,
-                        'email_verified_at' => null,
                         'requires_verification' => true
                     ]
                 ]
-            ], 200); // ALWAYS return 200, never 500
+            ], 200);
         }
     }
 
@@ -892,9 +918,8 @@ class AuthController extends Controller
                                 'name' => $user->name,
                                 'email' => $user->email,
                                 'phone' => $user->phone ?? null,
-                                'avatar' => $user->avatar ?? null,
+                                'picture_source' => $user->picture_source ?? null, // SESUAI DATABASE
                                 'verified_at' => $user->verified_at,
-                                'email_verified_at' => $user->email_verified_at,
                                 'status' => $user->verified_at ? 'verified' : 'pending_verification'
                             ]
                         ],
@@ -915,9 +940,8 @@ class AuthController extends Controller
                             'name' => $user->name,
                             'email' => $user->email,
                             'phone' => $user->phone ?? null,
-                            'avatar' => $user->avatar ?? null,
+                            'picture_source' => $user->picture_source ?? null, // SESUAI DATABASE
                             'verified_at' => $user->verified_at,
-                            'email_verified_at' => $user->email_verified_at,
                             'status' => $user->verified_at ? 'verified' : 'pending_verification'
                         ]
                     ],

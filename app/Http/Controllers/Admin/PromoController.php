@@ -13,10 +13,40 @@ use Illuminate\Support\Facades\Log;
 
 class PromoController extends Controller
 {
+    /**
+     * Transform promo image URLs
+     */
+    private function transformPromoImageUrls($promo)
+    {
+        // Handle main promo image
+        if ($promo->image) {
+            // Check if file actually exists in storage
+            if (Storage::disk('public')->exists($promo->image)) {
+                $promo->image_url = asset('storage/' . $promo->image);
+            } else {
+                // File doesn't exist, use default or null
+                $promo->image_url = asset('images/default-promo.jpg');
+                // OR set to null: $promo->image_url = null;
+            }
+        } else {
+            // No image set, use default
+            $promo->image_url = asset('images/default-promo.jpg');
+            // OR set to null: $promo->image_url = null;
+        }
+
+        return $promo;
+    }
+
     public function index()
     {
         try {
             $promos = Promo::all();
+            
+            // Transform image URLs for all promos
+            $promos = $promos->map(function($promo) {
+                return $this->transformPromoImageUrls($promo);
+            });
+            
             return response()->json([
                 'success' => true,
                 'data' => $promos
@@ -39,6 +69,9 @@ class PromoController extends Controller
             ], 404);
         }
 
+        // Transform image URL
+        $promo = $this->transformPromoImageUrls($promo);
+
         return response()->json([
             'success' => true,
             'data' => $promo
@@ -51,15 +84,11 @@ class PromoController extends Controller
     public function showPublic($id)
     {
         try {
-            // Check if promo relation exists first, if not use without relation
             $query = Promo::where('id', $id);
             
-            // Only add with() if relations exist in your model
             try {
-                // Try to load relations if they exist
                 $promo = $query->with(['community'])->first();
             } catch (\Exception $e) {
-                // If relations don't exist, load without them
                 Log::warning('Relations not available for Promo model, loading without them');
                 $promo = $query->first();
             }
@@ -71,7 +100,6 @@ class PromoController extends Controller
                 ], 404);
             }
 
-            // Check if promo is active (if status column exists)
             if (isset($promo->status) && $promo->status !== 'active') {
                 return response()->json([
                     'success' => false,
@@ -79,7 +107,9 @@ class PromoController extends Controller
                 ], 404);
             }
 
-            // Build response data with safe access to properties
+            // Transform image URL using helper
+            $promo = $this->transformPromoImageUrls($promo);
+
             $responseData = [
                 'id' => $promo->id,
                 'title' => $promo->title ?? '',
@@ -97,14 +127,8 @@ class PromoController extends Controller
                 'code' => $promo->code ?? null,
                 'created_at' => $promo->created_at ?? null,
                 'updated_at' => $promo->updated_at ?? null,
+                'image_url' => $promo->image_url, // Use transformed URL
             ];
-
-            // Add image URL if image exists
-            if (isset($promo->image) && $promo->image) {
-                $responseData['image_url'] = asset('storage/' . $promo->image);
-            } else {
-                $responseData['image_url'] = null;
-            }
 
             // Add community data if relation was loaded successfully
             if (isset($promo->community)) {
@@ -122,12 +146,10 @@ class PromoController extends Controller
                 $responseData['discount_percentage'] = $promo->discount_percentage;
             }
 
-            // Count claimed if promo_items relation exists
             try {
                 $claimedCount = $promo->promo_validations()->count();
                 $responseData['claimed_count'] = $claimedCount;
             } catch (\Exception $e) {
-                // If relation doesn't exist, set to 0
                 $responseData['claimed_count'] = 0;
             }
 
@@ -165,7 +187,7 @@ class PromoController extends Controller
             'location' => 'nullable|string',
             'owner_name' => 'required|string|max:255',
             'owner_contact' => 'required|string|max:255',
-            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
+            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp',
             'community_id' => 'nullable|exists:communities,id',
             'code' => 'nullable|string|unique:promos,code', // validasi kode unik jika diinput manual
         ]);
@@ -302,6 +324,12 @@ class PromoController extends Controller
     public function indexByCommunity($communityId)
     {
         $promos = Promo::where('community_id', $communityId)->get();
+        
+        // Transform image URLs
+        $promos = $promos->map(function($promo) {
+            return $this->transformPromoImageUrls($promo);
+        });
+        
         return response()->json([
             'success' => true,
             'data' => $promos
@@ -418,6 +446,9 @@ class PromoController extends Controller
                     'message' => 'Promo tidak ditemukan untuk komunitas ini'
                 ], 404);
             }
+
+            // Transform image URL
+            $promo = $this->transformPromoImageUrls($promo);
 
             return response()->json([
                 'success' => true,

@@ -14,37 +14,31 @@ class EmailVerificationCode extends Model
         'email',
         'code',
         'expires_at',
-        'is_used',
+        'used_at'
     ];
 
     protected $casts = [
         'expires_at' => 'datetime',
-        'is_used' => 'boolean',
+        'used_at' => 'datetime',
     ];
-
-    /**
-     * Generate a 6-digit verification code
-     */
-    public static function generateCode(): string
-    {
-        return str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-    }
 
     /**
      * Create a new verification code for an email
      */
     public static function createForEmail(string $email): self
     {
-        // Delete any existing unused codes for this email
+        // Invalidate any existing codes for this email
         self::where('email', $email)
-            ->where('is_used', false)
-            ->delete();
+            ->whereNull('used_at')
+            ->update(['used_at' => now()]);
+
+        // Generate 6-digit code
+        $code = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
 
         return self::create([
             'email' => $email,
-            'code' => self::generateCode(),
-            'expires_at' => Carbon::now()->addMinutes(10), // Code expires in 10 minutes
-            'is_used' => false,
+            'code' => $code,
+            'expires_at' => now()->addMinutes(15), // 15 minutes expiry
         ]);
     }
 
@@ -55,12 +49,12 @@ class EmailVerificationCode extends Model
     {
         $verificationCode = self::where('email', $email)
             ->where('code', $code)
-            ->where('is_used', false)
-            ->where('expires_at', '>', Carbon::now())
+            ->whereNull('used_at')
+            ->where('expires_at', '>', now())
             ->first();
 
         if ($verificationCode) {
-            $verificationCode->update(['is_used' => true]);
+            $verificationCode->update(['used_at' => now()]);
             return true;
         }
 
@@ -68,18 +62,13 @@ class EmailVerificationCode extends Model
     }
 
     /**
-     * Check if code is expired
+     * Check if email has pending verification
      */
-    public function isExpired(): bool
+    public static function hasPendingVerification(string $email): bool
     {
-        return $this->expires_at < Carbon::now();
-    }
-
-    /**
-     * Check if code is valid (not used and not expired)
-     */
-    public function isValid(): bool
-    {
-        return !$this->is_used && !$this->isExpired();
+        return self::where('email', $email)
+            ->whereNull('used_at')
+            ->where('expires_at', '>', now())
+            ->exists();
     }
 }

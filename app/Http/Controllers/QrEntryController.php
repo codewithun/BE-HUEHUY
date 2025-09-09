@@ -24,7 +24,7 @@ class QrEntryController extends Controller
         $validate = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email',
-            'phone' => 'required|string|max:100',
+            'phone' => 'required|string|max:100|unique:users,phone', // PERBAIKAN: Tambah unique
             'password' => 'required|string|min:8|max:50|confirmed',
             'qr_data' => 'nullable|string', // QR data untuk redirect setelah verifikasi
         ]);
@@ -51,7 +51,6 @@ class QrEntryController extends Controller
 
             Log::info('QR Entry - User created:', ['user_id' => $user->id, 'email' => $user->email]);
 
-            // 2) Commit transaction
             DB::commit();
 
             // 3) Create verification code (outside transaction)
@@ -74,6 +73,7 @@ class QrEntryController extends Controller
                         'user_token' => $userToken,
                         'verification_expires_at' => $verificationCode->expires_at->toISOString(),
                         'qr_data' => $request->qr_data, // Pass QR data for later use
+                        'redirect_url' => $this->buildRedirectUrl($request->qr_data), // TAMBAHAN
                     ]
                 ], 201);
 
@@ -91,6 +91,7 @@ class QrEntryController extends Controller
                         'user_token' => $userToken,
                         'email_failed' => true,
                         'qr_data' => $request->qr_data,
+                        'redirect_url' => $this->buildRedirectUrl($request->qr_data), // TAMBAHAN
                     ]
                 ], 201);
             }
@@ -152,7 +153,8 @@ class QrEntryController extends Controller
             'data' => [
                 'user' => $user,
                 'verified_at' => now()->toISOString(),
-                'qr_data' => $request->qr_data, // Return QR data for frontend processing
+                'qr_data' => $request->qr_data,
+                'redirect_url' => $this->buildRedirectUrl($request->qr_data), // TAMBAHAN
             ]
         ]);
     }
@@ -192,5 +194,38 @@ class QrEntryController extends Controller
                 'created_at' => $user->created_at->toISOString(),
             ]
         ]);
+    }
+
+    /**
+     * TAMBAHAN: Build redirect URL berdasarkan QR data
+     */
+    private function buildRedirectUrl($qrData)
+    {
+        if (!$qrData) {
+            return '/app'; // Default redirect
+        }
+
+        try {
+            $decoded = json_decode($qrData, true);
+            
+            if ($decoded && isset($decoded['type'])) {
+                switch ($decoded['type']) {
+                    case 'voucher':
+                        if (isset($decoded['voucherId'])) {
+                            return "/app/voucher/{$decoded['voucherId']}";
+                        }
+                        break;
+                    case 'promo':
+                        if (isset($decoded['promoId'])) {
+                            return "/app/promo/{$decoded['promoId']}";
+                        }
+                        break;
+                }
+            }
+        } catch (\Exception $e) {
+            Log::warning('Failed to parse QR data for redirect:', ['qr_data' => $qrData, 'error' => $e->getMessage()]);
+        }
+
+        return '/app'; // Fallback
     }
 }

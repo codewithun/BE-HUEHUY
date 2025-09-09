@@ -230,6 +230,12 @@ Route::middleware('auth:sanctum')->group(function () {
         ->whereNumber('communityId')
         ->group(function () {
 
+        // === Events per community (FE: /communities/{id}/events)
+        Route::get('/events', [EventController::class, 'indexByCommunity']);
+
+        // === Alias promo-categories -> pakai controller categories index
+        Route::get('/promo-categories', [CommunityWidgetController::class, 'index']);
+
         // Categories
         Route::prefix('categories')->group(function () {
             Route::get('/', [CommunityWidgetController::class, 'index']);

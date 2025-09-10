@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Voucher;
 use App\Models\VoucherItem;
 use App\Models\VoucherValidation;
+use App\Models\Notification; // TAMBAHAN
+use App\Models\User; // TAMBAHAN
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -142,15 +144,19 @@ class VoucherController extends Controller
 
             $model = Voucher::create($data);
 
+            // TAMBAHAN: Kirim notifikasi otomatis
+            $notificationCount = $this->sendVoucherNotifications($model);
+
             DB::commit();
 
             return response()->json([
                 'success' => true,
-                'message' => 'Voucher berhasil dibuat',
+                'message' => "Voucher berhasil dibuat dan {$notificationCount} notifikasi terkirim",
                 'data'    => $model
             ], 201);
         } catch (\Throwable $e) {
             DB::rollBack();
+            Log::error('Error creating voucher: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'message' => 'Gagal membuat voucher: ' . $e->getMessage()
@@ -252,6 +258,95 @@ class VoucherController extends Controller
     }
 
     /**
+     * TAMBAHAN: Kirim notifikasi voucher ke target users
+     */
+    private function sendVoucherNotifications(Voucher $voucher)
+    {
+        try {
+            $targetUsers = collect();
+
+            // Tentukan target users berdasarkan target_type
+            switch ($voucher->target_type) {
+                case 'all':
+                    // Kirim ke semua user yang email verified (batasi jumlah untuk performa)
+                    $targetUsers = User::whereNotNull('email_verified_at')
+                        ->limit(1000) // batasi untuk performa
+                        ->get();
+                    break;
+
+                case 'user':
+                    // Kirim ke user tertentu
+                    if ($voucher->target_user_id) {
+                        $targetUsers = User::where('id', $voucher->target_user_id)->get();
+                    }
+                    break;
+
+                case 'community':
+                    // Kirim ke anggota community
+                    if ($voucher->community_id) {
+                        $targetUsers = User::whereHas('communityMemberships', function($q) use ($voucher) {
+                            $q->where('community_id', $voucher->community_id)
+                              ->where('status', 'active');
+                        })->get();
+                    }
+                    break;
+            }
+
+            // Batch insert notifications untuk performa
+            $notifications = [];
+            $now = now();
+
+            foreach ($targetUsers as $user) {
+                $notifications[] = [
+                    'user_id' => $user->id,
+                    'type' => 'voucher',
+                    'title' => 'Voucher Baru Tersedia!',
+                    'message' => "Voucher '{$voucher->name}' tersedia untuk Anda. Gunakan kode: {$voucher->code}",
+                    'image_url' => $voucher->image ? asset('storage/' . $voucher->image) : null,
+                    'target_type' => 'voucher',
+                    'target_id' => $voucher->id,
+                    'action_url' => "/vouchers/{$voucher->id}",
+                    'meta' => json_encode([
+                        'voucher_code' => $voucher->code,
+                        'valid_until' => $voucher->valid_until,
+                        'community_id' => $voucher->community_id,
+                        'target_type' => $voucher->target_type
+                    ]),
+                    'created_at' => $now,
+                    'updated_at' => $now
+                ];
+            }
+
+            // Batch insert untuk performa yang lebih baik
+            if (!empty($notifications)) {
+                // Insert dalam chunks untuk menghindari memory limit
+                $chunks = array_chunk($notifications, 100);
+                foreach ($chunks as $chunk) {
+                    Notification::insert($chunk);
+                }
+            }
+
+            $count = count($notifications);
+            Log::info("Voucher notifications sent", [
+                'voucher_id' => $voucher->id,
+                'voucher_name' => $voucher->name,
+                'target_type' => $voucher->target_type,
+                'notifications_sent' => $count
+            ]);
+
+            return $count;
+
+        } catch (\Throwable $e) {
+            Log::error('Error sending voucher notifications: ' . $e->getMessage(), [
+                'voucher_id' => $voucher->id,
+                'error' => $e->getMessage()
+            ]);
+            // Jangan throw error, biar voucher tetap bisa dibuat meskipun notifikasi gagal
+            return 0;
+        }
+    }
+
+    /**
      * Kirim 1 voucher item ke user tertentu (manual push).
      * NB: ini contoh sederhana; kustom sesuai kebutuhan.
      */
@@ -287,9 +382,29 @@ class VoucherController extends Controller
 
             $voucher->decrement('stock');
 
+            // TAMBAHAN: Kirim notifikasi personal untuk manual send
+            try {
+                Notification::create([
+                    'user_id' => $request->user_id,
+                    'type' => 'voucher',
+                    'title' => 'Voucher Dikirim Khusus untuk Anda!',
+                    'message' => "Anda mendapat voucher '{$voucher->name}' dengan kode: {$voucher->code}",
+                    'image_url' => $voucher->image ? asset('storage/' . $voucher->image) : null,
+                    'target_type' => 'voucher',
+                    'target_id' => $voucher->id,
+                    'action_url' => "/vouchers/{$voucher->id}",
+                    'meta' => json_encode([
+                        'voucher_code' => $voucher->code,
+                        'sent_manually' => true
+                    ])
+                ]);
+            } catch (\Throwable $e) {
+                Log::error('Error sending manual voucher notification: ' . $e->getMessage());
+            }
+
             return response()->json([
                 'success' => true,
-                'message' => 'Voucher berhasil dikirim ke user',
+                'message' => 'Voucher berhasil dikirim ke user dan notifikasi terkirim',
                 'data'    => $voucherItem
             ]);
         } catch (\Throwable $e) {

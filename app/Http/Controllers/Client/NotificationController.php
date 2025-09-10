@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Notification;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 
 class NotificationController extends Controller
 {
@@ -22,6 +23,12 @@ class NotificationController extends Controller
         if (!$user) {
             return response()->json(['message' => 'Unauthenticated'], 401);
         }
+
+        // TAMBAHAN: Log awal untuk debugging
+        Log::info('NotifIndex', [
+            'user_id' => Auth::id(),
+            'type'    => $request->get('type'),
+        ]);
 
         // Base query + eager loads
         $query = Notification::with(
@@ -64,6 +71,13 @@ class NotificationController extends Controller
 
         // Urut & paginate
         $paginator = $query->orderBy($sortBy, $sortDirection)->paginate($paginate);
+
+        // TAMBAHAN: Log hasil untuk debugging
+        Log::info('NotifIndexResult', [
+            'user_id' => Auth::id(),
+            'total'   => $paginator->total(),
+            'types'   => collect($paginator->items())->pluck('type')->unique()->values(),
+        ]);
 
         return response()->json([
             'message'   => $paginator->isEmpty() ? 'empty data' : 'success',

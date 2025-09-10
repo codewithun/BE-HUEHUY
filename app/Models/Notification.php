@@ -23,6 +23,7 @@ class Notification extends Model
 
     /**
      * Mass-assignable attributes.
+     * (HAPUS legacy: cube_id, ad_id, grab_id)
      */
     protected $fillable = [
         'user_id',
@@ -35,35 +36,24 @@ class Notification extends Model
         'action_url',
         'meta',
         'read_at',
-
-        // Legacy fields (untuk backward compatibility)
-        'cube_id',
-        'ad_id',
-        'grab_id',
     ];
 
     /**
      * Casting untuk type conversion.
+     * (HAPUS legacy casts)
      */
     protected $casts = [
-        'user_id'   => 'integer',
-        'target_id' => 'integer',
-        'meta'      => 'array',
-        'read_at'   => 'datetime',
-        'created_at'=> 'datetime',
-        'updated_at'=> 'datetime',
-
-        // Legacy casts
-        'cube_id'   => 'integer',
-        'ad_id'     => 'integer',
-        'grab_id'   => 'integer',
+        'user_id'    => 'integer',
+        'target_id'  => 'integer',
+        'meta'       => 'array',
+        'read_at'    => 'datetime',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
     ];
 
     // ================= Relationships =================
 
-    /**
-     * Penerima notifikasi
-     */
+    /** Penerima notifikasi */
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
@@ -71,8 +61,7 @@ class Notification extends Model
 
     /**
      * Polymorphic relationship untuk target entity (voucher/promo/…)
-     * Wajib ada Morph Map di AppServiceProvider:
-     * Relation::enforceMorphMap(['voucher' => Voucher::class, 'promo' => Promo::class, ...]);
+     * Pastikan Morph Map ada di AppServiceProvider.
      */
     public function target(): MorphTo
     {
@@ -81,7 +70,7 @@ class Notification extends Model
     }
 
     /**
-     * Legacy relationships (opsional bila dipakai FE)
+     * Legacy relationships (opsional; JANGAN eager-load kalau kolom FK tidak ada)
      */
     public function cube(): BelongsTo   { return $this->belongsTo(Cube::class); }
     public function ad(): BelongsTo     { return $this->belongsTo(Ad::class); }
@@ -159,9 +148,7 @@ class Notification extends Model
 
     // ================= Helper Methods =================
 
-    /**
-     * Mark notifikasi sebagai sudah dibaca
-     */
+    /** Mark notifikasi sebagai sudah dibaca */
     public function markAsRead(): bool
     {
         if ($this->is_read) {
@@ -171,18 +158,14 @@ class Notification extends Model
         return $this->save();
     }
 
-    /**
-     * Mark notifikasi sebagai belum dibaca
-     */
+    /** Mark notifikasi sebagai belum dibaca */
     public function markAsUnread(): bool
     {
         $this->read_at = null;
         return $this->save();
     }
 
-    /**
-     * Konten siap tampil (opsional)
-     */
+    /** Konten siap tampil (opsional) */
     public function getDisplayContent(): array
     {
         return [
@@ -203,7 +186,7 @@ class Notification extends Model
 
     /**
      * Create voucher notification (helper method)
-     * NOTE: pakai ?string untuk PHP 8.4 agar tidak warning
+     * NOTE: pakai ?string untuk PHP 8.4.
      */
     public static function createVoucherNotification(
         int $userId,
@@ -241,9 +224,7 @@ class Notification extends Model
         ]);
     }
 
-    /**
-     * Create promo notification (helper method)
-     */
+    /** Create promo notification (helper method) */
     public static function createPromoNotification(
         int $userId,
         Promo $promo,
@@ -276,9 +257,7 @@ class Notification extends Model
         ]);
     }
 
-    /**
-     * Bulk mark as read untuk multiple notifications
-     */
+    /** Bulk mark as read */
     public static function bulkMarkAsRead(array $notificationIds, int $userId): int
     {
         return self::whereIn('id', $notificationIds)
@@ -287,9 +266,7 @@ class Notification extends Model
             ->update(['read_at' => now()]);
     }
 
-    /**
-     * Get unread count untuk user
-     */
+    /** Get unread count */
     public static function getUnreadCount(int $userId): int
     {
         return self::where('user_id', $userId)
@@ -304,7 +281,7 @@ class Notification extends Model
         parent::boot();
 
         static::created(function ($notification) {
-            Log::info("Notification created", [
+            Log::info('Notification created', [
                 'id'          => $notification->id,
                 'user_id'     => $notification->user_id,
                 'type'        => $notification->type,

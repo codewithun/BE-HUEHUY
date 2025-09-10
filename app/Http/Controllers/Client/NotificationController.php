@@ -19,6 +19,9 @@ class NotificationController extends Controller
         $typeParam     = $request->get('type'); // 'hunter' | 'merchant' | 'all' | null
 
         $user = Auth::user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthenticated'], 401);
+        }
 
         // Base query + eager loads
         $query = Notification::with(
@@ -28,17 +31,30 @@ class NotificationController extends Controller
             'grab', 'grab.ad', 'grab.ad.cube', 'grab.ad.cube.cube_type'
         )->where('user_id', $user->id);
 
-        // Filter type (hanya jika dikirim & bukan 'all')
-        if ($typeParam && in_array($typeParam, ['hunter', 'merchant'], true)) {
+        /**
+         * Mapping tab -> tipe notifikasi yang di-include:
+         * - hunter   : konten konsumsi user (iklan/grab/feed) — voucher/promo TIDAK dimasukkan di sini
+         * - merchant : merchant ops + voucher + promo (SESUAi PERMINTAAN)
+         * - all/NULL : tidak difilter (semua tipe)
+         *
+         * Catatan: tipe native di DB tetap 'voucher' / 'promo', tapi ikut tab 'merchant'.
+         */
+        if ($typeParam === 'hunter') {
+            $query->whereIn('type', ['ad', 'grab', 'feed']);
+        } elseif ($typeParam === 'merchant') {
+            $query->whereIn('type', ['merchant', 'order', 'settlement', 'voucher', 'promo']);
+        } elseif ($typeParam && $typeParam !== 'all') {
+            // fallback untuk request spesifik (mis. type=voucher)
             $query->where('type', $typeParam);
         }
+        // jika 'all' atau null → tanpa filter type
 
-        // Pencarian (kalau kamu punya helper search() di base controller)
+        // Pencarian (jika ada helper search() di base controller)
         if ($request->filled('search')) {
             $query = $this->search($request->get('search'), new Notification(), $query);
         }
 
-        // Filter kolom tambahan (kalau kamu pakai helper filter())
+        // Filter kolom tambahan (jika ada helper filter())
         if ($filter) {
             $filters = json_decode($filter, true) ?: [];
             foreach ($filters as $column => $value) {
@@ -47,14 +63,11 @@ class NotificationController extends Controller
         }
 
         // Urut & paginate
-        $paginator = $query
-            ->orderBy($sortBy, $sortDirection)
-            ->paginate($paginate);
+        $paginator = $query->orderBy($sortBy, $sortDirection)->paginate($paginate);
 
-        // Response konsisten utk FE (FE kamu map dari dataNotifications.data)
         return response()->json([
             'message'   => $paginator->isEmpty() ? 'empty data' : 'success',
-            'data'      => $paginator->items(),   // <— penting: gunakan items()
+            'data'      => $paginator->items(),   // FE kamu baca dari data.data
             'total_row' => $paginator->total(),
         ], 200);
     }

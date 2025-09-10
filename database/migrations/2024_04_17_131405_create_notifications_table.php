@@ -1,8 +1,5 @@
 <?php
 
-use App\Models\Ad;
-use App\Models\Cube;
-use App\Models\Grab;
 use App\Models\User;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
@@ -17,12 +14,37 @@ return new class extends Migration
     {
         Schema::create('notifications', function (Blueprint $table) {
             $table->id();
-            $table->foreignIdFor(User::class)->onDelete('cascade');
-            $table->foreignIdFor(Cube::class)->onDelete('cascade');
-            $table->foreignIdFor(Ad::class)->onDelete('cascade');
-            $table->foreignIdFor(Grab ::class)->onDelete('cascade');
-            $table->string('message');
+
+            // Penerima notifikasi
+            $table->foreignIdFor(User::class)
+                ->constrained()
+                ->onDelete('cascade');
+
+            // Tipe notifikasi (voucher|promo|grab|merchant|system|dll)
+            $table->string('type')->default('system');
+
+            // Konten utama
+            $table->string('title')->nullable();
+            $table->text('message')->nullable();
+            $table->string('image_url')->nullable();
+
+            // Target entity opsional (mis. voucher id / promo id / community id)
+            $table->string('target_type')->nullable();     // 'voucher' | 'promo' | 'community' | dll
+            $table->unsignedBigInteger('target_id')->nullable();
+
+            // Deep link / URL aksi opsional
+            $table->string('action_url')->nullable();
+
+            // Metadata tambahan (JSON)
+            $table->json('meta')->nullable();
+
+            // Status baca
+            $table->timestamp('read_at')->nullable();
+
             $table->timestamps();
+
+            $table->index(['user_id', 'type']);
+            $table->index(['target_type', 'target_id']);
         });
     }
 

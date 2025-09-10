@@ -12,7 +12,11 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('notifications', function (Blueprint $table) {
-            $table->enum('type', ['merchant', 'hunter'])->nullable()->after('grab_id');
+            if (!Schema::hasColumn('notifications', 'type')) {
+                $table->enum('type', ['merchant', 'hunter'])
+                    ->nullable()
+                    ->after('id'); // biasanya lebih aman after id, karena kadang `grab_id` belum ada
+            }
         });
     }
 
@@ -22,7 +26,9 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('notifications', function (Blueprint $table) {
-            $table->dropColumn('type');
+            if (Schema::hasColumn('notifications', 'type')) {
+                $table->dropColumn('type');
+            }
         });
     }
 };

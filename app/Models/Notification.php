@@ -10,66 +10,79 @@ class Notification extends Model
 {
     use HasFactory;
 
-    // =========================>
-    // ## Fillable
-    // =========================>
+    // Jika nama tabel standar "notifications", ini opsional:
+    // protected $table = 'notifications';
+
+    /**
+     * Mass-assignable.
+     */
     protected $fillable = [
         'user_id',
         'cube_id',
         'ad_id',
         'grab_id',
-        'type',
-        'message',
-    ];
-
-    // =========================>
-    // ## Searchable
-    // =========================>
-    public $searchable = [
-    ];
-
-    // =========================>
-    // ## Selectable
-    // =========================>
-    public $selectable = [
-        'notifications.id',
-        'notifications.user_id',
-        'notifications.cube_id',
-        'notifications.ad_id',
-        'notifications.grab_id',
-        'notifications.type',
-        'notifications.message',
+        'type',     // enum: merchant|hunter (nullable)
+        'message',  // isi notifikasi yang ditampilkan di FE
     ];
 
     /**
-     * * Relation to `User` model
+     * Casting sederhana (membantu saat filter / compare).
      */
-    public function user() : BelongsTo
+    protected $casts = [
+        'user_id' => 'integer',
+        'cube_id' => 'integer',
+        'ad_id' => 'integer',
+        'grab_id' => 'integer',
+        'type' => 'string',
+    ];
+
+    /**
+     * Relasi.
+     */
+    public function user(): BelongsTo
     {
-        return $this->belongsTo(User::class, 'user_id', 'id');
+        return $this->belongsTo(User::class);
+    }
+
+    public function cube(): BelongsTo
+    {
+        return $this->belongsTo(Cube::class);
+    }
+
+    public function ad(): BelongsTo
+    {
+        return $this->belongsTo(Ad::class);
+    }
+
+    public function grab(): BelongsTo
+    {
+        return $this->belongsTo(Grab::class);
     }
 
     /**
-     * * Relation to `Cube` model
+     * Scopes untuk memudahkan query di controller:
+     * Notification::forUser($id)->type('hunter')->latest()->get();
      */
-    public function cube() : BelongsTo
+    public function scopeForUser($query, int $userId)
     {
-        return $this->belongsTo(Cube::class, 'cube_id', 'id');
+        return $query->where('user_id', $userId);
     }
 
-    /**
-     * * Relation to `Ad` model
-     */
-    public function ad() : BelongsTo
+    public function scopeType($query, ?string $type)
     {
-        return $this->belongsTo(Ad::class, 'ad_id', 'id');
+        if ($type) {
+            $query->where('type', $type); // 'hunter' | 'merchant'
+        }
+        return $query;
     }
 
-    /**
-     * * Relation to `Grab` model
-     */
-    public function grab() : BelongsTo
+    public function scopeHunter($query)
     {
-        return $this->belongsTo(Grab::class, 'grab_id', 'id');
+        return $query->where('type', 'hunter');
+    }
+
+    public function scopeMerchant($query)
+    {
+        return $query->where('type', 'merchant');
     }
 }

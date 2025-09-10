@@ -9,67 +9,53 @@ use Illuminate\Support\Facades\Auth;
 
 class NotificationController extends Controller
 {
-    // ========================================>
-    // ## Display a listing of the resource.
-    // ========================================>
     public function index(Request $request)
-    {   
-        // ? Initial params
-        $sortDirection = $request->get("sortDirection", "DESC");
-        $sortby = $request->get("sortBy", "created_at");
-        $paginate = $request->get("paginate", 10);
-        $filter = $request->get("filter", null);
-        $type = $request->get("type", 'hunter');
+    {
+        // Params
+        $sortDirection = $request->get('sortDirection', 'DESC');
+        $sortBy        = $request->get('sortBy', 'created_at');
+        $paginate      = (int) $request->get('paginate', 10);
+        $filter        = $request->get('filter');
+        $typeParam     = $request->get('type'); // 'hunter' | 'merchant' | 'all' | null
 
-        // ? Preparation
-        $columnAliases = [];
-        
-        $credential = Auth::user();
+        $user = Auth::user();
 
-        // ? Begin
-        $model = new Notification();
+        // Base query + eager loads
         $query = Notification::with(
-            'user', 
+            'user',
             'cube', 'cube.ads', 'cube.cube_type',
             'ad', 'ad.cube', 'ad.cube.cube_type',
             'grab', 'grab.ad', 'grab.ad.cube', 'grab.ad.cube.cube_type'
-        );
+        )->where('user_id', $user->id);
 
-        // ? When search
-        if ($request->get("search") != "") {
-            $query = $this->search($request->get("search"), $model, $query);
-        } else {
-            $query = $query;
+        // Filter type (hanya jika dikirim & bukan 'all')
+        if ($typeParam && in_array($typeParam, ['hunter', 'merchant'], true)) {
+            $query->where('type', $typeParam);
         }
 
-        // ? When Filter
+        // Pencarian (kalau kamu punya helper search() di base controller)
+        if ($request->filled('search')) {
+            $query = $this->search($request->get('search'), new Notification(), $query);
+        }
+
+        // Filter kolom tambahan (kalau kamu pakai helper filter())
         if ($filter) {
-            $filters = json_decode($filter);
+            $filters = json_decode($filter, true) ?: [];
             foreach ($filters as $column => $value) {
-                $query = $this->filter($this->remark_column($column, $columnAliases), $value, $model, $query);
+                $query = $this->filter($column, $value, new Notification(), $query);
             }
         }
 
-        // ? Sort & executing with pagination
-        $query = $query->where('user_id', $credential->id)
-            ->where('type', $type)
-            ->orderBy($this->remark_column($sortby, $columnAliases), $sortDirection)
-            ->select($model->selectable)->paginate($paginate);
+        // Urut & paginate
+        $paginator = $query
+            ->orderBy($sortBy, $sortDirection)
+            ->paginate($paginate);
 
-        // ? When empty
-        if (empty($query->items())) {
-            return response([
-                "message" => "empty data",
-                "data" => [],
-            ], 200);
-        }
-
-        // ? When success
-        return response([
-            "message" => "success",
-            "data" => $query->all(),
-            "total_row" => $query->total(),
-        ]);
+        // Response konsisten utk FE (FE kamu map dari dataNotifications.data)
+        return response()->json([
+            'message'   => $paginator->isEmpty() ? 'empty data' : 'success',
+            'data'      => $paginator->items(),   // <— penting: gunakan items()
+            'total_row' => $paginator->total(),
+        ], 200);
     }
 }
-        

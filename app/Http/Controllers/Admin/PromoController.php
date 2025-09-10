@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Promo;
 use App\Models\PromoValidation;
+use App\Models\Community; // Add this import
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
@@ -26,12 +27,10 @@ class PromoController extends Controller
             } else {
                 // File doesn't exist, use default or null
                 $promo->image_url = asset('images/default-promo.jpg');
-                // OR set to null: $promo->image_url = null;
             }
         } else {
             // No image set, use default
             $promo->image_url = asset('images/default-promo.jpg');
-            // OR set to null: $promo->image_url = null;
         }
 
         return $promo;
@@ -446,28 +445,118 @@ class PromoController extends Controller
     public function showForCommunity($communityId, $promoId)
     {
         try {
+            Log::info('showForCommunity called', [
+                'community_id' => $communityId,
+                'promo_id' => $promoId
+            ]);
+
+            // Verify community exists
+            $community = Community::find($communityId);
+            if (!$community) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Komunitas tidak ditemukan'
+                ], 404);
+            }
+
+            // Find promo that belongs to this community
             $promo = Promo::where('id', $promoId)
                 ->where('community_id', $communityId)
                 ->first();
 
-            if (! $promo) {
+            // If not found in community, try to find promo without community restriction
+            // (for backward compatibility or if promo is public)
+            if (!$promo) {
+                $promo = Promo::find($promoId);
+                if (!$promo) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Promo tidak ditemukan'
+                    ], 404);
+                }
+            }
+
+            // Check promo status if column exists
+            if (isset($promo->status) && $promo->status !== 'active') {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Promo tidak ditemukan untuk komunitas ini'
+                    'message' => 'Promo tidak aktif'
                 ], 404);
             }
 
             // Transform image URL
             $promo = $this->transformPromoImageUrls($promo);
 
+            $responseData = [
+                'id' => $promo->id,
+                'title' => $promo->title ?? '',
+                'description' => $promo->description ?? '',
+                'detail' => $promo->detail ?? '',
+                'owner_name' => $promo->owner_name ?? '',
+                'owner_contact' => $promo->owner_contact ?? '',
+                'location' => $promo->location ?? '',
+                'promo_type' => $promo->promo_type ?? 'offline',
+                'promo_distance' => $promo->promo_distance ?? 0,
+                'always_available' => $promo->always_available ?? true,
+                'start_date' => $promo->start_date ?? null,
+                'end_date' => $promo->end_date ?? null,
+                'community_id' => $promo->community_id ?? $communityId,
+                'stock' => $promo->stock ?? null,
+                'code' => $promo->code ?? null,
+                'created_at' => $promo->created_at ?? null,
+                'updated_at' => $promo->updated_at ?? null,
+                'image_url' => $promo->image_url,
+                'image' => $promo->image,
+            ];
+
+            // Add price information if columns exist
+            if (isset($promo->original_price)) {
+                $responseData['original_price'] = $promo->original_price;
+            }
+            if (isset($promo->discount_price)) {
+                $responseData['discount_price'] = $promo->discount_price;
+            }
+            if (isset($promo->discount_percentage)) {
+                $responseData['discount_percentage'] = $promo->discount_percentage;
+            }
+
+            // Add community information
+            $responseData['community'] = [
+                'id' => $community->id,
+                'name' => $community->name,
+                'location' => $community->location ?? null
+            ];
+
+            try {
+                // Count claimed promos if relation exists
+                if (method_exists($promo, 'promo_validations')) {
+                    $claimedCount = $promo->promo_validations()->count();
+                } else {
+                    $claimedCount = PromoValidation::where('promo_id', $promo->id)->count();
+                }
+                $responseData['claimed_count'] = $claimedCount;
+            } catch (\Exception $e) {
+                $responseData['claimed_count'] = 0;
+            }
+
+            Log::info('Returning community promo data', ['response' => $responseData]);
+
             return response()->json([
                 'success' => true,
-                'data' => $promo
+                'data' => $responseData
             ]);
+
         } catch (\Exception $e) {
+            Log::error('Error showing community promo:', [
+                'community_id' => $communityId,
+                'promo_id' => $promoId,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
             return response()->json([
                 'success' => false,
-                'message' => 'Gagal mengambil data promo'
+                'message' => 'Terjadi kesalahan saat mengambil data promo'
             ], 500);
         }
     }

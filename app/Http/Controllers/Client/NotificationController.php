@@ -7,6 +7,7 @@ use App\Models\Notification;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class NotificationController extends Controller
 {
@@ -45,15 +46,30 @@ class NotificationController extends Controller
             'type'    => $request->get('type'),
         ]);
 
-        // Base query + eager loads (keep sama seperti sebelumnya)
-        $query = Notification::with([
-            'user',
-            'cube', 'cube.ads', 'cube.cube_type',
-            'ad', 'ad.cube', 'ad.cube.cube_type',
-            'grab', 'grab.ad', 'grab.ad.cube', 'grab.ad.cube.cube_type',
-            // TAMBAHAN: eager load untuk target polymorphic
-            'target'
-        ])->where('user_id', $user->id);
+        // PERBAIKAN: Base query dengan selective eager loading
+        $query = Notification::with(['user'])->where('user_id', $user->id);
+
+        // TAMBAHAN: Conditional eager loading hanya untuk notifikasi yang punya relationship
+        $query->with([
+            'target', // polymorphic relationship untuk voucher/promo dll
+        ]);
+
+        // PERBAIKAN: Hanya load legacy relationships jika field ada
+        $query->when(function($q) {
+            // Check jika tabel punya cube_id, ad_id, grab_id
+            try {
+                return Schema::hasColumn('notifications', 'cube_id');
+            } catch (\Exception $e) {
+                return false;
+            }
+        }, function($q) {
+            // Load legacy relationships hanya jika field ada
+            $q->with([
+                'cube', 'cube.ads', 'cube.cube_type',
+                'ad', 'ad.cube', 'ad.cube.cube_type', 
+                'grab', 'grab.ad', 'grab.ad.cube', 'grab.ad.cube.cube_type',
+            ]);
+        });
 
         /**
          * PERBAIKAN MAPPING TYPE:
@@ -98,25 +114,39 @@ class NotificationController extends Controller
             }
         }
 
-        // Order + paginate
-        $paginator = $query->orderBy($sortBy, $sortDirection)->paginate($paginate);
+        try {
+            // Order + paginate
+            $paginator = $query->orderBy($sortBy, $sortDirection)->paginate($paginate);
 
-        // TAMBAHAN: Log hasil untuk debugging
-        Log::info('NotifIndexResult', [
-            'user_id' => Auth::id(),
-            'total'   => $paginator->total(),
-            'types'   => collect($paginator->items())->pluck('type')->unique()->values(),
-        ]);
+            // TAMBAHAN: Log hasil untuk debugging
+            Log::info('NotifIndexResult', [
+                'user_id' => Auth::id(),
+                'total'   => $paginator->total(),
+                'types'   => collect($paginator->items())->pluck('type')->unique()->values(),
+            ]);
 
-        // IMPORTANT: LengthAwarePaginator tidak punya isEmpty()
-        $items = $paginator->items();
-        $message = (count($items) === 0) ? 'empty data' : 'success';
+            // IMPORTANT: LengthAwarePaginator tidak punya isEmpty()
+            $items = $paginator->items();
+            $message = (count($items) === 0) ? 'empty data' : 'success';
 
-        return response()->json([
-            'message'   => $message,
-            'data'      => $items,              // FE kamu baca dari data.data
-            'total_row' => $paginator->total(), // total seluruh data (bukan cuma halaman ini)
-        ], 200);
+            return response()->json([
+                'message'   => $message,
+                'data'      => $items,              // FE kamu baca dari data.data
+                'total_row' => $paginator->total(), // total seluruh data (bukan cuma halaman ini)
+            ], 200);
+
+        } catch (\Exception $e) {
+            Log::error('Error in NotificationController::index', [
+                'user_id' => $user->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'message' => 'Error loading notifications',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 
     /**
@@ -199,7 +229,9 @@ class NotificationController extends Controller
                 return response()->json(['message' => 'Unauthenticated'], 401);
             }
 
-            $count = Notification::getUnreadCount($user->id);
+            $count = Notification::where('user_id', $user->id)
+                                ->whereNull('read_at')
+                                ->count();
 
             return response()->json([
                 'success' => true,

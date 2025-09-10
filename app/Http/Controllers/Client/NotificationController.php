@@ -39,25 +39,24 @@ class NotificationController extends Controller
             return response()->json(['message' => 'Unauthenticated'], 401);
         }
 
-        // Log awal
+        // TAMBAHAN: Log awal untuk debugging
         Log::info('NotifIndex', [
-            'user_id' => $user->id,
-            'type'    => $typeParam,
-            'sortBy'  => $sortBy,
-            'dir'     => $sortDirection,
-            'paginate'=> $paginate,
+            'user_id' => Auth::id(),
+            'type'    => $request->get('type'),
         ]);
 
         // Base query + eager loads (keep sama seperti sebelumnya)
-        $query = Notification::with(
+        $query = Notification::with([
             'user',
             'cube', 'cube.ads', 'cube.cube_type',
             'ad', 'ad.cube', 'ad.cube.cube_type',
-            'grab', 'grab.ad', 'grab.ad.cube', 'grab.ad.cube.cube_type'
-        )->where('user_id', $user->id);
+            'grab', 'grab.ad', 'grab.ad.cube', 'grab.ad.cube.cube_type',
+            // TAMBAHAN: eager load untuk target polymorphic
+            'target'
+        ])->where('user_id', $user->id);
 
         /**
-         * Mapping tab → tipe notifikasi:
+         * PERBAIKAN MAPPING TYPE:
          * - hunter   : konsumsi user (iklan/grab/feed) — voucher/promo TIDAK dimasukkan.
          * - merchant : merchant ops + voucher + promo (SESUAI PERMINTAAN).
          * - voucher/promo: filter spesifik kalau diminta eksplisit.
@@ -66,14 +65,23 @@ class NotificationController extends Controller
          * Catatan: tipe di DB tetap 'voucher' / 'promo', tapi ikut tab 'merchant'.
          */
         if ($typeParam === 'hunter') {
-            $query->whereIn('type', ['ad', 'grab', 'feed']);
+            $query->whereIn('type', ['hunter', 'ad', 'grab', 'feed']);
         } elseif ($typeParam === 'merchant') {
+            // PERBAIKAN: TAMBAHKAN 'voucher' dan 'promo' ke merchant
             $query->whereIn('type', ['merchant', 'order', 'settlement', 'voucher', 'promo']);
         } elseif ($typeParam && $typeParam !== 'all') {
             // filter persis untuk type lain (mis. 'voucher' saja)
             $query->where('type', $typeParam);
         }
         // jika 'all' atau null → tidak difilter by type
+
+        // TAMBAHAN: LOGGING DEBUG UNTUK MELIHAT QUERY
+        Log::info('NotificationQuery Debug', [
+            'user_id' => $user->id,
+            'type_param' => $typeParam,
+            'sql' => $query->toSql(),
+            'bindings' => $query->getBindings(),
+        ]);
 
         // Pencarian (hanya jika helper ada)
         if ($request->filled('search') && method_exists($this, 'search')) {
@@ -93,9 +101,9 @@ class NotificationController extends Controller
         // Order + paginate
         $paginator = $query->orderBy($sortBy, $sortDirection)->paginate($paginate);
 
-        // Log hasil
+        // TAMBAHAN: Log hasil untuk debugging
         Log::info('NotifIndexResult', [
-            'user_id' => $user->id,
+            'user_id' => Auth::id(),
             'total'   => $paginator->total(),
             'types'   => collect($paginator->items())->pluck('type')->unique()->values(),
         ]);
@@ -109,5 +117,101 @@ class NotificationController extends Controller
             'data'      => $items,              // FE kamu baca dari data.data
             'total_row' => $paginator->total(), // total seluruh data (bukan cuma halaman ini)
         ], 200);
+    }
+
+    /**
+     * TAMBAHAN: Mark notification as read
+     */
+    public function markAsRead(Request $request, $id)
+    {
+        try {
+            $user = Auth::user();
+            if (!$user) {
+                return response()->json(['message' => 'Unauthenticated'], 401);
+            }
+
+            $notification = Notification::where('id', $id)
+                                      ->where('user_id', $user->id)
+                                      ->first();
+
+            if (!$notification) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Notification not found'
+                ], 404);
+            }
+
+            $notification->markAsRead();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Notification marked as read',
+                'data' => $notification
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Error marking notification as read: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to mark notification as read'
+            ], 500);
+        }
+    }
+
+    /**
+     * TAMBAHAN: Mark all notifications as read
+     */
+    public function markAllAsRead(Request $request)
+    {
+        try {
+            $user = Auth::user();
+            if (!$user) {
+                return response()->json(['message' => 'Unauthenticated'], 401);
+            }
+
+            $count = Notification::where('user_id', $user->id)
+                                ->whereNull('read_at')
+                                ->update(['read_at' => now()]);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Marked {$count} notifications as read",
+                'count' => $count
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Error marking all notifications as read: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to mark all notifications as read'
+            ], 500);
+        }
+    }
+
+    /**
+     * TAMBAHAN: Get unread notification count
+     */
+    public function unreadCount(Request $request)
+    {
+        try {
+            $user = Auth::user();
+            if (!$user) {
+                return response()->json(['message' => 'Unauthenticated'], 401);
+            }
+
+            $count = Notification::getUnreadCount($user->id);
+
+            return response()->json([
+                'success' => true,
+                'unread_count' => $count
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Error getting unread count: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to get unread count'
+            ], 500);
+        }
     }
 }

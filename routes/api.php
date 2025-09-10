@@ -253,6 +253,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{id}', [PromoController::class, 'showForCommunity'])->whereNumber('id');
             Route::put('/{id}', [PromoController::class, 'update'])->whereNumber('id');
             Route::delete('/{id}', [PromoController::class, 'destroy'])->whereNumber('id');
+            Route::get('admin/promos/{id}/public', [PromoController::class, 'showPublic']);
+            Route::get('promos/{id}/public', [PromoController::class, 'showPublic']);
         });
 
         // Vouchers

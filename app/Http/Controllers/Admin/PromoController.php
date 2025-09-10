@@ -84,6 +84,9 @@ class PromoController extends Controller
     public function showPublic($id)
     {
         try {
+            // Add more detailed logging
+            Log::info('showPublic called', ['promo_id' => $id]);
+            
             $query = Promo::where('id', $id);
             
             try {
@@ -94,12 +97,16 @@ class PromoController extends Controller
             }
 
             if (!$promo) {
+                Log::warning('Promo not found', ['promo_id' => $id]);
                 return response()->json([
                     'success' => false,
                     'message' => 'Promo tidak ditemukan'
                 ], 404);
             }
 
+            Log::info('Promo found', ['promo' => $promo->toArray()]);
+
+            // Check status if column exists
             if (isset($promo->status) && $promo->status !== 'active') {
                 return response()->json([
                     'success' => false,
@@ -128,6 +135,7 @@ class PromoController extends Controller
                 'created_at' => $promo->created_at ?? null,
                 'updated_at' => $promo->updated_at ?? null,
                 'image_url' => $promo->image_url, // Use transformed URL
+                'image' => $promo->image, // Also include original image path
             ];
 
             // Add community data if relation was loaded successfully
@@ -152,6 +160,8 @@ class PromoController extends Controller
             } catch (\Exception $e) {
                 $responseData['claimed_count'] = 0;
             }
+
+            Log::info('Returning promo data', ['response' => $responseData]);
 
             return response()->json([
                 'success' => true,

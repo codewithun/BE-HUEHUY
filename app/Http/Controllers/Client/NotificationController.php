@@ -48,15 +48,14 @@ class NotificationController extends Controller
             'paginate'=> $paginate,
         ]);
 
-        // Base query + eager loads
-        // NOTE: 'target' membutuhkan Morph Map di AppServiceProvider
+        /**
+         * Penting:
+         * - TIDAK eager-load legacy relasi (cube/ad/grab) karena kolom FK-nya tidak ada di tabel notifications.
+         * - Tetap eager-load 'target' (morph) kalau kamu sudah set Morph Map di AppServiceProvider.
+         */
         $query = Notification::with([
             'user',
-            'target', // voucher/promo/... via polymorph
-            // legacy relations (biar FE lama tetap punya data)
-            'cube', 'cube.ads', 'cube.cube_type',
-            'ad', 'ad.cube', 'ad.cube.cube_type',
-            'grab', 'grab.ad', 'grab.ad.cube', 'grab.ad.cube.cube_type',
+            'target', // voucher/promo/... via polymorph (pastikan Morph Map sudah diset)
         ])->where('user_id', $user->id);
 
         /**
@@ -74,7 +73,7 @@ class NotificationController extends Controller
             $query->where('type', $typeParam);
         }
 
-        // Optional: search/filter helper jika tersedia di BaseController
+        // Optional: search/filter helper jika tersedia di BaseController kamu
         if ($request->filled('search') && method_exists($this, 'search')) {
             $query = $this->search($request->get('search'), new Notification(), $query);
         }
@@ -91,8 +90,9 @@ class NotificationController extends Controller
             // Order + paginate
             $paginator = $query->orderBy($sortBy, $sortDirection)->paginate($paginate);
 
+            $items = $paginator->items();
+
             // Log hasil ringkas
-            $items   = $paginator->items();
             Log::info('NotifIndexResult', [
                 'user_id' => $user->id,
                 'total'   => $paginator->total(),
@@ -120,6 +120,7 @@ class NotificationController extends Controller
 
     /**
      * Mark a single notification as read
+     * POST /api/notification/{id}/read
      */
     public function markAsRead(Request $request, $id)
     {
@@ -159,6 +160,7 @@ class NotificationController extends Controller
 
     /**
      * Mark all notifications as read
+     * POST /api/notification/read-all
      */
     public function markAllAsRead(Request $request)
     {
@@ -189,6 +191,7 @@ class NotificationController extends Controller
 
     /**
      * Get unread notification count
+     * GET /api/notification/unread-count
      */
     public function unreadCount(Request $request)
     {

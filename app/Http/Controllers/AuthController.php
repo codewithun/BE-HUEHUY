@@ -118,10 +118,9 @@ class AuthController extends Controller
         // =========================>
         // ## verification gate (WAJIB)
         // =========================>
-        $isVerified = !empty($user->verified_at); // skema kamu pakai 'verified_at'
+        $isVerified = !empty($user->verified_at);
 
         if (!$isVerified) {
-            // Opsional: auto-resend kode verifikasi (aman diabaikan kalau gagal)
             try {
                 app(\App\Http\Controllers\EmailVerificationController::class)
                     ->resendCode(new \Illuminate\Http\Request(['email' => $user->email]));
@@ -131,13 +130,19 @@ class AuthController extends Controller
                     'err'   => $th->getMessage()
                 ]);
             }
+
+            // >>> UBAH: pakai 200, dan semua info unverified taruh di "data"
             return response()->json([
-                'status'       => 'unverified',
-                'reason'       => 'unverified',
-                'message'      => 'Silakan verifikasi email terlebih dahulu',
-                'email'        => $user->email,
-                'redirect_url' => '/verifikasi?email=' . urlencode($user->email), // <— TAMBAHKAN INI
-            ], 202); // JANGAN keluarkan token
+                'message' => 'Success',               // <-- kebanyakan hook cek ini
+                'data' => [
+                    'status'             => 'unverified',
+                    'reason'             => 'unverified',
+                    'need_verification'  => true,     // <-- flag jelas
+                    'email'              => $user->email,
+                    'redirect_url'       => '/verifikasi?email=' . urlencode($user->email),
+                    'http_status'        => 202,      // info saja, bukan HTTP beneran
+                ],
+            ], 200);
         }
 
         // =========================>

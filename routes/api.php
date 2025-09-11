@@ -184,6 +184,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // tandai semua notifikasi user sebagai terbaca
     Route::post('/notification/read-all', [NotificationController::class, 'markAllAsRead']);
 
+    // hapus SATU notifikasi (hard delete)
+    Route::delete('/notification/{id}', [NotificationController::class, 'destroy'])
+        ->whereNumber('id');
+
     // (opsional) hapus semua notifikasi user (per type bila dikirim ?type=merchant|hunter|voucher|promo|all)
     Route::delete('/notification', [NotificationController::class, 'destroyAll'] ?? fn() => abort(405));
 

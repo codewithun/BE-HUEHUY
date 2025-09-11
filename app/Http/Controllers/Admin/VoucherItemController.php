@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Notification;
 use App\Models\Voucher;
 use App\Models\VoucherItem;
 use Illuminate\Http\Request;
@@ -103,6 +104,7 @@ class VoucherItemController extends Controller
 
     /**
      * Klaim voucher → create VoucherItem untuk user login & kurangi stock.
+     * Opsional: hapus/tandai-baca notifikasi sumber klaim (via notification_id).
      */
     public function claim(Request $request, $voucherId)
     {
@@ -134,6 +136,13 @@ class VoucherItemController extends Controller
             ->where('voucher_id', $voucher->id)
             ->exists();
         if ($already) {
+            // Bila pernah klaim, tetap bersihkan notifikasi agar tidak muncul lagi
+            $this->cleanupNotifications(
+                $userId,
+                $voucher->id,
+                $request->input('notification_id')
+            );
+
             return response()->json([
                 'success' => false,
                 'message' => 'Kamu sudah pernah klaim voucher ini'
@@ -152,6 +161,13 @@ class VoucherItemController extends Controller
 
             $voucher->decrement('stock');
 
+            // Bersihkan notifikasi terkait (hapus atau mark-as-read)
+            $this->cleanupNotifications(
+                $userId,
+                $voucher->id,
+                $request->input('notification_id')
+            );
+
             DB::commit();
 
             return response()->json([
@@ -167,5 +183,31 @@ class VoucherItemController extends Controller
                 'message' => 'Gagal klaim voucher: ' . $th->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Hapus / tandai-baca notifikasi yang berkaitan dengan voucher ini.
+     * - Jika $notificationId ada, hapus entry spesifik itu (agar aman).
+     * - Tambahan guard: hapus semua notifikasi voucher yg menunjuk target voucher tsb (type/target_type).
+     */
+    protected function cleanupNotifications(int $userId, int $voucherId, $notificationId = null): void
+    {
+        // 1) Hapus (atau tandai-baca) notifikasi spesifik bila diberikan oleh FE
+        if (!empty($notificationId)) {
+            Notification::where('id', $notificationId)
+                ->where('user_id', $userId)
+                ->delete(); // kalau mau mark-as-read: ->update(['read_at' => now()]);
+        }
+
+        // 2) Guard: hapus semua notifikasi voucher yg mengarah ke target voucher ini
+        Notification::where('user_id', $userId)
+            ->where(function ($q) use ($voucherId) {
+                $q->where(function ($q1) use ($voucherId) {
+                    $q1->where('type', 'voucher')->where('target_id', $voucherId);
+                })->orWhere(function ($q2) use ($voucherId) {
+                    $q2->where('target_type', 'voucher')->where('target_id', $voucherId);
+                });
+            })
+            ->delete(); // atau ->update(['read_at' => now()]);
     }
 }

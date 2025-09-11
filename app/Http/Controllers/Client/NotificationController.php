@@ -218,4 +218,26 @@ class NotificationController extends Controller
             ], 500);
         }
     }
+
+    public function destroyAll(Request $request)
+    {
+        $user = Auth::user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthenticated'], 401);
+        }
+
+        $type = $request->get('type'); // optional filter
+        $q = Notification::where('user_id', $user->id);
+        if ($type && $type !== 'all') {
+            $q->where('type', $type);
+        }
+
+        $deleted = $q->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => "Deleted {$deleted} notifications",
+            'deleted' => $deleted,
+        ]);
+    }
 }

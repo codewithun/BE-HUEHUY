@@ -65,10 +65,8 @@ class QrcodeController extends Controller
         } else if ($voucherId) {
             $voucher = \App\Models\Voucher::find($voucherId);
             
-            // Langsung gunakan community_id field, jangan load relationship
-            $communityId = $voucher->community_id ?? 'global';
-            
-            $qrData = "{$baseUrl}/app/voucher/detail_voucher?voucherId={$voucherId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
+            // Voucher bersifat global, tidak memerlukan communityId
+            $qrData = "{$baseUrl}/app/voucher/{$voucherId}?autoRegister=1&source=qr_scan";
         }
 
         $qrSvg = QrCodeFacade::format('svg')->size(300)->generate($qrData);

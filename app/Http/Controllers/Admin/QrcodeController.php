@@ -16,7 +16,7 @@ class QrcodeController extends Controller
     {
        $adminId = Auth::id();
     // Tambahkan eager loading voucher & promo
-    $qrcodes = Qrcode::with(['voucher', 'promo'])->where('admin_id', $adminId)->get();
+    $qrcodes = Qrcode::with(['voucher.community', 'promo.community'])->where('admin_id', $adminId)->get();
     return response()->json([
         'success' => true,
         'count' => $qrcodes->count(),
@@ -49,12 +49,12 @@ class QrcodeController extends Controller
         $baseUrl = config('app.frontend_url', 'https://v2.huehuy.com');
         
         if ($promoId) {
-            $promo = \App\Models\Promo::find($promoId);
-            $communityId = $promo ? ($promo->community_id ?? 'default') : 'default';
+            $promo = \App\Models\Promo::with('community')->find($promoId);
+            $communityId = $promo && $promo->community ? $promo->community->id : ($promo->community_id ?? 'default');
             $qrData = "{$baseUrl}/app/komunitas/promo/detail_promo?promoId={$promoId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
         } else if ($voucherId) {
-            $voucher = \App\Models\Voucher::find($voucherId);
-            $communityId = $voucher ? ($voucher->community_id ?? 'default') : 'default';
+            $voucher = \App\Models\Voucher::with('community')->find($voucherId);
+            $communityId = $voucher && $voucher->community ? $voucher->community->id : ($voucher->community_id ?? 'default');
             $qrData = "{$baseUrl}/app/voucher/detail_voucher?voucherId={$voucherId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
         }
 
@@ -74,7 +74,7 @@ class QrcodeController extends Controller
             'success' => true,
             'message' => 'QR code berhasil dibuat',
             'path' => $fileName, 
-            'qrcode' => $qrcode->load(['voucher', 'promo'])
+            'qrcode' => $qrcode->load(['voucher.community', 'promo.community'])
         ]);
     }
 
@@ -105,12 +105,12 @@ class QrcodeController extends Controller
         $baseUrl = config('app.frontend_url', 'https://v2.huehuy.com');
         
         if ($promoId) {
-            $promo = \App\Models\Promo::find($promoId);
-            $communityId = $promo ? ($promo->community_id ?? 'default') : 'default';
+            $promo = \App\Models\Promo::with('community')->find($promoId);
+            $communityId = $promo && $promo->community ? $promo->community->id : ($promo->community_id ?? 'default');
             $qrData = "{$baseUrl}/app/komunitas/promo/detail_promo?promoId={$promoId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
         } else if ($voucherId) {
-            $voucher = \App\Models\Voucher::find($voucherId);
-            $communityId = $voucher ? ($voucher->community_id ?? 'default') : 'default';
+            $voucher = \App\Models\Voucher::with('community')->find($voucherId);
+            $communityId = $voucher && $voucher->community ? $voucher->community->id : ($voucher->community_id ?? 'default');
             $qrData = "{$baseUrl}/app/voucher/detail_voucher?voucherId={$voucherId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
         }
 
@@ -130,7 +130,7 @@ class QrcodeController extends Controller
             'tenant_name' => $tenantName,
         ]);
 
-        return response()->json(['success' => true, 'qrcode' => $qrcode]);
+        return response()->json(['success' => true, 'qrcode' => $qrcode->load(['voucher.community', 'promo.community'])]);
     }
 
     // Delete QR code

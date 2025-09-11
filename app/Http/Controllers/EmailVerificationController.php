@@ -11,6 +11,8 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
+use Carbon\Carbon;
 
 class EmailVerificationController extends Controller
 {
@@ -60,7 +62,7 @@ class EmailVerificationController extends Controller
                 'message' => 'Kode verifikasi telah dikirim ke email Anda.',
                 'data' => [
                     'email' => $email,
-                    'expires_at' => $verificationCode->expires_at->toISOString()
+                    'expires_at' => $this->iso($verificationCode->expires_at),
                 ]
             ]);
         } catch (\Exception $e) {
@@ -85,7 +87,7 @@ class EmailVerificationController extends Controller
         $validator = Validator::make($request->all(), [
             'email'   => 'required|email|max:255',
             'code'    => 'required|string|size:6',
-            'qr_data' => 'nullable', // biar bisa redirect khusus (opsional)
+            'qr_data' => 'nullable',
         ]);
 
         if ($validator->fails()) {
@@ -109,11 +111,11 @@ class EmailVerificationController extends Controller
             ], 429);
         }
 
-        // Validasi kode (table email_verification_codes)
+        // Validasi kode
         $isValid = EmailVerificationCode::verifyCode($email, $code);
 
         if (!$isValid) {
-            RateLimiter::hit($key, 60); // penalti 1 menit
+            RateLimiter::hit($key, 60);
             Log::warning('Invalid verification code attempt', ['email' => $email, 'code' => $code]);
 
             return response()->json([
@@ -122,7 +124,7 @@ class EmailVerificationController extends Controller
             ], 400);
         }
 
-        // Berhasil → clear limiter
+        // Sukses → bersihkan limiter
         RateLimiter::clear($key);
 
         // Update status user + buat token sanctum
@@ -131,22 +133,29 @@ class EmailVerificationController extends Controller
 
         if ($user) {
             $now = now();
+
+            // selalu isi verified_at (kolom yang kamu pakai)
             if (!$user->verified_at) {
                 $user->verified_at = $now;
             }
-            if (empty($user->email_verified_at)) {
-                $user->email_verified_at = $now; // kalau kolom ini ada di schema-mu
+
+            // hanya isi email_verified_at kalau kolomnya memang ada
+            if (Schema::hasColumn('users', 'email_verified_at')) {
+                if (empty($user->email_verified_at)) {
+                    $user->email_verified_at = $now;
+                }
             }
+
             $user->save();
 
-            // === INI KUNCI: kembalikan token agar FE bisa langsung login ===
+            // token sanctum
             $token = $user->createToken('email-verified')->plainTextToken;
             Log::info('User email verified + token issued', ['user_id' => $user->id, 'email' => $email]);
         } else {
             Log::info('Email verified but user not found (ok for pre-reg flows)', ['email' => $email]);
         }
 
-        // Tentukan redirect_url dari qr_data (opsional) → default /app
+        // Redirect URL dari qr_data (opsional) → default /app
         $redirectUrl = '/app';
         $qrData = $request->input('qr_data');
 
@@ -165,20 +174,22 @@ class EmailVerificationController extends Controller
             }
         }
 
+        // Siapkan verified_at user dengan aman
+        $userVerifiedIso = $user ? $this->iso($user->verified_at) : null;
+
         return response()->json([
             'success' => true,
             'message' => 'Email berhasil diverifikasi.',
             'data'    => [
                 'email'        => $email,
-                'verified_at'  => now()->toISOString(),
+                'verified_at'  => $this->iso(now()),
                 'user'         => $user ? [
                     'id'          => $user->id,
                     'name'        => $user->name,
                     'email'       => $user->email,
-                    'verified_at' => optional($user->verified_at)->toISOString(),
+                    'verified_at' => $userVerifiedIso,
                 ] : null,
-
-                // === FE (verifikasi.jsx) akan baca dua field ini ===
+                // FE verifikasi.jsx baca 2 field ini:
                 'token'        => $token,
                 'redirect_url' => $redirectUrl,
             ]
@@ -190,9 +201,8 @@ class EmailVerificationController extends Controller
      */
     public function resendCode(Request $request): JsonResponse
     {
-        // Add extra validation for resend
         $validator = Validator::make($request->all(), [
-            'email' => 'required|email|max:255|exists:users,email', // Must be existing user
+            'email' => 'required|email|max:255|exists:users,email',
         ]);
 
         if ($validator->fails()) {
@@ -233,11 +243,26 @@ class EmailVerificationController extends Controller
             'success' => true,
             'data' => [
                 'email' => $email,
-                'user_exists' => $user ? true : false,
-                'is_verified' => $isVerified,
-                'verified_at' => $isVerified ? $user->verified_at->toISOString() : null,
+                'user_exists' => (bool) $user,
+                'is_verified' => (bool) $isVerified,
+                'verified_at' => $isVerified ? $this->iso($user->verified_at) : null,
                 'has_pending_verification' => $hasPendingCode
             ]
         ]);
+    }
+
+    /**
+     * Helper: amanin konversi ke ISO string (Carbon|string|null)
+     */
+    private function iso($value): ?string
+    {
+        if (!$value) return null;
+        try {
+            return ($value instanceof Carbon)
+                ? $value->toISOString()
+                : Carbon::parse((string) $value)->toISOString();
+        } catch (\Throwable $e) {
+            return is_string($value) ? $value : null;
+        }
     }
 }

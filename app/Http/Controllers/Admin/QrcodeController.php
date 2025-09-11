@@ -45,29 +45,23 @@ class QrcodeController extends Controller
         $promoId = $request->input('promo_id');
         $tenantName = $request->input('tenant_name');
 
-        // Ambil community_id dari relasi voucher/promo jika ada
-        $communityId = null;
+        // Build proper URL for QR code instead of JSON
+        $baseUrl = config('app.frontend_url', 'http://localhost:3000');
+        
         if ($promoId) {
             $promo = \App\Models\Promo::find($promoId);
             $communityId = $promo ? ($promo->community_id ?? 'default') : 'default';
-            $qrData = json_encode([
-                'type' => 'promo',
-                'promoId' => (string)$promoId,
-                'communityId' => (string)$communityId,
-            ]);
+            $qrData = "{$baseUrl}/app/komunitas/promo/{$promoId}?communityId={$communityId}&autoRegister=1";
         } else if ($voucherId) {
             $voucher = \App\Models\Voucher::find($voucherId);
             $communityId = $voucher ? ($voucher->community_id ?? 'default') : 'default';
-            $qrData = json_encode([
-                'type' => 'voucher',
-                'voucherId' => (string)$voucherId,
-                'communityId' => (string)$communityId,
-            ]);
+            $qrData = "{$baseUrl}/app/voucher/{$voucherId}?communityId={$communityId}&autoRegister=1";
         }
 
         $qrSvg = QrCodeFacade::format('svg')->size(300)->generate($qrData);
         $fileName = 'qr_codes/admin_' . $adminId . '_' . time() . '.svg';
         Storage::disk('public')->put($fileName, $qrSvg);
+        
         $qrcode = Qrcode::create([
             'admin_id' => $adminId,
             'qr_code' => $fileName,
@@ -75,7 +69,13 @@ class QrcodeController extends Controller
             'promo_id' => $promoId,
             'tenant_name' => $tenantName,
         ]);
-        return response()->json(['path' => $fileName, 'qrcode' => $qrcode]);
+        
+        return response()->json([
+            'success' => true,
+            'message' => 'QR code berhasil dibuat',
+            'path' => $fileName, 
+            'qrcode' => $qrcode->load(['voucher', 'promo'])
+        ]);
     }
 
     // Edit QR code (update data dan file)

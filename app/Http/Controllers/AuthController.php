@@ -66,7 +66,7 @@ class AuthController extends Controller
         // ## get user request
         // =========================>
         Log::info('Searching user with email: ' . $request->email . ' and scope: ' . $scope);
-        
+
         switch ($scope) {
             case 'admin':
                 $user = User::where('email', $request->email)
@@ -104,7 +104,7 @@ class AuthController extends Controller
             'email' => $user->email,
             'hash_prefix' => substr($user->password, 0, 20) . '...'
         ]);
-        
+
         if (!Hash::check($request->password, $user->password)) {
             Log::warning('Password check failed for user:', ['email' => $user->email]);
             return response()->json([
@@ -112,11 +112,35 @@ class AuthController extends Controller
                 'errors' => ['password' => ['Password salah!']],
             ], 422);
         }
-        
+
         Log::info('Password check successful for user:', ['email' => $user->email]);
 
         // =========================>
-        // ## create token
+        // ## verification gate (WAJIB)
+        // =========================>
+        $isVerified = !empty($user->verified_at); // skema kamu pakai 'verified_at'
+
+        if (!$isVerified) {
+            // Opsional: auto-resend kode verifikasi (aman diabaikan kalau gagal)
+            try {
+                app(\App\Http\Controllers\EmailVerificationController::class)
+                    ->resendCode(new \Illuminate\Http\Request(['email' => $user->email]));
+            } catch (\Throwable $th) {
+                Log::warning('Auto-resend verification failed', [
+                    'email' => $user->email,
+                    'err'   => $th->getMessage()
+                ]);
+            }
+            return response()->json([
+                'status'  => 'unverified',
+                'reason'  => 'unverified',
+                'message' => 'Silakan verifikasi email terlebih dahulu',
+                'email'   => $user->email,
+            ], 202); // JANGAN keluarkan token
+        }
+
+        // =========================>
+        // ## create token (verified saja)
         // =========================>
         $user_token = $user->createToken('sanctum')->plainTextToken;
 
@@ -133,8 +157,8 @@ class AuthController extends Controller
                 "role" => $user->role,
                 "scope" => $scope
             ],
-            'user_token' => $user_token // Backward compatibility
-        ]);
+            'user_token' => $user_token
+        ], 200);
     }
 
     /**
@@ -205,7 +229,7 @@ class AuthController extends Controller
             // 3) Create verification code
             try {
                 $verificationCode = EmailVerificationCode::createForEmail($user->email);
-                
+
                 // 4) Kirim email verifikasi
                 Mail::to($user->email)->send(new VerificationCodeMail($verificationCode->code));
                 Log::info('Email sent successfully to:', ['email' => $user->email]);
@@ -231,7 +255,6 @@ class AuthController extends Controller
                 'user_token' => $userToken,
                 'email_status' => $emailStatus,
             ], 201);
-
         } catch (\Throwable $th) {
             DB::rollBack();
             Log::error('Registration failed:', ['error' => $th->getMessage(), 'trace' => $th->getTraceAsString()]);
@@ -266,7 +289,7 @@ class AuthController extends Controller
 
         // PERBAIKAN: Cari user berdasarkan email dari request
         $user = User::where('email', $request->email)->first();
-        
+
         if (!$user) {
             return response()->json([
                 'message' => 'User tidak ditemukan',
@@ -288,10 +311,9 @@ class AuthController extends Controller
                 'email' => $user->email,
                 'success' => true
             ], 200);
-
         } catch (\Throwable $th) {
             Log::error('Failed to resend verification email:', ['error' => $th->getMessage()]);
-            
+
             return response()->json([
                 'message' => "Error: Failed to send verification email",
                 'error' => config('app.debug') ? $th->getMessage() : 'Internal server error'
@@ -316,11 +338,11 @@ class AuthController extends Controller
         ]);
 
         $rules = [];
-        
+
         if ($request->has('email')) {
             $rules['email'] = 'required|email';
         }
-        
+
         if ($request->has('token')) {
             $rules['token'] = 'required|string';
         } elseif ($request->has('code')) {
@@ -349,11 +371,11 @@ class AuthController extends Controller
                 'success' => false,
                 'message' => "Validation failed",
                 'errors' => $validate->errors(),
-        ], 422);
+            ], 422);
         }
 
         $email = $request->email;
-        
+
         if (!$email) {
             Log::error('No email provided in request');
             return response()->json([
@@ -366,7 +388,7 @@ class AuthController extends Controller
         }
 
         $user = User::where('email', $email)->first();
-        
+
         if (!$user) {
             Log::warning('Mail verification attempted for non-existent user:', ['email' => $email]);
             return response()->json([
@@ -386,19 +408,19 @@ class AuthController extends Controller
             // Try new system first (6-digit plain code)
             if (strlen($token) === 6 && ctype_digit($token)) {
                 $isValid = EmailVerificationCode::verifyCode($user->email, $token);
-                
+
                 if ($isValid) {
                     $user->verified_at = now();
                     $user->save();
-                    
+
                     $userToken = $user->createToken('email-verified')->plainTextToken;
-                    
+
                     DB::commit();
                     Log::info('Email verification successful for user:', ['email' => $user->email]);
-                    
+
                     // PERBAIKAN: Build redirect URL berdasarkan QR data
                     $redirectUrl = $this->buildRedirectUrl($request->input('qr_data'));
-                    
+
                     return response()->json([
                         'success' => true,
                         'message' => 'Email verified successfully',
@@ -424,15 +446,15 @@ class AuthController extends Controller
 
                 $user->verified_at = now();
                 $user->save();
-                
+
                 $userToken = $user->createToken('email-verified')->plainTextToken;
-                
+
                 DB::commit();
                 Log::info('Email verification successful (old system) for user:', ['email' => $user->email]);
-                
+
                 // PERBAIKAN: Build redirect URL berdasarkan QR data
                 $redirectUrl = $this->buildRedirectUrl($request->input('qr_data'));
-                
+
                 return response()->json([
                     'success' => true,
                     'message' => 'Email verified successfully',
@@ -455,7 +477,6 @@ class AuthController extends Controller
                     'token' => ['Token tidak valid atau sudah kadaluarsa!']
                 ]
             ], 422);
-
         } catch (\Throwable $th) {
             DB::rollBack();
             Log::error('Mail verification failed:', [
@@ -482,7 +503,7 @@ class AuthController extends Controller
 
         try {
             $decoded = json_decode($qrData, true);
-            
+
             if ($decoded && isset($decoded['type'])) {
                 switch ($decoded['type']) {
                     case 'voucher':
@@ -590,8 +611,8 @@ class AuthController extends Controller
         $user = User::findOrFail(Auth::id());
 
         $cekPassword = Hash::check($request->old_password, $user->password);
-            
-        if($cekPassword == true) {
+
+        if ($cekPassword == true) {
             $user->update([
                 // 'password' => bcrypt($request->password)
                 'password' => Hash::make($request->password)
@@ -759,7 +780,7 @@ class AuthController extends Controller
         ], 200);
     }
 
-        /**
+    /**
      * New Password
      */
     public function forgotPasswordNewPassword(Request $request)
@@ -796,12 +817,12 @@ class AuthController extends Controller
                 'message' => 'Token tidak ditemukan'
             ], 422);
         }
-        
+
         // check user
         $user = User::where('email', $request->email)
             ->whereNotNull('verified_at')
             ->first();
-        
+
         if (!$user) {
             return response()->json([
                 'message' => 'User tidak ditemukan'
@@ -869,7 +890,6 @@ class AuthController extends Controller
                     ]
                 ]
             ], 200);
-
         } catch (\Throwable $e) {
             Log::error('Account endpoint critical error:', [
                 'error' => $e->getMessage(),
@@ -878,7 +898,7 @@ class AuthController extends Controller
                 'file' => $e->getFile(),
                 'line' => $e->getLine()
             ]);
-            
+
             return response()->json([
                 'message' => 'Success',
                 'data' => [
@@ -905,10 +925,10 @@ class AuthController extends Controller
         try {
             // PERBAIKAN: Jika ada email di query parameter
             $email = $request->query('email');
-            
+
             if ($email) {
                 $user = User::where('email', $email)->first();
-                
+
                 if ($user) {
                     return response()->json([
                         'message' => 'Success',
@@ -927,10 +947,10 @@ class AuthController extends Controller
                     ]);
                 }
             }
-            
+
             // FALLBACK: Jika ada auth user
             $user = Auth::user();
-            
+
             if ($user) {
                 return response()->json([
                     'message' => 'Success',
@@ -948,17 +968,16 @@ class AuthController extends Controller
                     'verification_required' => !$user->verified_at
                 ]);
             }
-            
+
             // DEFAULT: Return empty response
             return response()->json([
                 'message' => 'Please provide email parameter or authenticate',
                 'data' => ['profile' => null],
                 'verification_required' => true
             ], 200);
-            
         } catch (\Exception $e) {
             Log::error('account_unverified error:', ['error' => $e->getMessage()]);
-            
+
             return response()->json([
                 'message' => 'Internal server error',
                 'error' => config('app.debug') ? $e->getMessage() : 'Server error',
@@ -976,7 +995,7 @@ class AuthController extends Controller
         }
 
         $factory = (new Factory())
-        ->withServiceAccount([
+            ->withServiceAccount([
                 'type' => 'service_account',
                 'project_id' => 'huehuy-c43c3',
                 'private_key_id' => 'ad9ff9b64ccee8cbbdd7feae6823e1e1bdbd111c',
@@ -989,7 +1008,7 @@ class AuthController extends Controller
                 'client_x509_cert_url' => 'https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-n9gqp%40huehuy-c43c3.iam.gserviceaccount.com',
                 'universe_domain' => 'googleapis.com',
             ])
-        ->withProjectId('huehuy-c43c3');
+            ->withProjectId('huehuy-c43c3');
         $auth = $factory->createAuth();
         $idTokenString = $request->idToken;
 
@@ -1055,7 +1074,7 @@ class AuthController extends Controller
             }
 
             $user = User::where('email', $email)->first();
-            
+
             if (!$user) {
                 return response()->json([
                     'success' => false,
@@ -1089,7 +1108,6 @@ class AuthController extends Controller
                     'qr_data' => $request->input('qr_data')
                 ]
             ], 200);
-
         } catch (\Exception $e) {
             Log::error('mailVerifySimple error:', [
                 'error' => $e->getMessage(),

@@ -144,18 +144,20 @@ class AuthController extends Controller
         // =========================>
         $user_token = $user->createToken('sanctum')->plainTextToken;
 
+        $roleId = (int) ($user->role_id ?? 0);
+
         return response([
             'message' => 'Success',
             'data' => [
                 "user" => [
-                    'id' => $user->id,
-                    'name' => $user->name,
-                    'email' => $user->email,
-                    'role' => $user->role
+                    'id'      => (int) $user->id,
+                    'name'    => (string) $user->name,
+                    'email'   => (string) $user->email,
+                    'role_id' => $roleId,
                 ],
-                "token" => $user_token,
-                "role" => $user->role,
-                "scope" => $scope
+                "token"   => $user_token,
+                "role_id" => $roleId,
+                "scope"   => $scope
             ],
             'user_token' => $user_token
         ], 200);

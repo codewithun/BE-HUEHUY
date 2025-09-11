@@ -8,8 +8,8 @@ use Illuminate\Database\Eloquent\Relations\Relation;
 use Laravel\Sanctum\Sanctum;
 
 // === Import model yang dipakai di morph ===
-// Sesuaikan dengan model yang kamu punya
-use App\Models\PersonalAccessToken;
+use App\Models\User;                   // <- WAJIB: untuk morph 'user'
+use App\Models\PersonalAccessToken;    // Sanctum token model kustom
 use App\Models\Voucher;
 use App\Models\Promo;
 use App\Models\Ad;
@@ -31,24 +31,22 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        // Strict mode (bagus untuk dev; kalau production bikin ribet, kamu boleh matikan sebagian)
+        // Mode strict (bagus saat dev; kalau produksi bikin ribet, boleh dimatikan sebagian)
         Model::shouldBeStrict(true);
         Model::preventLazyLoading(true);
         Model::preventSilentlyDiscardingAttributes(true);
 
-        // Sanctum pakai model kustom kamu
+        // Pakai model token kustom untuk Sanctum
         Sanctum::usePersonalAccessTokenModel(PersonalAccessToken::class);
 
-        // === PENTING: Morph Map untuk polymorphic relation ===
-        // Mapping string di kolom target_type -> class model
+        // === Morph Map untuk polymorphic relation (WAJIB ada 'user') ===
         Relation::enforceMorphMap([
-            'voucher'  => Voucher::class,
-            'promo'    => Promo::class,
-
-            // Kalau notifikasi kamu pernah mengarah ke entity lain, boleh dimasukkan juga:
-            'ad'       => Ad::class,
-            'grab'     => Grab::class,
-            'cube'     => Cube::class,
+            'user'    => User::class,          // dipakai Sanctum: tokenable_type = 'user'
+            'voucher' => Voucher::class,
+            'promo'   => Promo::class,
+            'ad'      => Ad::class,
+            'grab'    => Grab::class,
+            'cube'    => Cube::class,
         ]);
     }
 }

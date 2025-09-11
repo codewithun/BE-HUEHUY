@@ -177,6 +177,16 @@ Route::middleware('auth:sanctum')->group(function () {
     // === Notifications ===
     Route::get('/notification', [NotificationController::class, 'index']);
 
+    // tandai satu notifikasi sebagai terbaca
+    Route::post('/notification/{id}/read', [NotificationController::class, 'markAsRead'])
+        ->whereNumber('id');
+
+    // tandai semua notifikasi user sebagai terbaca
+    Route::post('/notification/read-all', [NotificationController::class, 'markAllAsRead']);
+
+    // (opsional) hapus semua notifikasi user (per type bila dikirim ?type=merchant|hunter|voucher|promo|all)
+    Route::delete('/notification', [NotificationController::class, 'destroyAll'] ?? fn() => abort(405));
+
     // === Cubes ===
     Route::apiResource('/cubes', CubeController::class);
     Route::get('/get-cube-by-code/{code}', [AdController::class, 'getCubeByCode']);

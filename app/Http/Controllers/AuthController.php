@@ -132,10 +132,11 @@ class AuthController extends Controller
                 ]);
             }
             return response()->json([
-                'status'  => 'unverified',
-                'reason'  => 'unverified',
-                'message' => 'Silakan verifikasi email terlebih dahulu',
-                'email'   => $user->email,
+                'status'       => 'unverified',
+                'reason'       => 'unverified',
+                'message'      => 'Silakan verifikasi email terlebih dahulu',
+                'email'        => $user->email,
+                'redirect_url' => '/verifikasi?email=' . urlencode($user->email), // <— TAMBAHKAN INI
             ], 202); // JANGAN keluarkan token
         }
 

@@ -219,6 +219,35 @@ class NotificationController extends Controller
         }
     }
 
+    public function destroy(Request $request, $id)
+    {
+        $user = Auth::user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthenticated'], 401);
+        }
+
+        $deleted = Notification::where('id', $id)
+            ->where('user_id', $user->id)
+            ->delete();
+
+        if ($deleted === 0) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Notification not found',
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Notification deleted',
+            'deleted' => $deleted,
+        ]);
+    }
+
+/**
+ * DELETE /api/notification?type=merchant|hunter|voucher|promo|all
+ * Hapus SEMUA notifikasi milik user. Bisa difilter per tab/type.
+ */
     public function destroyAll(Request $request)
     {
         $user = Auth::user();
@@ -226,12 +255,18 @@ class NotificationController extends Controller
             return response()->json(['message' => 'Unauthenticated'], 401);
         }
 
-        $type = $request->get('type'); // optional filter
+        $type = $request->get('type'); // optional
         $q = Notification::where('user_id', $user->id);
-        if ($type && $type !== 'all') {
+
+        // mapping tab ke type set
+        if ($type === 'hunter') {
+            $q->whereIn('type', ['ad', 'grab', 'feed']);
+        } elseif ($type === 'merchant') {
+            $q->whereIn('type', ['merchant', 'order', 'settlement', 'voucher', 'promo']);
+        } elseif ($type && $type !== 'all') {
+            // spesifik: voucher / promo / dsb
             $q->where('type', $type);
         }
-
         $deleted = $q->delete();
 
         return response()->json([

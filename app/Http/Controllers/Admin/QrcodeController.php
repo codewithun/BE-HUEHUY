@@ -46,16 +46,16 @@ class QrcodeController extends Controller
         $tenantName = $request->input('tenant_name');
 
         // Build proper URL for QR code instead of JSON
-        $baseUrl = config('app.frontend_url', 'http://localhost:3000');
+        $baseUrl = config('app.frontend_url', 'https://v2.huehuy.com');
         
         if ($promoId) {
             $promo = \App\Models\Promo::find($promoId);
             $communityId = $promo ? ($promo->community_id ?? 'default') : 'default';
-            $qrData = "{$baseUrl}/app/komunitas/promo/{$promoId}?communityId={$communityId}&autoRegister=1";
+            $qrData = "{$baseUrl}/app/komunitas/promo/detail_promo?promoId={$promoId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
         } else if ($voucherId) {
             $voucher = \App\Models\Voucher::find($voucherId);
             $communityId = $voucher ? ($voucher->community_id ?? 'default') : 'default';
-            $qrData = "{$baseUrl}/app/voucher/{$voucherId}?communityId={$communityId}&autoRegister=1";
+            $qrData = "{$baseUrl}/app/voucher/detail_voucher?voucherId={$voucherId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
         }
 
         $qrSvg = QrCodeFacade::format('svg')->size(300)->generate($qrData);
@@ -100,13 +100,20 @@ class QrcodeController extends Controller
         $voucherId = $request->input('voucher_id');
         $promoId = $request->input('promo_id');
         $tenantName = $request->input('tenant_name');
-        $data = [
-            'voucher_id' => $voucherId,
-            'promo_id' => $promoId,
-            'tenant_name' => $tenantName,
-            'admin_id' => $adminId,
-        ];
-        $qrData = json_encode($data);
+
+        // Build proper URL for QR code instead of JSON
+        $baseUrl = config('app.frontend_url', 'https://v2.huehuy.com');
+        
+        if ($promoId) {
+            $promo = \App\Models\Promo::find($promoId);
+            $communityId = $promo ? ($promo->community_id ?? 'default') : 'default';
+            $qrData = "{$baseUrl}/app/komunitas/promo/detail_promo?promoId={$promoId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
+        } else if ($voucherId) {
+            $voucher = \App\Models\Voucher::find($voucherId);
+            $communityId = $voucher ? ($voucher->community_id ?? 'default') : 'default';
+            $qrData = "{$baseUrl}/app/voucher/detail_voucher?voucherId={$voucherId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
+        }
+
         $qrSvg = QrCodeFacade::format('svg')->size(300)->generate($qrData);
         $fileName = 'qr_codes/admin_' . $adminId . '_' . time() . '.svg';
         Storage::disk('public')->put($fileName, $qrSvg);

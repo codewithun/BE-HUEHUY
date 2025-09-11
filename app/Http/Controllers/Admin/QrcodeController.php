@@ -16,7 +16,11 @@ class QrcodeController extends Controller
     {
        $adminId = Auth::id();
     // Tambahkan eager loading voucher & promo
-    $qrcodes = Qrcode::with(['voucher.community', 'promo.community'])->where('admin_id', $adminId)->get();
+    try {
+        $qrcodes = Qrcode::with(['voucher.community', 'promo.community'])->where('admin_id', $adminId)->get();
+    } catch (\Exception $e) {
+        $qrcodes = Qrcode::with(['voucher', 'promo'])->where('admin_id', $adminId)->get();
+    }
     return response()->json([
         'success' => true,
         'count' => $qrcodes->count(),
@@ -49,12 +53,30 @@ class QrcodeController extends Controller
         $baseUrl = config('app.frontend_url', 'https://v2.huehuy.com');
         
         if ($promoId) {
-            $promo = \App\Models\Promo::with('community')->find($promoId);
-            $communityId = $promo && $promo->community ? $promo->community->id : ($promo->community_id ?? 'default');
+            $promo = \App\Models\Promo::find($promoId);
+            
+            // Try to load community relationship if it exists
+            try {
+                $promo->load('community');
+                $communityId = $promo->community ? $promo->community->id : ($promo->community_id ?? 'global');
+            } catch (\Exception $e) {
+                // If community relationship doesn't exist, use global or promo's community_id
+                $communityId = $promo->community_id ?? 'global';
+            }
+            
             $qrData = "{$baseUrl}/app/komunitas/promo/detail_promo?promoId={$promoId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
         } else if ($voucherId) {
-            $voucher = \App\Models\Voucher::with('community')->find($voucherId);
-            $communityId = $voucher && $voucher->community ? $voucher->community->id : ($voucher->community_id ?? 'default');
+            $voucher = \App\Models\Voucher::find($voucherId);
+            
+            // Try to load community relationship if it exists
+            try {
+                $voucher->load('community');
+                $communityId = $voucher->community ? $voucher->community->id : ($voucher->community_id ?? 'global');
+            } catch (\Exception $e) {
+                // If community relationship doesn't exist, use global or voucher's community_id
+                $communityId = $voucher->community_id ?? 'global';
+            }
+            
             $qrData = "{$baseUrl}/app/voucher/detail_voucher?voucherId={$voucherId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
         }
 
@@ -105,12 +127,30 @@ class QrcodeController extends Controller
         $baseUrl = config('app.frontend_url', 'https://v2.huehuy.com');
         
         if ($promoId) {
-            $promo = \App\Models\Promo::with('community')->find($promoId);
-            $communityId = $promo && $promo->community ? $promo->community->id : ($promo->community_id ?? 'default');
+            $promo = \App\Models\Promo::find($promoId);
+            
+            // Try to load community relationship if it exists
+            try {
+                $promo->load('community');
+                $communityId = $promo->community ? $promo->community->id : ($promo->community_id ?? 'global');
+            } catch (\Exception $e) {
+                // If community relationship doesn't exist, use global or promo's community_id
+                $communityId = $promo->community_id ?? 'global';
+            }
+            
             $qrData = "{$baseUrl}/app/komunitas/promo/detail_promo?promoId={$promoId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
         } else if ($voucherId) {
-            $voucher = \App\Models\Voucher::with('community')->find($voucherId);
-            $communityId = $voucher && $voucher->community ? $voucher->community->id : ($voucher->community_id ?? 'default');
+            $voucher = \App\Models\Voucher::find($voucherId);
+            
+            // Try to load community relationship if it exists
+            try {
+                $voucher->load('community');
+                $communityId = $voucher->community ? $voucher->community->id : ($voucher->community_id ?? 'global');
+            } catch (\Exception $e) {
+                // If community relationship doesn't exist, use global or voucher's community_id
+                $communityId = $voucher->community_id ?? 'global';
+            }
+            
             $qrData = "{$baseUrl}/app/voucher/detail_voucher?voucherId={$voucherId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
         }
 

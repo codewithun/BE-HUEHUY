@@ -15,12 +15,9 @@ class QrcodeController extends Controller
     public function index()
     {
        $adminId = Auth::id();
-    // Tambahkan eager loading voucher & promo
-    try {
-        $qrcodes = Qrcode::with(['voucher.community', 'promo.community'])->where('admin_id', $adminId)->get();
-    } catch (\Exception $e) {
-        $qrcodes = Qrcode::with(['voucher', 'promo'])->where('admin_id', $adminId)->get();
-    }
+    // Jangan load voucher.community, hanya load voucher dan promo.community
+    $qrcodes = Qrcode::with(['voucher', 'promo.community'])->where('admin_id', $adminId)->get();
+    
     return response()->json([
         'success' => true,
         'count' => $qrcodes->count(),
@@ -68,14 +65,8 @@ class QrcodeController extends Controller
         } else if ($voucherId) {
             $voucher = \App\Models\Voucher::find($voucherId);
             
-            // Try to load community relationship if it exists
-            try {
-                $voucher->load('community');
-                $communityId = $voucher->community ? $voucher->community->id : ($voucher->community_id ?? 'global');
-            } catch (\Exception $e) {
-                // If community relationship doesn't exist, use global or voucher's community_id
-                $communityId = $voucher->community_id ?? 'global';
-            }
+            // Langsung gunakan community_id field, jangan load relationship
+            $communityId = $voucher->community_id ?? 'global';
             
             $qrData = "{$baseUrl}/app/voucher/detail_voucher?voucherId={$voucherId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
         }
@@ -96,7 +87,7 @@ class QrcodeController extends Controller
             'success' => true,
             'message' => 'QR code berhasil dibuat',
             'path' => $fileName, 
-            'qrcode' => $qrcode->load(['voucher.community', 'promo.community'])
+            'qrcode' => $qrcode->load(['voucher', 'promo.community'])
         ]);
     }
 
@@ -142,14 +133,8 @@ class QrcodeController extends Controller
         } else if ($voucherId) {
             $voucher = \App\Models\Voucher::find($voucherId);
             
-            // Try to load community relationship if it exists
-            try {
-                $voucher->load('community');
-                $communityId = $voucher->community ? $voucher->community->id : ($voucher->community_id ?? 'global');
-            } catch (\Exception $e) {
-                // If community relationship doesn't exist, use global or voucher's community_id
-                $communityId = $voucher->community_id ?? 'global';
-            }
+            // Langsung gunakan community_id field, jangan load relationship
+            $communityId = $voucher->community_id ?? 'global';
             
             $qrData = "{$baseUrl}/app/voucher/detail_voucher?voucherId={$voucherId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
         }
@@ -170,7 +155,7 @@ class QrcodeController extends Controller
             'tenant_name' => $tenantName,
         ]);
 
-        return response()->json(['success' => true, 'qrcode' => $qrcode->load(['voucher.community', 'promo.community'])]);
+        return response()->json(['success' => true, 'qrcode' => $qrcode->load(['voucher', 'promo.community'])]);
     }
 
     // Delete QR code

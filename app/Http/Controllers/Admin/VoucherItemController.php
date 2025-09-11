@@ -106,7 +106,7 @@ class VoucherItemController extends Controller
      * Klaim voucher → create VoucherItem untuk user login & kurangi stock.
      * Opsional: hapus/tandai-baca notifikasi sumber klaim (via notification_id).
      */
-    public function claim(Request $request, $voucherId)
+   public function claim(Request $request, $voucherId)
     {
         $userId = $request->user()?->id ?? Auth::id();
         if (!$userId) {
@@ -125,9 +125,12 @@ class VoucherItemController extends Controller
         }
 
         if ($voucher->stock <= 0) {
+            // stok habis → tetap coba bersihkan notif agar tidak mengganggu FE
+            $deleted = $this->cleanupNotifications($userId, $voucherId, $request->input('notification_id'));
             return response()->json([
                 'success' => false,
-                'message' => 'Stok voucher habis'
+                'message' => 'Stok voucher habis',
+                'notification_deleted' => $deleted,
             ], 400);
         }
 
@@ -135,17 +138,13 @@ class VoucherItemController extends Controller
         $already = VoucherItem::where('user_id', $userId)
             ->where('voucher_id', $voucher->id)
             ->exists();
-        if ($already) {
-            // Bila pernah klaim, tetap bersihkan notifikasi agar tidak muncul lagi
-            $this->cleanupNotifications(
-                $userId,
-                $voucher->id,
-                $request->input('notification_id')
-            );
 
+        if ($already) {
+            $deleted = $this->cleanupNotifications($userId, $voucher->id, $request->input('notification_id'));
             return response()->json([
                 'success' => false,
-                'message' => 'Kamu sudah pernah klaim voucher ini'
+                'message' => 'Kamu sudah pernah klaim voucher ini',
+                'notification_deleted' => $deleted,
             ], 409);
         }
 
@@ -155,24 +154,19 @@ class VoucherItemController extends Controller
             $item = new VoucherItem();
             $item->user_id    = $userId;
             $item->voucher_id = $voucher->id;
-            // pakai kode voucher jika sudah ada, atau generate baru
-            $item->code = $voucher->code ?: (Str::upper(Str::random(6)) . now()->format('mdHis'));
+            $item->code       = $voucher->code ?: (Str::upper(Str::random(6)) . now()->format('mdHis'));
             $item->save();
 
             $voucher->decrement('stock');
 
-            // Bersihkan notifikasi terkait (hapus atau mark-as-read)
-            $this->cleanupNotifications(
-                $userId,
-                $voucher->id,
-                $request->input('notification_id')
-            );
+            $deleted = $this->cleanupNotifications($userId, $voucher->id, $request->input('notification_id'));
 
             DB::commit();
 
             return response()->json([
                 'success' => true,
                 'message' => 'Voucher berhasil diklaim',
+                'notification_deleted' => $deleted,
                 'data'    => $item->load(['voucher','voucher.community'])
             ], 201);
 
@@ -186,21 +180,21 @@ class VoucherItemController extends Controller
     }
 
     /**
-     * Hapus / tandai-baca notifikasi yang berkaitan dengan voucher ini.
-     * - Jika $notificationId ada, hapus entry spesifik itu (agar aman).
-     * - Tambahan guard: hapus semua notifikasi voucher yg menunjuk target voucher tsb (type/target_type).
+     * Hapus/tandai-baca notifikasi terkait voucher ini dan kembalikan jumlah yang terhapus.
      */
-    protected function cleanupNotifications(int $userId, int $voucherId, $notificationId = null): void
+    protected function cleanupNotifications(int $userId, int $voucherId, $notificationId = null): int
     {
-        // 1) Hapus (atau tandai-baca) notifikasi spesifik bila diberikan oleh FE
+        $deleted = 0;
+
+        // 1) spesifik by id jika dikirim FE
         if (!empty($notificationId)) {
-            Notification::where('id', $notificationId)
+            $deleted += Notification::where('id', $notificationId)
                 ->where('user_id', $userId)
-                ->delete(); // kalau mau mark-as-read: ->update(['read_at' => now()]);
+                ->delete(); // kalau mau mark read: ->update(['read_at' => now()]);
         }
 
-        // 2) Guard: hapus semua notifikasi voucher yg mengarah ke target voucher ini
-        Notification::where('user_id', $userId)
+        // 2) guard: hapus semua notifikasi voucher yg menarget voucher ini
+        $deleted += Notification::where('user_id', $userId)
             ->where(function ($q) use ($voucherId) {
                 $q->where(function ($q1) use ($voucherId) {
                     $q1->where('type', 'voucher')->where('target_id', $voucherId);
@@ -208,6 +202,8 @@ class VoucherItemController extends Controller
                     $q2->where('target_type', 'voucher')->where('target_id', $voucherId);
                 });
             })
-            ->delete(); // atau ->update(['read_at' => now()]);
+            ->delete();
+
+        return $deleted;
     }
 }

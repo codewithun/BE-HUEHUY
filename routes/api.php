@@ -24,6 +24,7 @@ use App\Http\Controllers\Admin\PromoController;
 use App\Http\Controllers\Admin\VoucherController;
 use App\Http\Controllers\Admin\CommunityController; // <- dipakai di bawah
 use App\Http\Controllers\Admin\EventController;
+use App\Http\Controllers\Admin\VoucherItemController;
 
 /**
  * Unauthorized helper
@@ -276,6 +277,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/{voucher}/history', [VoucherController::class, 'history'])->whereNumber('voucher');
         Route::get('/voucher-items', [VoucherController::class, 'voucherItems']);
     });
+
+    // === Voucher Items (claim) ===
+    Route::post('/vouchers/{voucher}/claim', [VoucherItemController::class, 'claim'])->whereNumber('voucher');
 
     // User Activity
     Route::prefix('user')->group(function () {

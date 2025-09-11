@@ -63,7 +63,6 @@ class EmailVerificationController extends Controller
                     'expires_at' => $verificationCode->expires_at->toISOString()
                 ]
             ]);
-
         } catch (\Exception $e) {
             Log::error('Failed to send verification code', [
                 'email' => $email,
@@ -84,22 +83,23 @@ class EmailVerificationController extends Controller
     public function verifyCode(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'email' => 'required|email|max:255',
-            'code' => 'required|string|size:6',
+            'email'   => 'required|email|max:255',
+            'code'    => 'required|string|size:6',
+            'qr_data' => 'nullable', // biar bisa redirect khusus (opsional)
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validation failed',
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors()
             ], 422);
         }
 
         $email = $request->email;
-        $code = $request->code;
+        $code  = $request->code;
 
-        // Rate limiting: 5 attempts per minute per email
+        // Rate limiting: 5 attempts / menit / email
         $key = 'verify-code:' . $email;
         if (RateLimiter::tooManyAttempts($key, 5)) {
             $seconds = RateLimiter::availableIn($key);
@@ -109,17 +109,12 @@ class EmailVerificationController extends Controller
             ], 429);
         }
 
-        // Verify the code
+        // Validasi kode (table email_verification_codes)
         $isValid = EmailVerificationCode::verifyCode($email, $code);
 
         if (!$isValid) {
-            // Hit rate limiter for failed attempts
-            RateLimiter::hit($key, 60);
-
-            Log::warning('Invalid verification code attempt', [
-                'email' => $email,
-                'code' => $code
-            ]);
+            RateLimiter::hit($key, 60); // penalti 1 menit
+            Log::warning('Invalid verification code attempt', ['email' => $email, 'code' => $code]);
 
             return response()->json([
                 'success' => false,
@@ -127,30 +122,67 @@ class EmailVerificationController extends Controller
             ], 400);
         }
 
-        // Clear rate limiter on successful verification
+        // Berhasil → clear limiter
         RateLimiter::clear($key);
 
-        // Update user verification status if user exists
-        $user = User::where('email', $email)->first();
-        if ($user && !$user->verified_at) {
-            $user->update(['verified_at' => now()]);
-            Log::info('User email verified', ['user_id' => $user->id, 'email' => $email]);
+        // Update status user + buat token sanctum
+        $user  = User::where('email', $email)->first();
+        $token = null;
+
+        if ($user) {
+            $now = now();
+            if (!$user->verified_at) {
+                $user->verified_at = $now;
+            }
+            if (empty($user->email_verified_at)) {
+                $user->email_verified_at = $now; // kalau kolom ini ada di schema-mu
+            }
+            $user->save();
+
+            // === INI KUNCI: kembalikan token agar FE bisa langsung login ===
+            $token = $user->createToken('email-verified')->plainTextToken;
+            Log::info('User email verified + token issued', ['user_id' => $user->id, 'email' => $email]);
+        } else {
+            Log::info('Email verified but user not found (ok for pre-reg flows)', ['email' => $email]);
+        }
+
+        // Tentukan redirect_url dari qr_data (opsional) → default /app
+        $redirectUrl = '/app';
+        $qrData = $request->input('qr_data');
+
+        if ($qrData) {
+            try {
+                $decoded = is_string($qrData) ? json_decode($qrData, true) : $qrData;
+                if (is_array($decoded) && isset($decoded['type'])) {
+                    if ($decoded['type'] === 'voucher' && !empty($decoded['voucherId'])) {
+                        $redirectUrl = "/app/voucher/{$decoded['voucherId']}";
+                    } elseif ($decoded['type'] === 'promo' && !empty($decoded['promoId'])) {
+                        $redirectUrl = "/app/promo/{$decoded['promoId']}";
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('verifyCode qr_data parse fail', ['qr_data' => $qrData, 'err' => $e->getMessage()]);
+            }
         }
 
         return response()->json([
             'success' => true,
             'message' => 'Email berhasil diverifikasi.',
-            'data' => [
-                'email' => $email,
-                'verified_at' => now()->toISOString(),
-                'user' => $user ? [
-                    'id' => $user->id,
-                    'name' => $user->name,
-                    'email' => $user->email,
-                    'verified_at' => $user->verified_at?->toISOString()
-                ] : null
+            'data'    => [
+                'email'        => $email,
+                'verified_at'  => now()->toISOString(),
+                'user'         => $user ? [
+                    'id'          => $user->id,
+                    'name'        => $user->name,
+                    'email'       => $user->email,
+                    'verified_at' => optional($user->verified_at)->toISOString(),
+                ] : null,
+
+                // === FE (verifikasi.jsx) akan baca dua field ini ===
+                'token'        => $token,
+                'redirect_url' => $redirectUrl,
             ]
-        ]);
+        ], 200);
     }
 
     /**

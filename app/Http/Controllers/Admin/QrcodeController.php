@@ -5,9 +5,14 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Qrcode;
+use App\Models\Promo;
+use App\Models\Voucher;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use SimpleSoftwareIO\QrCode\Facades\QrCode as QrCodeFacade;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class QrcodeController extends Controller
 {
@@ -16,7 +21,6 @@ class QrcodeController extends Controller
     {
         $adminId = Auth::id();
 
-        // Load voucher & promo.community (tanpa voucher.community)
         $qrcodes = Qrcode::with(['voucher', 'promo.community'])
             ->where('admin_id', $adminId)
             ->get();
@@ -32,8 +36,8 @@ class QrcodeController extends Controller
     public function generate(Request $request)
     {
         $request->validate([
-            'voucher_id'  => 'nullable|exists:vouchers,id',
-            'promo_id'    => 'nullable|exists:promos,id',
+            'voucher_id'  => 'nullable|integer|exists:vouchers,id',
+            'promo_id'    => 'nullable|integer|exists:promos,id',
             'tenant_name' => 'required|string|max:255',
         ]);
 
@@ -44,62 +48,59 @@ class QrcodeController extends Controller
             ], 422);
         }
 
-        $adminId    = Auth::id();
-        $voucherId  = $request->input('voucher_id');
-        $promoId    = $request->input('promo_id');
-        $tenantName = $request->input('tenant_name');
+        try {
+            $adminId    = Auth::id();
+            $voucherId  = $request->input('voucher_id');
+            $promoId    = $request->input('promo_id');
+            $tenantName = $request->input('tenant_name');
 
-        // URL target untuk ditanam ke QR
-        $baseUrl = config('app.frontend_url', 'https://v2.huehuy.com');
+            // Bangun URL target untuk QR
+            $qrData = $this->buildQrTargetUrl($voucherId, $promoId);
 
-        if ($promoId) {
-            $promo = \App\Models\Promo::find($promoId);
+            // === Generate PNG (bukan SVG) + guard error ===
+            $pngBinary = QrCodeFacade::format('png')
+                ->size(1024)            // tajam untuk cetak
+                ->errorCorrection('H')  // toleransi tinggi
+                ->margin(1)             // margin tipis
+                ->generate($qrData);
 
-            try {
-                $promo->load('community');
-                $communityId = $promo->community ? $promo->community->id : ($promo->community_id ?? 'global');
-            } catch (\Exception $e) {
-                $communityId = $promo->community_id ?? 'global';
-            }
+            $fileName = 'qr_codes/admin_' . $adminId . '_' . time() . '.png';
+            Storage::disk('public')->put($fileName, $pngBinary);
 
-            $qrData = "{$baseUrl}/app/komunitas/promo/detail_promo?promoId={$promoId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
-        } else {
-            // voucher global
-            $qrData = "{$baseUrl}/app/voucher/{$voucherId}?autoRegister=1&source=qr_scan";
+            $qrcode = Qrcode::create([
+                'admin_id'   => $adminId,
+                'qr_code'    => $fileName,   // path PNG relatif di disk 'public'
+                'voucher_id' => $voucherId,
+                'promo_id'   => $promoId,
+                'tenant_name'=> $tenantName,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'QR code berhasil dibuat',
+                'path'    => $fileName,
+                'qrcode'  => $qrcode->load(['voucher', 'promo.community']),
+            ]);
+        } catch (ModelNotFoundException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Data promo/voucher tidak ditemukan.',
+            ], 404);
+        } catch (Throwable $e) {
+            Log::error('QR generate failed: '.$e->getMessage(), ['trace' => $e->getTraceAsString()]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal membuat QR PNG di server. Pastikan ekstensi GD/Imagick aktif.',
+            ], 500);
         }
-
-        // === Generate PNG (bukan SVG) ===
-        $pngBinary = QrCodeFacade::format('png')
-            ->size(1024)            // tajam untuk cetak
-            ->errorCorrection('H')  // toleransi tinggi
-            ->margin(1)             // margin tipis
-            ->generate($qrData);
-
-        $fileName = 'qr_codes/admin_' . $adminId . '_' . time() . '.png';
-        Storage::disk('public')->put($fileName, $pngBinary); // simpan biner PNG ke storage/public
-
-        $qrcode = Qrcode::create([
-            'admin_id'   => $adminId,
-            'qr_code'    => $fileName,   // path PNG
-            'voucher_id' => $voucherId,
-            'promo_id'   => $promoId,
-            'tenant_name'=> $tenantName,
-        ]);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'QR code berhasil dibuat',
-            'path'    => $fileName,
-            'qrcode'  => $qrcode->load(['voucher', 'promo.community']),
-        ]);
     }
 
     // Update QR code — regenerate PNG
     public function update(Request $request, $id)
     {
         $request->validate([
-            'voucher_id'  => 'nullable|exists:vouchers,id',
-            'promo_id'    => 'nullable|exists:promos,id',
+            'voucher_id'  => 'nullable|integer|exists:vouchers,id',
+            'promo_id'    => 'nullable|integer|exists:promos,id',
             'tenant_name' => 'required|string|max:255',
         ]);
 
@@ -111,73 +112,118 @@ class QrcodeController extends Controller
         }
 
         $adminId = Auth::id();
-        $qrcode  = Qrcode::where('id', $id)->where('admin_id', $adminId)->firstOrFail();
 
-        $voucherId  = $request->input('voucher_id');
-        $promoId    = $request->input('promo_id');
-        $tenantName = $request->input('tenant_name');
+        try {
+            $qrcode = Qrcode::where('id', $id)
+                ->where('admin_id', $adminId)
+                ->firstOrFail();
 
-        $baseUrl = config('app.frontend_url', 'https://v2.huehuy.com');
+            $voucherId  = $request->input('voucher_id');
+            $promoId    = $request->input('promo_id');
+            $tenantName = $request->input('tenant_name');
 
-        if ($promoId) {
-            $promo = \App\Models\Promo::find($promoId);
+            $qrData = $this->buildQrTargetUrl($voucherId, $promoId);
 
-            try {
-                $promo->load('community');
-                $communityId = $promo->community ? $promo->community->id : ($promo->community_id ?? 'global');
-            } catch (\Exception $e) {
-                $communityId = $promo->community_id ?? 'global';
+            $pngBinary = QrCodeFacade::format('png')
+                ->size(1024)
+                ->errorCorrection('H')
+                ->margin(1)
+                ->generate($qrData);
+
+            $fileName = 'qr_codes/admin_' . $adminId . '_' . time() . '.png';
+            Storage::disk('public')->put($fileName, $pngBinary);
+
+            // Hapus file lama bila ada
+            if ($qrcode->qr_code && Storage::disk('public')->exists($qrcode->qr_code)) {
+                Storage::disk('public')->delete($qrcode->qr_code);
             }
 
-            $qrData = "{$baseUrl}/app/komunitas/promo/detail_promo?promoId={$promoId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
-        } else {
-            $qrData = "{$baseUrl}/app/voucher/{$voucherId}?autoRegister=1&source=qr_scan";
+            $qrcode->update([
+                'qr_code'    => $fileName,
+                'voucher_id' => $voucherId,
+                'promo_id'   => $promoId,
+                'tenant_name'=> $tenantName,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'qrcode'  => $qrcode->load(['voucher', 'promo.community']),
+            ]);
+        } catch (ModelNotFoundException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'QR code tidak ditemukan / tidak milik Anda.',
+            ], 404);
+        } catch (Throwable $e) {
+            Log::error('QR update failed: '.$e->getMessage(), ['trace' => $e->getTraceAsString()]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal memperbarui QR PNG di server.',
+            ], 500);
         }
-
-        // === Regenerate ke PNG ===
-        $pngBinary = QrCodeFacade::format('png')
-            ->size(1024)
-            ->errorCorrection('H')
-            ->margin(1)
-            ->generate($qrData);
-
-        $fileName = 'qr_codes/admin_' . $adminId . '_' . time() . '.png';
-        Storage::disk('public')->put($fileName, $pngBinary);
-
-        // Hapus file lama bila ada
-        if ($qrcode->qr_code && Storage::disk('public')->exists($qrcode->qr_code)) {
-            Storage::disk('public')->delete($qrcode->qr_code);
-        }
-
-        $qrcode->update([
-            'qr_code'    => $fileName,
-            'voucher_id' => $voucherId,
-            'promo_id'   => $promoId,
-            'tenant_name'=> $tenantName,
-        ]);
-
-        return response()->json([
-            'success' => true,
-            'qrcode'  => $qrcode->load(['voucher', 'promo.community']),
-        ]);
     }
 
     // Delete QR code
     public function destroy($id)
     {
         $adminId = Auth::id();
-        $qrcode  = Qrcode::where('id', $id)->where('admin_id', $adminId)->firstOrFail();
 
-        // Hapus file dari storage
-        if ($qrcode->qr_code && Storage::disk('public')->exists($qrcode->qr_code)) {
-            Storage::disk('public')->delete($qrcode->qr_code);
+        try {
+            $qrcode  = Qrcode::where('id', $id)
+                ->where('admin_id', $adminId)
+                ->firstOrFail();
+
+            if ($qrcode->qr_code && Storage::disk('public')->exists($qrcode->qr_code)) {
+                Storage::disk('public')->delete($qrcode->qr_code);
+            }
+
+            $qrcode->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'QR code deleted',
+            ]);
+        } catch (ModelNotFoundException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'QR code tidak ditemukan / tidak milik Anda.',
+            ], 404);
+        } catch (Throwable $e) {
+            Log::error('QR destroy failed: '.$e->getMessage(), ['trace' => $e->getTraceAsString()]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal menghapus QR code.',
+            ], 500);
+        }
+    }
+
+    /**
+     * Bangun URL target untuk ditanam di QR.
+     * - Promo: butuh communityId (ambil dari relasi bila ada; fallback ke field, lalu 'global')
+     * - Voucher: global, tidak butuh communityId
+     */
+    private function buildQrTargetUrl(?int $voucherId, ?int $promoId): string
+    {
+        $baseUrl = config('app.frontend_url', 'https://v2.huehuy.com');
+
+        if ($promoId) {
+            /** @var Promo $promo */
+            $promo = Promo::findOrFail($promoId); // akan throw 404 bila tidak ada
+            // Aman-kan akses relasi community
+            try {
+                $promo->loadMissing('community');
+            } catch (Throwable $e) {}
+
+            $communityId = $promo->community->id
+                ?? $promo->community_id
+                ?? 'global';
+
+            return "{$baseUrl}/app/komunitas/promo/detail_promo?promoId={$promoId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
         }
 
-        $qrcode->delete();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'QR code deleted',
-        ]);
+        // Voucher global
+        /** @var Voucher $voucher */
+        $voucher = Voucher::findOrFail($voucherId); // validasi eksistensi
+        return "{$baseUrl}/app/voucher/{$voucher->id}?autoRegister=1&source=qr_scan";
     }
 }

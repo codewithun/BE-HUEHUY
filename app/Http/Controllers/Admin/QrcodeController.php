@@ -14,23 +14,26 @@ class QrcodeController extends Controller
     // Menampilkan semua QR code milik admin
     public function index()
     {
-       $adminId = Auth::id();
-    // Jangan load voucher.community, hanya load voucher dan promo.community
-    $qrcodes = Qrcode::with(['voucher', 'promo.community'])->where('admin_id', $adminId)->get();
-    
-    return response()->json([
-        'success' => true,
-        'count' => $qrcodes->count(),
-        'data' => $qrcodes
-    ]);
+        $adminId = Auth::id();
+
+        // Load voucher & promo.community (tanpa voucher.community)
+        $qrcodes = Qrcode::with(['voucher', 'promo.community'])
+            ->where('admin_id', $adminId)
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'count'   => $qrcodes->count(),
+            'data'    => $qrcodes,
+        ]);
     }
 
-    // Generate QR code baru
+    // Generate QR code baru — SIMPAN PNG
     public function generate(Request $request)
     {
         $request->validate([
-            'voucher_id' => 'nullable|exists:vouchers,id',
-            'promo_id' => 'nullable|exists:promos,id',
+            'voucher_id'  => 'nullable|exists:vouchers,id',
+            'promo_id'    => 'nullable|exists:promos,id',
             'tenant_name' => 'required|string|max:255',
         ]);
 
@@ -41,60 +44,62 @@ class QrcodeController extends Controller
             ], 422);
         }
 
-        $adminId = Auth::id();
-        $voucherId = $request->input('voucher_id');
-        $promoId = $request->input('promo_id');
+        $adminId    = Auth::id();
+        $voucherId  = $request->input('voucher_id');
+        $promoId    = $request->input('promo_id');
         $tenantName = $request->input('tenant_name');
 
-        // Build proper URL for QR code instead of JSON
+        // URL target untuk ditanam ke QR
         $baseUrl = config('app.frontend_url', 'https://v2.huehuy.com');
-        
+
         if ($promoId) {
             $promo = \App\Models\Promo::find($promoId);
-            
-            // Try to load community relationship if it exists
+
             try {
                 $promo->load('community');
                 $communityId = $promo->community ? $promo->community->id : ($promo->community_id ?? 'global');
             } catch (\Exception $e) {
-                // If community relationship doesn't exist, use global or promo's community_id
                 $communityId = $promo->community_id ?? 'global';
             }
-            
+
             $qrData = "{$baseUrl}/app/komunitas/promo/detail_promo?promoId={$promoId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
-        } else if ($voucherId) {
-            $voucher = \App\Models\Voucher::find($voucherId);
-            
-            // Voucher bersifat global, tidak memerlukan communityId
+        } else {
+            // voucher global
             $qrData = "{$baseUrl}/app/voucher/{$voucherId}?autoRegister=1&source=qr_scan";
         }
 
-        $qrSvg = QrCodeFacade::format('svg')->size(300)->generate($qrData);
-        $fileName = 'qr_codes/admin_' . $adminId . '_' . time() . '.svg';
-        Storage::disk('public')->put($fileName, $qrSvg);
-        
+        // === Generate PNG (bukan SVG) ===
+        $pngBinary = QrCodeFacade::format('png')
+            ->size(1024)            // tajam untuk cetak
+            ->errorCorrection('H')  // toleransi tinggi
+            ->margin(1)             // margin tipis
+            ->generate($qrData);
+
+        $fileName = 'qr_codes/admin_' . $adminId . '_' . time() . '.png';
+        Storage::disk('public')->put($fileName, $pngBinary); // simpan biner PNG ke storage/public
+
         $qrcode = Qrcode::create([
-            'admin_id' => $adminId,
-            'qr_code' => $fileName,
+            'admin_id'   => $adminId,
+            'qr_code'    => $fileName,   // path PNG
             'voucher_id' => $voucherId,
-            'promo_id' => $promoId,
-            'tenant_name' => $tenantName,
+            'promo_id'   => $promoId,
+            'tenant_name'=> $tenantName,
         ]);
-        
+
         return response()->json([
             'success' => true,
             'message' => 'QR code berhasil dibuat',
-            'path' => $fileName, 
-            'qrcode' => $qrcode->load(['voucher', 'promo.community'])
+            'path'    => $fileName,
+            'qrcode'  => $qrcode->load(['voucher', 'promo.community']),
         ]);
     }
 
-    // Edit QR code (update data dan file)
+    // Update QR code — regenerate PNG
     public function update(Request $request, $id)
     {
         $request->validate([
-            'voucher_id' => 'nullable|exists:vouchers,id',
-            'promo_id' => 'nullable|exists:promos,id',
+            'voucher_id'  => 'nullable|exists:vouchers,id',
+            'promo_id'    => 'nullable|exists:promos,id',
             'tenant_name' => 'required|string|max:255',
         ]);
 
@@ -106,59 +111,62 @@ class QrcodeController extends Controller
         }
 
         $adminId = Auth::id();
-        $qrcode = Qrcode::where('id', $id)->where('admin_id', $adminId)->firstOrFail();
+        $qrcode  = Qrcode::where('id', $id)->where('admin_id', $adminId)->firstOrFail();
 
-        $voucherId = $request->input('voucher_id');
-        $promoId = $request->input('promo_id');
+        $voucherId  = $request->input('voucher_id');
+        $promoId    = $request->input('promo_id');
         $tenantName = $request->input('tenant_name');
 
-        // Build proper URL for QR code instead of JSON
         $baseUrl = config('app.frontend_url', 'https://v2.huehuy.com');
-        
+
         if ($promoId) {
             $promo = \App\Models\Promo::find($promoId);
-            
-            // Try to load community relationship if it exists
+
             try {
                 $promo->load('community');
                 $communityId = $promo->community ? $promo->community->id : ($promo->community_id ?? 'global');
             } catch (\Exception $e) {
-                // If community relationship doesn't exist, use global or promo's community_id
                 $communityId = $promo->community_id ?? 'global';
             }
-            
+
             $qrData = "{$baseUrl}/app/komunitas/promo/detail_promo?promoId={$promoId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
-        } else if ($voucherId) {
-            $voucher = \App\Models\Voucher::find($voucherId);
-            
-            // Voucher bersifat global, tidak memerlukan communityId
+        } else {
             $qrData = "{$baseUrl}/app/voucher/{$voucherId}?autoRegister=1&source=qr_scan";
         }
 
-        $qrSvg = QrCodeFacade::format('svg')->size(300)->generate($qrData);
-        $fileName = 'qr_codes/admin_' . $adminId . '_' . time() . '.svg';
-        Storage::disk('public')->put($fileName, $qrSvg);
+        // === Regenerate ke PNG ===
+        $pngBinary = QrCodeFacade::format('png')
+            ->size(1024)
+            ->errorCorrection('H')
+            ->margin(1)
+            ->generate($qrData);
 
-        // Hapus file lama
+        $fileName = 'qr_codes/admin_' . $adminId . '_' . time() . '.png';
+        Storage::disk('public')->put($fileName, $pngBinary);
+
+        // Hapus file lama bila ada
         if ($qrcode->qr_code && Storage::disk('public')->exists($qrcode->qr_code)) {
             Storage::disk('public')->delete($qrcode->qr_code);
         }
 
         $qrcode->update([
-            'qr_code' => $fileName,
+            'qr_code'    => $fileName,
             'voucher_id' => $voucherId,
-            'promo_id' => $promoId,
-            'tenant_name' => $tenantName,
+            'promo_id'   => $promoId,
+            'tenant_name'=> $tenantName,
         ]);
 
-        return response()->json(['success' => true, 'qrcode' => $qrcode->load(['voucher', 'promo.community'])]);
+        return response()->json([
+            'success' => true,
+            'qrcode'  => $qrcode->load(['voucher', 'promo.community']),
+        ]);
     }
 
     // Delete QR code
     public function destroy($id)
     {
         $adminId = Auth::id();
-        $qrcode = Qrcode::where('id', $id)->where('admin_id', $adminId)->firstOrFail();
+        $qrcode  = Qrcode::where('id', $id)->where('admin_id', $adminId)->firstOrFail();
 
         // Hapus file dari storage
         if ($qrcode->qr_code && Storage::disk('public')->exists($qrcode->qr_code)) {
@@ -167,6 +175,9 @@ class QrcodeController extends Controller
 
         $qrcode->delete();
 
-        return response()->json(['success' => true, 'message' => 'QR code deleted']);
+        return response()->json([
+            'success' => true,
+            'message' => 'QR code deleted',
+        ]);
     }
 }

@@ -8,11 +8,16 @@ use App\Models\Qrcode;
 use App\Models\Promo;
 use App\Models\Voucher;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
-use SimpleSoftwareIO\QrCode\Facades\QrCode as QrCodeFacade;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Throwable;
+
+// === BaconQrCode (Imagick backend) ===
+use BaconQrCode\Renderer\Image\ImagickImageBackEnd;
+use BaconQrCode\Renderer\ImageRenderer;
+use BaconQrCode\Renderer\RendererStyle\RendererStyle;
+use BaconQrCode\Writer;
 
 class QrcodeController extends Controller
 {
@@ -32,7 +37,7 @@ class QrcodeController extends Controller
         ]);
     }
 
-    // Generate QR code baru — SIMPAN PNG
+    // Generate QR code baru — SIMPAN PNG (Imagick)
     public function generate(Request $request)
     {
         $request->validate([
@@ -57,12 +62,8 @@ class QrcodeController extends Controller
             // Bangun URL target untuk QR
             $qrData = $this->buildQrTargetUrl($voucherId, $promoId);
 
-            // === Generate PNG (bukan SVG) + guard error ===
-            $pngBinary = QrCodeFacade::format('png')
-                ->size(1024)            // tajam untuk cetak
-                ->errorCorrection('H')  // toleransi tinggi
-                ->margin(1)             // margin tipis
-                ->generate($qrData);
+            // === Generate PNG via BaconQrCode + Imagick ===
+            $pngBinary = $this->makePngWithImagick($qrData, 1024, 1); // size=1024, margin=1
 
             $fileName = 'qr_codes/admin_' . $adminId . '_' . time() . '.png';
             Storage::disk('public')->put($fileName, $pngBinary);
@@ -90,12 +91,12 @@ class QrcodeController extends Controller
             Log::error('QR generate failed: '.$e->getMessage(), ['trace' => $e->getTraceAsString()]);
             return response()->json([
                 'success' => false,
-                'message' => 'Gagal membuat QR PNG di server. Pastikan ekstensi GD/Imagick aktif.',
+                'message' => 'Gagal membuat QR PNG di server.',
             ], 500);
         }
     }
 
-    // Update QR code — regenerate PNG
+    // Update QR code — regenerate PNG (Imagick)
     public function update(Request $request, $id)
     {
         $request->validate([
@@ -124,11 +125,7 @@ class QrcodeController extends Controller
 
             $qrData = $this->buildQrTargetUrl($voucherId, $promoId);
 
-            $pngBinary = QrCodeFacade::format('png')
-                ->size(1024)
-                ->errorCorrection('H')
-                ->margin(1)
-                ->generate($qrData);
+            $pngBinary = $this->makePngWithImagick($qrData, 1024, 1);
 
             $fileName = 'qr_codes/admin_' . $adminId . '_' . time() . '.png';
             Storage::disk('public')->put($fileName, $pngBinary);
@@ -208,8 +205,7 @@ class QrcodeController extends Controller
 
         if ($promoId) {
             /** @var Promo $promo */
-            $promo = Promo::findOrFail($promoId); // akan throw 404 bila tidak ada
-            // Aman-kan akses relasi community
+            $promo = Promo::findOrFail($promoId);
             try {
                 $promo->loadMissing('community');
             } catch (Throwable $e) {}
@@ -221,9 +217,32 @@ class QrcodeController extends Controller
             return "{$baseUrl}/app/komunitas/promo/detail_promo?promoId={$promoId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
         }
 
-        // Voucher global
         /** @var Voucher $voucher */
-        $voucher = Voucher::findOrFail($voucherId); // validasi eksistensi
+        $voucher = Voucher::findOrFail($voucherId);
         return "{$baseUrl}/app/voucher/{$voucher->id}?autoRegister=1&source=qr_scan";
+    }
+
+    /**
+     * Generate PNG binary dengan BaconQrCode + Imagick backend.
+     *
+     * @param string $data   Data/URL yang akan di-encode
+     * @param int    $size   Ukuran sisi (px)
+     * @param int    $margin Margin (px)
+     * @return string        Binary PNG
+     */
+    private function makePngWithImagick(string $data, int $size = 1024, int $margin = 1): string
+    {
+        if (!extension_loaded('imagick')) {
+            // Biar errornya jelas kalau imagick belum aktif
+            throw new \RuntimeException('PHP extension "imagick" belum aktif. Aktifkan dulu untuk render PNG.');
+        }
+
+        $renderer = new ImageRenderer(
+            new RendererStyle($size, $margin),
+            new ImagickImageBackEnd()
+        );
+
+        $writer = new Writer($renderer);
+        return $writer->writeString($data); // PNG binary
     }
 }

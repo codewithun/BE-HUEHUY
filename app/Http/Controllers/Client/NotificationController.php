@@ -11,26 +11,50 @@ use Illuminate\Support\Facades\Log;
 class NotificationController extends Controller
 {
     /**
+     * Map "tab" UI ke kumpulan nilai kolom notifications.type
+     * - hunter   => ad, grab, feed, hunter
+     * - merchant => merchant, order, settlement, voucher, promo
+     */
+    private function mapTabTypes(?string $tab): ?array
+    {
+        if ($tab === 'hunter') {
+            return ['ad', 'grab', 'feed', 'hunter'];
+        }
+        if ($tab === 'merchant') {
+            return ['merchant', 'order', 'settlement', 'voucher', 'promo'];
+        }
+        return null; // null = tidak pakai mapping tab
+    }
+
+    /**
      * GET /api/notification
      * Query:
-     * - type: 'hunter' | 'merchant' | 'voucher' | 'promo' | 'all' | null   (dipakai sbg "tab")
-     * - tab:  'hunter' | 'merchant' (opsional, alternatif yg lebih eksplisit)
-     * - search, filter, sortBy, sortDirection, paginate
+     * - type/tab : 'hunter' | 'merchant' | 'voucher' | 'promo' | 'all'
+     * - unread_only: 0|1
+     * - since: 'YYYY-MM-DD' atau ISO datetime (opsional)
+     * - sortBy: created_at|id|read_at|type|title (default: created_at)
+     * - sortDirection: ASC|DESC (default: DESC)
+     * - paginate: 1..100 (default: 10)
      */
     public function index(Request $request)
     {
         $sortDirection = strtoupper($request->get('sortDirection', 'DESC')) === 'ASC' ? 'ASC' : 'DESC';
-        $sortBy        = $request->get('sortBy', 'created_at');
-        $paginate      = (int) $request->get('paginate', 10);
-        $filter        = $request->get('filter');
 
-        // FE lama kirim ?type=merchant|hunter, tapi kita juga sediakan ?tab=
-        $tabParam      = $request->get('tab');   // opsional
-        $typeParam     = $request->get('type');  // dipakai sbg tab juga
-
-        if ($paginate <= 0 || $paginate > 100) {
-            $paginate = 10;
+        $allowedSort = ['created_at','id','read_at','type','title'];
+        $sortBy = $request->get('sortBy', 'created_at');
+        if (!in_array($sortBy, $allowedSort, true)) {
+            $sortBy = 'created_at';
         }
+
+        $paginate = (int) $request->get('paginate', 10);
+        if ($paginate <= 0 || $paginate > 100) $paginate = 10;
+
+        $tabParam  = $request->get('tab');   // opsional
+        $typeParam = $request->get('type');  // kompat dgn FE lama
+        $tab = $tabParam ?: $typeParam;      // pakai salah satu
+
+        $unreadOnly = (bool) $request->boolean('unread_only', false);
+        $sinceRaw   = $request->get('since'); // string tanggal opsional
 
         $user = Auth::user();
         if (!$user) {
@@ -39,11 +63,12 @@ class NotificationController extends Controller
 
         Log::info('NotifIndex', [
             'user_id' => $user->id,
-            'type'    => $typeParam,
-            'tab'     => $tabParam,
+            'tab'     => $tab,
             'sortBy'  => $sortBy,
             'dir'     => $sortDirection,
             'paginate'=> $paginate,
+            'unread'  => $unreadOnly,
+            'since'   => $sinceRaw,
         ]);
 
         $query = Notification::query()
@@ -51,35 +76,34 @@ class NotificationController extends Controller
             ->where('user_id', $user->id)
             ->select('notifications.*');
 
-        /**
-         * ====== FILTERING STRATEGY ======
-         * "tab" (hunter/merchant) = pengelompokan UI.
-         * Kita mapping tab -> kumpulan tipe baris, plus ikutkan literal 'hunter'/'merchant' (kalau ada).
-         */
-        $tab = $tabParam ?: $typeParam; // kompatibel
-        if ($tab === 'hunter') {
-            $query->where(function($q) {
-                $q->whereIn('type', ['ad', 'grab', 'feed'])
-                  ->orWhere('type', 'hunter'); // <== tambahkan literal hunter
-            });
-        } elseif ($tab === 'merchant') {
-            $query->where(function($q) {
-                $q->whereIn('type', ['merchant', 'order', 'settlement', 'voucher', 'promo'])
-                  ->orWhere('type', 'merchant'); // literal merchant tetap ikut
-            });
+        // ====== FILTER TAB / TYPE ======
+        $typesFromTab = $this->mapTabTypes($tab);
+        if ($typesFromTab) {
+            $query->whereIn('type', $typesFromTab);
         } elseif ($tab && $tab !== 'all') {
-            // Kalau FE kirim spesifik type (voucher/promo/dll)
+            // misal spesifik "voucher", "promo", dst.
             $query->where('type', $tab);
         }
-        // Catatan: jika kamu ingin dukung "type" row yang lain (mis. 'notification' dsb),
-        // tambahkan di mapping atas atau kirim ?tab=all di FE untuk melihat keseluruhan.
 
-        // Search/filter opsional
+        // ====== FILTER UNREAD ======
+        if ($unreadOnly) {
+            $query->whereNull('read_at');
+        }
+
+        // ====== FILTER SINCE (tanggal/datetime) ======
+        if (!empty($sinceRaw)) {
+            $ts = strtotime($sinceRaw);
+            if ($ts !== false) {
+                $query->where('created_at', '>=', date('Y-m-d H:i:s', $ts));
+            }
+        }
+
+        // ====== Search & Filter Helper (opsional) ======
         if ($request->filled('search') && method_exists($this, 'search')) {
             $query = $this->search($request->get('search'), new Notification(), $query);
         }
-        if ($filter && method_exists($this, 'filter')) {
-            $filters = json_decode($filter, true) ?: [];
+        if ($request->filled('filter') && method_exists($this, 'filter')) {
+            $filters = json_decode($request->get('filter'), true) ?: [];
             if (is_array($filters)) {
                 foreach ($filters as $column => $value) {
                     $query = $this->filter($column, $value, new Notification(), $query);
@@ -88,11 +112,16 @@ class NotificationController extends Controller
         }
 
         try {
-            // Buat meta ringkasan per-type (untuk debug cepat di FE)
+            // Ringkasan tipe (seluruh notif user ini, tanpa filter tab) untuk debug FE
             $typesCount = Notification::where('user_id', $user->id)
                 ->selectRaw('type, COUNT(*) as cnt')
                 ->groupBy('type')
                 ->pluck('cnt','type');
+
+            // Unread count global
+            $unreadCount = Notification::where('user_id', $user->id)
+                ->whereNull('read_at')
+                ->count();
 
             $paginator = $query->orderBy($sortBy, $sortDirection)->paginate($paginate);
             $items     = $paginator->items();
@@ -104,14 +133,28 @@ class NotificationController extends Controller
             ]);
 
             return response()->json([
-                'message'     => (count($items) === 0) ? 'empty data' : 'success',
-                'data'        => $items,
-                'total_row'   => $paginator->total(),
-                'meta'        => [
-                    'page'      => $paginator->currentPage(),
-                    'per_page'  => $paginator->perPage(),
-                    'types_cnt' => $typesCount, // { "voucher": 5, "merchant": 2, ... }
-                    'applied_tab' => $tab ?? 'all',
+                'message'   => (count($items) === 0) ? 'empty data' : 'success',
+                'data'      => $items,
+                'total_row' => $paginator->total(),
+                'meta'      => [
+                    'applied_tab'  => $tab ?? 'all',
+                    'applied_types'=> $typesFromTab ?: ($tab && $tab !== 'all' ? [$tab] : null),
+                    'types_cnt'    => $typesCount, // { "voucher": 5, "merchant": 2, ... }
+                    'unread_cnt'   => $unreadCount,
+                    'pagination'   => [
+                        'current_page' => $paginator->currentPage(),
+                        'per_page'     => $paginator->perPage(),
+                        'last_page'    => $paginator->lastPage(),
+                        'total'        => $paginator->total(),
+                    ],
+                    'sorting' => [
+                        'by'   => $sortBy,
+                        'dir'  => $sortDirection,
+                    ],
+                    'filters' => [
+                        'unread_only' => $unreadOnly,
+                        'since'       => $sinceRaw,
+                    ],
                 ],
             ], 200);
 
@@ -128,6 +171,9 @@ class NotificationController extends Controller
         }
     }
 
+    /**
+     * POST /api/notification/{id}/read
+     */
     public function markAsRead(Request $request, $id)
     {
         try {
@@ -156,6 +202,9 @@ class NotificationController extends Controller
         }
     }
 
+    /**
+     * POST /api/notification/read-all
+     */
     public function markAllAsRead(Request $request)
     {
         try {
@@ -178,6 +227,9 @@ class NotificationController extends Controller
         }
     }
 
+    /**
+     * GET /api/notification/unread-count
+     */
     public function unreadCount(Request $request)
     {
         try {
@@ -196,6 +248,9 @@ class NotificationController extends Controller
         }
     }
 
+    /**
+     * DELETE /api/notification/{id}
+     */
     public function destroy(Request $request, $id)
     {
         $user = Auth::user();
@@ -214,25 +269,24 @@ class NotificationController extends Controller
 
     /**
      * DELETE /api/notification?type=merchant|hunter|voucher|promo|all
+     * (atau pakai ?tab=...)
      */
     public function destroyAll(Request $request)
     {
         $user = Auth::user();
         if (!$user) return response()->json(['message' => 'Unauthenticated'], 401);
 
-        $type = $request->get('type'); // dipakai sbg "tab"
+        $tabParam  = $request->get('tab');
+        $typeParam = $request->get('type');
+        $tab = $tabParam ?: $typeParam;
+
         $q = Notification::where('user_id', $user->id);
 
-        if ($type === 'hunter') {
-            $q->where(function($w){
-                $w->whereIn('type', ['ad','grab','feed'])->orWhere('type','hunter');
-            });
-        } elseif ($type === 'merchant') {
-            $q->where(function($w){
-                $w->whereIn('type', ['merchant','order','settlement','voucher','promo'])->orWhere('type','merchant');
-            });
-        } elseif ($type && $type !== 'all') {
-            $q->where('type', $type);
+        $typesFromTab = $this->mapTabTypes($tab);
+        if ($typesFromTab) {
+            $q->whereIn('type', $typesFromTab);
+        } elseif ($tab && $tab !== 'all') {
+            $q->where('type', $tab);
         }
 
         $deleted = $q->delete();

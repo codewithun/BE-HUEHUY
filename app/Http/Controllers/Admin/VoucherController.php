@@ -6,8 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Voucher;
 use App\Models\VoucherItem;
 use App\Models\VoucherValidation;
-use App\Models\Notification; // TAMBAHAN
-use App\Models\User; // TAMBAHAN
+use App\Models\Notification;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -40,7 +40,6 @@ class VoucherController extends Controller
             foreach ($filters as $column => $value) {
                 if ($value === null || $value === '') continue;
 
-                // support "community_id:123" style
                 if ($column === 'community_id') {
                     $filterVal = is_string($value) && str_contains($value, ':')
                         ? explode(':', $value)[1]
@@ -136,15 +135,12 @@ class VoucherController extends Controller
                 $data['image'] = $request->file('image')->store('vouchers', 'public');
             }
 
-            // jika target_type != community, pastikan community_id nullable
-            if (($data['target_type'] ?? 'all') !== 'community') {
-                // biarin community_id kalau kamu memang mau tempelkan; kalau tidak dipakai, set null:
-                // $data['community_id'] = null;
-            }
+            // kalau bukan target community, biarkan community_id apa adanya (opsional bisa di-null-kan)
+            // if (($data['target_type'] ?? 'all') !== 'community') { $data['community_id'] = null; }
 
             $model = Voucher::create($data);
 
-            // TAMBAHAN: Kirim notifikasi otomatis
+            // Kirim notifikasi otomatis
             $notificationCount = $this->sendVoucherNotifications($model);
 
             DB::commit();
@@ -209,10 +205,7 @@ class VoucherController extends Controller
                 $data['image'] = $request->file('image')->store('vouchers', 'public');
             }
 
-            // sanitize community id vs target_type
-            if (($data['target_type'] ?? 'all') !== 'community') {
-                // $data['community_id'] = null; // opsional
-            }
+            // if (($data['target_type'] ?? 'all') !== 'community') { $data['community_id'] = null; }
 
             $model->fill($data)->save();
 
@@ -258,97 +251,87 @@ class VoucherController extends Controller
     }
 
     /**
-     * TAMBAHAN: Kirim notifikasi voucher ke target users
+     * Kirim notifikasi voucher ke target users
+     * - uses users.verified_at (sesuai schema kamu)
+     * - type='voucher' agar muncul di tab Merchant (controller notif sudah mapping)
      */
     private function sendVoucherNotifications(Voucher $voucher)
     {
         try {
-            $targetUsers = collect();
+            $now      = now();
+            $imageUrl = $voucher->image ? asset('storage/' . $voucher->image) : null;
 
-            // Tentukan target users berdasarkan target_type
-            switch ($voucher->target_type) {
-                case 'all':
-                    // Kirim ke semua user yang email verified (batasi jumlah untuk performa)
-                    $targetUsers = User::whereNotNull('email_verified_at')
-                        ->limit(1000) // batasi untuk performa
-                        ->get();
-                    break;
+            // Base query: user terverifikasi
+            $builder = User::query()->whereNotNull('verified_at');
 
-                case 'user':
-                    // Kirim ke user tertentu
-                    if ($voucher->target_user_id) {
-                        $targetUsers = User::where('id', $voucher->target_user_id)->get();
-                    }
-                    break;
-
-                case 'community':
-                    // Kirim ke anggota community
-                    if ($voucher->community_id) {
-                        $targetUsers = User::whereHas('communityMemberships', function($q) use ($voucher) {
-                            $q->where('community_id', $voucher->community_id)
-                              ->where('status', 'active');
-                        })->get();
-                    }
-                    break;
+            // Targeting
+            if ($voucher->target_type === 'user' && $voucher->target_user_id) {
+                $builder->where('id', $voucher->target_user_id);
+            } elseif ($voucher->target_type === 'community' && $voucher->community_id) {
+                // sesuaikan dgn relasi kamu (communityMemberships atau communities)
+                $builder->whereHas('communityMemberships', function($q) use ($voucher) {
+                    $q->where('community_id', $voucher->community_id)
+                      ->where('status', 'active');
+                });
+            } else {
+                // 'all' -> tidak ada filter tambahan
             }
 
-            // Batch insert notifications untuk performa
-            $notifications = [];
-            $now = now();
+            $sent = 0;
 
-            foreach ($targetUsers as $user) {
-                $notifications[] = [
-                    'user_id' => $user->id,
-                    'type' => 'voucher',
-                    'title' => 'Voucher Baru Tersedia!',
-                    'message' => "Voucher '{$voucher->name}' tersedia untuk Anda. Gunakan kode: {$voucher->code}",
-                    'image_url' => $voucher->image ? asset('storage/' . $voucher->image) : null,
-                    'target_type' => 'voucher',
-                    'target_id' => $voucher->id,
-                    'action_url' => "/vouchers/{$voucher->id}",
-                    'meta' => json_encode([
-                        'voucher_code' => $voucher->code,
-                        'valid_until' => $voucher->valid_until,
-                        'community_id' => $voucher->community_id,
-                        'target_type' => $voucher->target_type
-                    ]),
-                    'created_at' => $now,
-                    'updated_at' => $now
-                ];
-            }
-
-            // Batch insert untuk performa yang lebih baik
-            if (!empty($notifications)) {
-                // Insert dalam chunks untuk menghindari memory limit
-                $chunks = array_chunk($notifications, 100);
-                foreach ($chunks as $chunk) {
-                    Notification::insert($chunk);
+            // Gunakan chunkById agar skalabel
+            $builder->select('id')->chunkById(500, function ($users) use ($voucher, $now, $imageUrl, &$sent) {
+                $batch = [];
+                foreach ($users as $user) {
+                    $batch[] = [
+                        'user_id'     => $user->id,
+                        'type'        => 'voucher', // penting utk tab merchant
+                        'title'       => 'Voucher Baru Tersedia!',
+                        'message'     => "Voucher '{$voucher->name}' tersedia untuk Anda. Gunakan kode: {$voucher->code}",
+                        'image_url'   => $imageUrl,
+                        'target_type' => 'voucher',
+                        'target_id'   => $voucher->id,
+                        'action_url'  => "/vouchers/{$voucher->id}",
+                        'meta'        => json_encode([
+                            'voucher_code' => $voucher->code,
+                            'valid_until'  => $voucher->valid_until,
+                            'community_id' => $voucher->community_id,
+                            'target_type'  => $voucher->target_type
+                        ]),
+                        'created_at'  => $now,
+                        'updated_at'  => $now,
+                    ];
                 }
-            }
 
-            $count = count($notifications);
+                if (!empty($batch)) {
+                    foreach (array_chunk($batch, 100) as $chunk) {
+                        Notification::insert($chunk);
+                    }
+                    $sent += count($batch);
+                }
+            });
+
             Log::info("Voucher notifications sent", [
                 'voucher_id' => $voucher->id,
                 'voucher_name' => $voucher->name,
                 'target_type' => $voucher->target_type,
-                'notifications_sent' => $count
+                'notifications_sent' => $sent
             ]);
 
-            return $count;
+            return $sent;
 
         } catch (\Throwable $e) {
             Log::error('Error sending voucher notifications: ' . $e->getMessage(), [
                 'voucher_id' => $voucher->id,
                 'error' => $e->getMessage()
             ]);
-            // Jangan throw error, biar voucher tetap bisa dibuat meskipun notifikasi gagal
+            // Jangan menggagalkan pembuatan voucher bila notif gagal
             return 0;
         }
     }
 
     /**
      * Kirim 1 voucher item ke user tertentu (manual push).
-     * NB: ini contoh sederhana; kustom sesuai kebutuhan.
      */
     public function sendToUser(Request $request, $voucherId)
     {
@@ -382,19 +365,21 @@ class VoucherController extends Controller
 
             $voucher->decrement('stock');
 
-            // TAMBAHAN: Kirim notifikasi personal untuk manual send
+            // Notifikasi personal
             try {
+                $imageUrl = $voucher->image ? asset('storage/' . $voucher->image) : null;
+
                 Notification::create([
-                    'user_id' => $request->user_id,
-                    'type' => 'voucher',
-                    'title' => 'Voucher Dikirim Khusus untuk Anda!',
-                    'message' => "Anda mendapat voucher '{$voucher->name}' dengan kode: {$voucher->code}",
-                    'image_url' => $voucher->image ? asset('storage/' . $voucher->image) : null,
+                    'user_id'     => $request->user_id,
+                    'type'        => 'voucher',
+                    'title'       => 'Voucher Dikirim Khusus untuk Anda!',
+                    'message'     => "Anda mendapat voucher '{$voucher->name}' dengan kode: {$voucher->code}",
+                    'image_url'   => $imageUrl,
                     'target_type' => 'voucher',
-                    'target_id' => $voucher->id,
-                    'action_url' => "/vouchers/{$voucher->id}",
-                    'meta' => json_encode([
-                        'voucher_code' => $voucher->code,
+                    'target_id'   => $voucher->id,
+                    'action_url'  => "/vouchers/{$voucher->id}",
+                    'meta'        => json_encode([
+                        'voucher_code'  => $voucher->code,
                         'sent_manually' => true
                     ])
                 ]);
@@ -433,7 +418,6 @@ class VoucherController extends Controller
 
             $userId = $request->user()?->id ?? auth()->id() ?? null;
 
-            // sudah pernah divalidasi?
             $existingValidation = VoucherValidation::where([
                 'voucher_id' => $voucher->id,
                 'user_id'    => $userId,

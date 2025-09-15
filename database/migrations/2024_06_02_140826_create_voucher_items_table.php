@@ -17,7 +17,7 @@ return new class extends Migration
             $table->id();
             $table->foreignIdFor(User::class)->onDelete('set null');
             $table->foreignIdFor(Voucher::class)->onDelete('set null');
-            $table->string('code', 10);
+            $table->string('code', 100);
             $table->timestamp('used_at')->nullable();
             $table->timestamps();
         });

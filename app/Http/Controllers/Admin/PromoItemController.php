@@ -17,6 +17,9 @@ class PromoItemController extends Controller
     {
         $query = PromoItem::with(['promo', 'user']);
 
+        // TAMBAHKAN FILTER INI - hanya tampilkan promo items milik user yang login
+        $query->where('user_id', Auth::id());
+
         if ($request->has('promo_id')) {
             $query->where('promo_id', $request->input('promo_id'));
         }

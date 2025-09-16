@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Rule;
 
 class VoucherController extends Controller
 {
@@ -98,8 +99,18 @@ class VoucherController extends Controller
     // =============================================>
     public function store(Request $request)
     {
+        // Fix di Backend (jaga-jaga kalau frontend-ngaco lagi)
+        // Map string "null/undefined" jadi null sebelum validasi
+        $request->merge([
+            'community_id'   => in_array($request->input('community_id'), [null, '', 'null', 'undefined'], true) 
+                                ? null 
+                                : $request->input('community_id'),
+            'target_user_id' => in_array($request->input('target_user_id'), [null, '', 'null', 'undefined'], true) 
+                                ? null 
+                                : $request->input('target_user_id'),
+        ]);
+
         $validator = Validator::make($request->all(), [
-            // basic
             'name'            => 'required|string|max:255',
             'description'     => 'nullable|string',
             'image'           => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
@@ -107,44 +118,43 @@ class VoucherController extends Controller
             'valid_until'     => 'nullable|date',
             'tenant_location' => 'nullable|string|max:255',
             'stock'           => 'required|integer|min:0',
-            'code'            => 'required|string|max:255|unique:vouchers,code',
-            'community_id'    => 'nullable|exists:communities,id',
-
-            // targeting (replace delivery)
-            'target_type'     => 'required|in:all,user,community',
+            'code'            => ['required','string','max:255', Rule::unique('vouchers','code')],
+            'target_type'     => ['required', Rule::in(['all','user','community'])],
             'target_user_id'  => 'nullable|required_if:target_type,user|exists:users,id',
+            'community_id'    => 'nullable|required_if:target_type,community|exists:communities,id',
         ], [], [
-            'target_user_id'  => 'user'
+            'target_user_id' => 'user',
         ]);
-
+        
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validasi gagal',
-                'errors'  => $validator->errors()
+                'errors'  => $validator->errors(),
             ], 422);
         }
-
+        
         try {
             DB::beginTransaction();
-
+        
             $data = $validator->validated();
-
-            // handle image upload
+        
+            // Normalisasi tegas setelah lolos validasi:
+            if (($data['target_type'] ?? 'all') !== 'community') {
+                $data['community_id'] = null;
+            }
+            if (($data['target_type'] ?? 'all') !== 'user') {
+                $data['target_user_id'] = null;
+            }
+        
             if ($request->hasFile('image')) {
                 $data['image'] = $request->file('image')->store('vouchers', 'public');
             }
-
-            // kalau bukan target community, biarkan community_id apa adanya (opsional bisa di-null-kan)
-            // if (($data['target_type'] ?? 'all') !== 'community') { $data['community_id'] = null; }
-
+        
             $model = Voucher::create($data);
-
-            // Kirim notifikasi otomatis
             $notificationCount = $this->sendVoucherNotifications($model);
-
+        
             DB::commit();
-
             return response()->json([
                 'success' => true,
                 'message' => "Voucher berhasil dibuat dan {$notificationCount} notifikasi terkirim",
@@ -165,8 +175,18 @@ class VoucherController extends Controller
     // ============================================>
     public function update(Request $request, string $id)
     {
+        // Fix di Backend (jaga-jaga kalau frontend-ngaco lagi)
+        // Map string "null/undefined" jadi null sebelum validasi
+        $request->merge([
+            'community_id'   => in_array($request->input('community_id'), [null, '', 'null', 'undefined'], true) 
+                                ? null 
+                                : $request->input('community_id'),
+            'target_user_id' => in_array($request->input('target_user_id'), [null, '', 'null', 'undefined'], true) 
+                                ? null 
+                                : $request->input('target_user_id'),
+        ]);
+
         $validator = Validator::make($request->all(), [
-            // basic
             'name'            => 'required|string|max:255',
             'description'     => 'nullable|string',
             'image'           => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
@@ -174,43 +194,46 @@ class VoucherController extends Controller
             'valid_until'     => 'nullable|date',
             'tenant_location' => 'nullable|string|max:255',
             'stock'           => 'required|integer|min:0',
-            'code'            => 'required|string|max:255|unique:vouchers,code,' . $id,
-            'community_id'    => 'nullable|exists:communities,id',
-
-            // targeting
-            'target_type'     => 'required|in:all,user,community',
+            'code'            => ['required','string','max:255', Rule::unique('vouchers','code')->ignore($id)],
+            'target_type'     => ['required', Rule::in(['all','user','community'])],
             'target_user_id'  => 'nullable|required_if:target_type,user|exists:users,id',
+            'community_id'    => 'nullable|required_if:target_type,community|exists:communities,id',
         ], [], [
-            'target_user_id'  => 'user'
+            'target_user_id' => 'user',
         ]);
-
+        
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validasi gagal',
-                'errors'  => $validator->errors()
+                'errors'  => $validator->errors(),
             ], 422);
         }
-
+        
         try {
             DB::beginTransaction();
-
+        
             $model = Voucher::findOrFail($id);
             $data  = $validator->validated();
-
+        
+            // Normalisasi tegas setelah lolos validasi:
+            if (($data['target_type'] ?? 'all') !== 'community') {
+                $data['community_id'] = null;
+            }
+            if (($data['target_type'] ?? 'all') !== 'user') {
+                $data['target_user_id'] = null;
+            }
+        
             if ($request->hasFile('image')) {
                 if ($model->image && Storage::disk('public')->exists($model->image)) {
                     Storage::disk('public')->delete($model->image);
                 }
                 $data['image'] = $request->file('image')->store('vouchers', 'public');
             }
-
-            // if (($data['target_type'] ?? 'all') !== 'community') { $data['community_id'] = null; }
-
+        
             $model->fill($data)->save();
-
+        
             DB::commit();
-
             return response()->json([
                 'success' => true,
                 'message' => 'Voucher berhasil diupdate',

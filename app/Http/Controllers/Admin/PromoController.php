@@ -5,12 +5,12 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Promo;
 use App\Models\PromoValidation;
-use App\Models\Community; // Add this import
+use App\Models\Community;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB; // ADD
 
 class PromoController extends Controller
 {
@@ -21,39 +21,77 @@ class PromoController extends Controller
     {
         // Handle main promo image
         if ($promo->image) {
-            // Check if file actually exists in storage
             if (Storage::disk('public')->exists($promo->image)) {
                 $promo->image_url = asset('storage/' . $promo->image);
             } else {
-                // File doesn't exist, use default or null
                 $promo->image_url = asset('images/default-promo.jpg');
             }
         } else {
-            // No image set, use default
             $promo->image_url = asset('images/default-promo.jpg');
         }
 
         return $promo;
     }
 
-    public function index()
+    // Align with VoucherController index (search/sort/paginate + response shape)
+    public function index(Request $request)
     {
         try {
-            $promos = Promo::all();
-            
-            // Transform image URLs for all promos
-            $promos = $promos->map(function($promo) {
-                return $this->transformPromoImageUrls($promo);
-            });
-            
-            return response()->json([
-                'success' => true,
-                'data' => $promos
+            $sortDirection = $request->get('sortDirection', 'DESC');
+            $sortby        = $request->get('sortBy', 'created_at');
+            $paginate      = (int) $request->get('paginate', 10);
+            $filter        = $request->get('filter', null);
+
+            $query = Promo::query()
+                ->when($request->filled('search'), function ($q) use ($request) {
+                    $s = $request->get('search');
+                    $q->where(function ($qq) use ($s) {
+                        $qq->where('title', 'like', "%{$s}%")
+                           ->orWhere('code', 'like', "%{$s}%")
+                           ->orWhere('description', 'like', "%{$s}%");
+                    });
+                });
+
+            // Optional filters like in voucher index
+            if ($filter) {
+                $filters = is_string($filter) ? json_decode($filter, true) : (array) $filter;
+                foreach ($filters as $column => $value) {
+                    if ($value === null || $value === '') continue;
+
+                    if ($column === 'community_id') {
+                        $filterVal = is_string($value) && str_contains($value, ':')
+                            ? explode(':', $value)[1]
+                            : $value;
+                        $query->where('community_id', $filterVal);
+                    } elseif ($column === 'promo_type') {
+                        $query->where('promo_type', $value);
+                    } elseif ($column === 'status') {
+                        $query->where('status', $value);
+                    } else {
+                        $query->where($column, 'like', '%' . $value . '%');
+                    }
+                }
+            }
+
+            $data  = $query->orderBy($sortby, $sortDirection)->paginate($paginate);
+            $items = collect($data->items())->map(fn ($p) => $this->transformPromoImageUrls($p))->values();
+
+            if ($items->isEmpty()) {
+                return response([
+                    'message' => 'empty data',
+                    'data'    => [],
+                ], 200);
+            }
+
+            return response([
+                'message'   => 'success',
+                'data'      => $items,
+                'total_row' => $data->total(),
             ]);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            Log::error('Error fetching promos: ' . $e->getMessage());
             return response()->json([
-                'success' => false,
-                'message' => 'Gagal mengambil data promo'
+                'message' => 'Error: server side having problem!'
             ], 500);
         }
     }
@@ -63,17 +101,15 @@ class PromoController extends Controller
         $promo = Promo::find($id);
         if (!$promo) {
             return response()->json([
-                'success' => false,
-                'message' => 'Promo tidak ditemukan'
+                'messaege' => 'Data not found'
             ], 404);
         }
 
-        // Transform image URL
         $promo = $this->transformPromoImageUrls($promo);
 
-        return response()->json([
-            'success' => true,
-            'data' => $promo
+        return response([
+            'message' => 'Success',
+            'data'    => $promo
         ]);
     }
 
@@ -83,11 +119,10 @@ class PromoController extends Controller
     public function showPublic($id)
     {
         try {
-            // Add more detailed logging
             Log::info('showPublic called', ['promo_id' => $id]);
-            
+
             $query = Promo::where('id', $id);
-            
+
             try {
                 $promo = $query->with(['community'])->first();
             } catch (\Exception $e) {
@@ -103,9 +138,6 @@ class PromoController extends Controller
                 ], 404);
             }
 
-            Log::info('Promo found', ['promo' => $promo->toArray()]);
-
-            // Check status if column exists
             if (isset($promo->status) && $promo->status !== 'active') {
                 return response()->json([
                     'success' => false,
@@ -113,7 +145,6 @@ class PromoController extends Controller
                 ], 404);
             }
 
-            // Transform image URL using helper
             $promo = $this->transformPromoImageUrls($promo);
 
             $responseData = [
@@ -133,16 +164,14 @@ class PromoController extends Controller
                 'code' => $promo->code ?? null,
                 'created_at' => $promo->created_at ?? null,
                 'updated_at' => $promo->updated_at ?? null,
-                'image_url' => $promo->image_url, // Use transformed URL
-                'image' => $promo->image, // Also include original image path
+                'image_url' => $promo->image_url,
+                'image' => $promo->image,
             ];
 
-            // Add community data if relation was loaded successfully
             if (isset($promo->community)) {
                 $responseData['community'] = $promo->community;
             }
 
-            // Add price information if columns exist
             if (isset($promo->original_price)) {
                 $responseData['original_price'] = $promo->original_price;
             }
@@ -153,10 +182,13 @@ class PromoController extends Controller
                 $responseData['discount_percentage'] = $promo->discount_percentage;
             }
 
+            // FIX: konsisten pakai relasi 'validations' seperti Voucher
             try {
-                $claimedCount = $promo->promo_validations()->count();
+                $claimedCount = method_exists($promo, 'validations')
+                    ? $promo->validations()->count()
+                    : PromoValidation::where('promo_id', $promo->id)->count();
                 $responseData['claimed_count'] = $claimedCount;
-            } catch (\Exception $e) {
+            } catch (\Throwable $e) {
                 $responseData['claimed_count'] = 0;
             }
 
@@ -183,55 +215,73 @@ class PromoController extends Controller
 
     public function store(Request $request)
     {
+        // Normalisasi seperti di VoucherController
+        $request->merge([
+            'community_id'     => in_array($request->input('community_id'), [null, '', 'null', 'undefined'], true) ? null : $request->input('community_id'),
+            'always_available' => in_array($request->input('always_available'), [1, '1', true, 'true'], true) ? '1' : '0',
+        ]);
+
         $validator = Validator::make($request->all(), [
-            'title' => 'required|string|max:255',
-            'description' => 'required|string',
-            'detail' => 'nullable|string',
-            'promo_distance' => 'nullable|numeric|min:0',
-            'start_date' => 'nullable|date',
-            'end_date' => 'nullable|date|after_or_equal:start_date',
-            'always_available' => 'boolean',
-            'stock' => 'nullable|integer|min:0',
-            'promo_type' => 'required|string',
-            'location' => 'nullable|string',
-            'owner_name' => 'required|string|max:255',
-            'owner_contact' => 'required|string|max:255',
-            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp',
-            'community_id' => 'nullable|exists:communities,id',
-            'code' => 'nullable|string|unique:promos,code', // validasi kode unik jika diinput manual
+            'title'           => 'required|string|max:255',
+            'description'     => 'required|string',
+            'detail'          => 'nullable|string',
+            'promo_distance'  => 'nullable|numeric|min:0',
+            'start_date'      => 'nullable|date',
+            'end_date'        => 'nullable|date|after_or_equal:start_date',
+            'always_available'=> 'in:0,1,true,false',
+            'stock'           => 'nullable|integer|min:0',
+            'promo_type'      => 'required|string|in:offline,online',
+            'location'        => 'nullable|string',
+            'owner_name'      => 'required|string|max:255',
+            'owner_contact'   => 'required|string|max:255',
+            'image'           => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
+            'community_id'    => 'required|exists:communities,id',
+            'code'            => 'nullable|string|unique:promos,code',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validasi gagal',
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors()
             ], 422);
         }
 
         try {
-            $data = $request->except('image');
+            DB::beginTransaction();
 
-            // Generate kode unik jika tidak diinput manual
+            $data = $validator->validated();
+
+            // Cast & defaults
+            $data['always_available'] = in_array($data['always_available'] ?? '0', [1, '1', true, 'true'], true);
+            $data['promo_distance']   = isset($data['promo_distance']) ? (float) $data['promo_distance'] : 0;
+            $data['stock']            = isset($data['stock']) ? (int) $data['stock'] : 0;
+
+            // Generate code bila kosong (unique-ish)
             if (empty($data['code'])) {
-                $data['code'] = 'PRM-' . strtoupper(uniqid());
+                do {
+                    $data['code'] = 'PRM-' . strtoupper(bin2hex(random_bytes(3)));
+                } while (Promo::where('code', $data['code'])->exists());
             }
 
             if ($request->hasFile('image')) {
-                $path = $request->file('image')->store('promos', 'public');
-                $data['image'] = $path;
+                $data['image'] = $request->file('image')->store('promos', 'public');
             }
 
             $promo = Promo::create($data);
+
+            DB::commit();
             return response()->json([
                 'success' => true,
                 'message' => 'Promo berhasil dibuat',
-                'data' => $promo
+                'data'    => $promo
             ], 201);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            Log::error('Error creating promo: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Gagal membuat promo'
+                'message' => 'Gagal membuat promo: ' . $e->getMessage()
             ], 500);
         }
     }
@@ -246,58 +296,93 @@ class PromoController extends Controller
             ], 404);
         }
 
+        Log::info('Promo update request data:', $request->all());
+
+        // Normalisasi seperti voucher
+        $request->merge([
+            'community_id'     => in_array($request->input('community_id'), [null, '', 'null', 'undefined'], true) ? null : $request->input('community_id'),
+            'always_available' => in_array($request->input('always_available'), [1, '1', true, 'true'], true) ? '1' : (in_array($request->input('always_available'), [0, '0', false, 'false'], true) ? '0' : null),
+        ]);
+
         $validator = Validator::make($request->all(), [
-            'title' => 'sometimes|required|string|max:255',
-            'description' => 'sometimes|required|string',
-            'detail' => 'nullable|string',
-            'promo_distance' => 'nullable|numeric|min:0',
-            'start_date' => 'nullable|date',
-            'end_date' => 'nullable|date|after_or_equal:start_date',
-            'always_available' => 'boolean',
-            'stock' => 'nullable|integer|min:0',
-            'promo_type' => 'sometimes|required|string',
-            'location' => 'nullable|string',
-            'owner_name' => 'sometimes|required|string|max:255',
-            'owner_contact' => 'sometimes|required|string|max:255',
-            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
-            'community_id' => 'nullable|exists:communities,id',
-            'code' => 'nullable|string|unique:promos,code,' . $id, // validasi kode unik saat update
+            'title'           => 'sometimes|required|string|max:255',
+            'description'     => 'sometimes|required|string',
+            'detail'          => 'nullable|string',
+            'promo_distance'  => 'nullable|numeric|min:0',
+            'start_date'      => 'nullable|date',
+            'end_date'        => 'nullable|date|after_or_equal:start_date',
+            'always_available'=> 'nullable|in:0,1,true,false',
+            'stock'           => 'nullable|integer|min:0',
+            'promo_type'      => 'sometimes|required|string|in:offline,online',
+            'location'        => 'nullable|string',
+            'owner_name'      => 'sometimes|required|string|max:255',
+            'owner_contact'   => 'sometimes|required|string|max:255',
+            'image'           => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
+            'community_id'    => 'sometimes|required|exists:communities,id',
+            'code'            => 'nullable|string|unique:promos,code,' . $id,
         ]);
 
         if ($validator->fails()) {
+            Log::error('Validation failed on promo update', [
+                'errors'       => $validator->errors()->toArray(),
+                'request_data' => $request->all()
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Validasi gagal',
-                'errors' => $validator->errors()
+                'errors'  => $validator->errors()
             ], 422);
         }
 
         try {
-            $data = $request->except('image');
+            DB::beginTransaction();
 
-            // Jika code kosong, tetap gunakan code lama
-            if (empty($data['code'])) {
-                $data['code'] = $promo->code;
+            $data = $validator->validated();
+
+            // Preserve existing community_id if not provided
+            if (!array_key_exists('community_id', $data) || $data['community_id'] === null) {
+                $data['community_id'] = $promo->community_id;
             }
 
+            // Normalize booleans & numerics
+            if (array_key_exists('always_available', $data) && $data['always_available'] !== null) {
+                $data['always_available'] = in_array($data['always_available'], [1, '1', true, 'true'], true);
+            }
+            if (isset($data['promo_distance']) && $data['promo_distance'] !== null) {
+                $data['promo_distance'] = (float) $data['promo_distance'];
+            }
+            if (isset($data['stock']) && $data['stock'] !== null) {
+                $data['stock'] = (int) $data['stock'];
+            }
+
+            // Handle image upload
             if ($request->hasFile('image')) {
                 if (!empty($promo->image)) {
                     Storage::disk('public')->delete($promo->image);
                 }
-                $path = $request->file('image')->store('promos', 'public');
-                $data['image'] = $path;
+                $data['image'] = $request->file('image')->store('promos', 'public');
             }
 
             $promo->update($data);
+
+            DB::commit();
+
             return response()->json([
                 'success' => true,
                 'message' => 'Promo berhasil diperbarui',
-                'data' => $promo
+                'data'    => $promo
             ]);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            Log::error('Error updating promo', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
             return response()->json([
                 'success' => false,
-                'message' => 'Gagal memperbarui promo'
+                'message' => 'Gagal memperbarui promo: ' . $e->getMessage()
             ], 500);
         }
     }
@@ -450,7 +535,6 @@ class PromoController extends Controller
                 'promo_id' => $promoId
             ]);
 
-            // Verify community exists
             $community = Community::find($communityId);
             if (!$community) {
                 return response()->json([
@@ -459,13 +543,10 @@ class PromoController extends Controller
                 ], 404);
             }
 
-            // Find promo that belongs to this community
             $promo = Promo::where('id', $promoId)
                 ->where('community_id', $communityId)
                 ->first();
 
-            // If not found in community, try to find promo without community restriction
-            // (for backward compatibility or if promo is public)
             if (!$promo) {
                 $promo = Promo::find($promoId);
                 if (!$promo) {
@@ -476,7 +557,6 @@ class PromoController extends Controller
                 }
             }
 
-            // Check promo status if column exists
             if (isset($promo->status) && $promo->status !== 'active') {
                 return response()->json([
                     'success' => false,
@@ -484,7 +564,6 @@ class PromoController extends Controller
                 ], 404);
             }
 
-            // Transform image URL
             $promo = $this->transformPromoImageUrls($promo);
 
             $responseData = [
@@ -509,7 +588,6 @@ class PromoController extends Controller
                 'image' => $promo->image,
             ];
 
-            // Add price information if columns exist
             if (isset($promo->original_price)) {
                 $responseData['original_price'] = $promo->original_price;
             }
@@ -520,7 +598,6 @@ class PromoController extends Controller
                 $responseData['discount_percentage'] = $promo->discount_percentage;
             }
 
-            // Add community information
             $responseData['community'] = [
                 'id' => $community->id,
                 'name' => $community->name,
@@ -528,12 +605,10 @@ class PromoController extends Controller
             ];
 
             try {
-                // Count claimed promos if relation exists
-                if (method_exists($promo, 'promo_validations')) {
-                    $claimedCount = $promo->promo_validations()->count();
-                } else {
-                    $claimedCount = PromoValidation::where('promo_id', $promo->id)->count();
-                }
+                // FIX: konsisten pakai relasi 'validations'
+                $claimedCount = method_exists($promo, 'validations')
+                    ? $promo->validations()->count()
+                    : PromoValidation::where('promo_id', $promo->id)->count();
                 $responseData['claimed_count'] = $claimedCount;
             } catch (\Exception $e) {
                 $responseData['claimed_count'] = 0;
@@ -621,15 +696,11 @@ class PromoController extends Controller
     public function history($promoId)
     {
         Log::info("Fetching history for promo ID: " . $promoId);
-        
+
         try {
+            // FIX: konsisten relasi 'validations' + urutkan desc
             $promo = Promo::with(['validations.user'])->find($promoId);
-            
-            Log::info("Promo found: " . ($promo ? 'yes' : 'no'));
-            if ($promo) {
-                Log::info("Validations count: " . $promo->validations->count());
-            }
-            
+
             if (!$promo) {
                 return response()->json([
                     'success' => false,
@@ -637,10 +708,10 @@ class PromoController extends Controller
                 ], 404);
             }
 
-            $validations = $promo->validations()->with([
-                'user',
-                'promo'
-            ])->get();
+            $validations = $promo->validations()
+                ->with(['user', 'promo'])
+                ->orderBy('validated_at', 'desc')
+                ->get();
 
             return response()->json([
                 'success' => true,

@@ -33,7 +33,7 @@ use App\Http\Controllers\Admin\PromoItemController;
 use App\Http\Controllers\Admin\CommunityController;
 
 
-Route::prefix('/admin')->group(function() {
+Route::prefix('admin')->name('admin.')->group(function () {
 
     // * Picklist Options
     Route::prefix('/options')->group(function () {
@@ -123,6 +123,9 @@ Route::prefix('/admin')->group(function() {
     // helper routes to manage items under a promo
     Route::get('/promos/{promoId}/items', [PromoItemController::class, 'indexByPromo']);
     Route::post('/promos/{promoId}/items', [PromoItemController::class, 'storeForPromo']);
+    Route::post('promo-items/{id}/redeem', [PromoItemController::class, 'redeem'])
+        ->name('promo-items.redeem') // final name: admin.promo-items.redeem
+        ->whereNumber('id');
 
     Route::apiResource('/communities', CommunityController::class);
 

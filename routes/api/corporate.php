@@ -15,7 +15,7 @@ use App\Http\Controllers\Corporate\WorldController;
 
 use App\Http\Controllers\PicklistController;
 
-Route::prefix('/corporate')->group(function() {
+Route::prefix('corporate')->name('corporate.')->group(function () {
 
     // * Picklist Options
     Route::prefix('/options')->group(function () {

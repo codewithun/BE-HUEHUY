@@ -223,12 +223,30 @@ class PromoItemController extends Controller
             return response()->json(['success' => false, 'message' => 'Promo item sudah ditukarkan'], 409);
         }
 
+        // Wajib kirim kode unik, tapi jangan pernah bocorkan nilainya
         $validator = Validator::make($request->all(), [
             'user_id' => 'nullable|exists:users,id',
+            'code'    => 'required|string',
+        ], [
+            'code.required' => 'Kode unik wajib diisi.',
+            'code.string'   => 'Kode unik tidak valid.',
         ]);
 
         if ($validator->fails()) {
-            return response()->json(['success' => false, 'message' => 'Validation failed', 'errors' => $validator->errors()], 422);
+            return response()->json([
+                'success' => false,
+                'message' => $validator->errors()->first() ?? 'Validasi gagal',
+                'errors'  => $validator->errors(),
+            ], 422);
+        }
+
+        // Cek kecocokan kode unik terhadap QR milik item (pesan generic)
+        $inputCode = trim($request->input('code'));
+        if (strcasecmp($inputCode, (string) $item->code) !== 0) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Kode unik tidak valid.',
+            ], 422);
         }
 
         $promo = Promo::find($item->promo_id);

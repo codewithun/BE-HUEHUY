@@ -161,7 +161,6 @@ class PromoController extends Controller
                 'end_date' => $promo->end_date ?? null,
                 'community_id' => $promo->community_id ?? null,
                 'stock' => $promo->stock ?? null,
-                'code' => $promo->code ?? null,
                 'created_at' => $promo->created_at ?? null,
                 'updated_at' => $promo->updated_at ?? null,
                 'image_url' => $promo->image_url,
@@ -581,7 +580,6 @@ class PromoController extends Controller
                 'end_date' => $promo->end_date ?? null,
                 'community_id' => $promo->community_id ?? $communityId,
                 'stock' => $promo->stock ?? null,
-                'code' => $promo->code ?? null,
                 'created_at' => $promo->created_at ?? null,
                 'updated_at' => $promo->updated_at ?? null,
                 'image_url' => $promo->image_url,
@@ -639,30 +637,42 @@ class PromoController extends Controller
     public function validateCode(Request $request)
     {
         try {
-            $request->validate([
-                'code' => 'required|string'
+            // Validasi input kode unik
+            $validator = Validator::make($request->all(), [
+                'code' => 'required|string',
+            ], [
+                'code.required' => 'Kode unik wajib diisi.',
+                'code.string'   => 'Kode unik tidak valid.',
             ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $validator->errors()->first() ?? 'Validasi gagal',
+                    'errors'  => $validator->errors(),
+                ], 422);
+            }
 
             $promo = Promo::where('code', $request->code)->first();
 
             if (!$promo) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Kode promo tidak ditemukan'
+                    'message' => 'Kode unik tidak ditemukan'
                 ], 404);
             }
 
             // Cek apakah sudah pernah divalidasi
             $existingValidation = PromoValidation::where([
                 'promo_id' => $promo->id,
-                'user_id' => $request->user()?->id ?? auth()->id() ?? null,
-                'code' => $request->code
+                'user_id'  => $request->user()?->id ?? auth()->id() ?? null,
+                'code'     => $request->code
             ])->first();
 
             if ($existingValidation) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Kode promo sudah pernah divalidasi'
+                    'message' => 'Kode unik sudah pernah divalidasi'
                 ], 409);
             }
 
@@ -679,11 +689,11 @@ class PromoController extends Controller
                 }
 
                 $validation = PromoValidation::create([
-                    'promo_id' => $promo->id,
-                    'user_id' => $request->user()?->id ?? auth()->id() ?? null,
-                    'code' => $request->code,
-                    'validated_at' => now(),
-                    'notes' => $request->input('notes'),
+                    'promo_id'      => $promo->id,
+                    'user_id'       => $request->user()?->id ?? auth()->id() ?? null,
+                    'code'          => $request->code,
+                    'validated_at'  => now(),
+                    'notes'         => $request->input('notes'),
                 ]);
 
                 $promoRefreshed = Promo::find($promo->id);
@@ -700,11 +710,11 @@ class PromoController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Kode promo valid',
+                'message' => 'Kode unik valid',
                 'data' => [
-                    'promo' => $result['promo'],
-                    'validation' => $result['validation'],
-                    'remaining_stock' => $result['promo']->stock,
+                    'promo'            => $result['promo'],
+                    'validation'       => $result['validation'],
+                    'remaining_stock'  => $result['promo']->stock,
                 ]
             ]);
         } catch (\Exception $e) {

@@ -666,21 +666,45 @@ class PromoController extends Controller
                 ], 409);
             }
 
-            // Buat record history validasi
-            $validation = PromoValidation::create([
-                'promo_id' => $promo->id,
-                'user_id' => $request->user()?->id ?? auth()->id() ?? null,
-                'code' => $request->code,
-                'validated_at' => now(),
-                'notes' => $request->input('notes'),
-            ]);
+            // Transaksi + decrement stok (jika stok tidak null)
+            $result = DB::transaction(function () use ($request, $promo) {
+                if (!is_null($promo->stock)) {
+                    $affected = Promo::where('id', $promo->id)
+                        ->where('stock', '>', 0)
+                        ->decrement('stock');
+
+                    if ($affected === 0) {
+                        return ['ok' => false, 'reason' => 'Stok promo habis'];
+                    }
+                }
+
+                $validation = PromoValidation::create([
+                    'promo_id' => $promo->id,
+                    'user_id' => $request->user()?->id ?? auth()->id() ?? null,
+                    'code' => $request->code,
+                    'validated_at' => now(),
+                    'notes' => $request->input('notes'),
+                ]);
+
+                $promoRefreshed = Promo::find($promo->id);
+
+                return ['ok' => true, 'validation' => $validation, 'promo' => $promoRefreshed];
+            });
+
+            if (!$result['ok']) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $result['reason'] ?? 'Stok promo habis'
+                ], 409);
+            }
 
             return response()->json([
                 'success' => true,
                 'message' => 'Kode promo valid',
                 'data' => [
-                    'promo' => $promo,
-                    'validation' => $validation
+                    'promo' => $result['promo'],
+                    'validation' => $result['validation'],
+                    'remaining_stock' => $result['promo']->stock,
                 ]
             ]);
         } catch (\Exception $e) {

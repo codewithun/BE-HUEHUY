@@ -10,6 +10,7 @@ use Illuminate\Support\Str;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
 use App\Models\Promo; // added
+use Illuminate\Support\Facades\DB; // added
 
 class PromoItemController extends Controller
 {
@@ -95,29 +96,9 @@ class PromoItemController extends Controller
             }
         }
 
-        // Decide final item status:
-        // - 'redeemed' only when explicitly requested
-        // - 'reserved' only when frontend signals a claim (claim=true) AND there's an authenticated user
-        // - otherwise status follows promo active state (available / expired)
+        // Decide final item status later inside transaction
         $requestedStatus = $request->input('status');
         $isClaimAction = $request->boolean('claim');
-
-        if ($requestedStatus === 'redeemed') {
-            $data['status'] = 'redeemed';
-            $data['redeemed_at'] = Carbon::now();
-            if ($data['user_id']) {
-                $data['user_id'] = $data['user_id'];
-            }
-        } elseif ($isClaimAction && $authUserId) {
-            // treat as a claim action coming from FE (e.g. { claim: true })
-            $data['status'] = 'reserved';
-            $data['reserved_at'] = Carbon::now();
-            // ensure claimed item is linked to authenticated user
-            $data['user_id'] = $authUserId;
-        } else {
-            // ignore frontend-sent 'reserved' to avoid accidental reserved state
-            $data['status'] = $isActive ? 'available' : 'expired';
-        }
 
         // set expires_at default from promo end_date if not provided
         if (empty($data['expires_at']) && $promo && $promo->end_date) {
@@ -142,9 +123,42 @@ class PromoItemController extends Controller
             }
         }
 
-        $item = PromoItem::create($data);
+        $result = DB::transaction(function () use ($promo, $requestedStatus, $isClaimAction, $authUserId, &$data, $isActive) {
+            if ($requestedStatus === 'redeemed') {
+                // redeem saat create -> kurangi stok jika dikelola
+                if ($promo && !is_null($promo->stock)) {
+                    $affected = Promo::where('id', $promo->id)
+                        ->where('stock', '>', 0)
+                        ->decrement('stock');
 
-        return response()->json(['success' => true, 'data' => $item], 201);
+                    if ($affected === 0) {
+                        return ['ok' => false, 'reason' => 'Stok promo habis'];
+                    }
+                }
+                $data['status'] = 'redeemed';
+                $data['redeemed_at'] = Carbon::now();
+                if ($authUserId) {
+                    $data['user_id'] = $authUserId;
+                }
+            } elseif ($isClaimAction && $authUserId) {
+                // treat as a claim action coming from FE (e.g. { claim: true })
+                $data['status'] = 'reserved';
+                $data['reserved_at'] = Carbon::now();
+                $data['user_id'] = $authUserId;
+            } else {
+                // ignore frontend-sent 'reserved' to avoid accidental reserved state
+                $data['status'] = $isActive ? 'available' : 'expired';
+            }
+
+            $item = PromoItem::create($data);
+            return ['ok' => true, 'item' => $item];
+        });
+
+        if (!$result['ok']) {
+            return response()->json(['success' => false, 'message' => $result['reason'] ?? 'Stok promo habis'], 409);
+        }
+
+        return response()->json(['success' => true, 'data' => $result['item']], 201);
     }
 
     public function storeForPromo(Request $request, $promoId)
@@ -205,6 +219,10 @@ class PromoItemController extends Controller
             return response()->json(['success' => false, 'message' => 'Promo item not found'], 404);
         }
 
+        if ($item->status === 'redeemed') {
+            return response()->json(['success' => false, 'message' => 'Promo item sudah ditukarkan'], 409);
+        }
+
         $validator = Validator::make($request->all(), [
             'user_id' => 'nullable|exists:users,id',
         ]);
@@ -213,13 +231,33 @@ class PromoItemController extends Controller
             return response()->json(['success' => false, 'message' => 'Validation failed', 'errors' => $validator->errors()], 422);
         }
 
-        $item->status = 'redeemed';
-        $item->redeemed_at = Carbon::now();
-        if ($request->filled('user_id')) {
-            $item->user_id = $request->input('user_id');
-        }
-        $item->save();
+        $promo = Promo::find($item->promo_id);
 
-        return response()->json(['success' => true, 'data' => $item]);
+        $result = DB::transaction(function () use ($request, $item, $promo) {
+            if ($promo && !is_null($promo->stock)) {
+                $affected = Promo::where('id', $promo->id)
+                    ->where('stock', '>', 0)
+                    ->decrement('stock');
+
+                if ($affected === 0) {
+                    return ['ok' => false, 'reason' => 'Stok promo habis'];
+                }
+            }
+
+            $item->status = 'redeemed';
+            $item->redeemed_at = Carbon::now();
+            if ($request->filled('user_id')) {
+                $item->user_id = $request->input('user_id');
+            }
+            $item->save();
+
+            return ['ok' => true, 'item' => $item];
+        });
+
+        if (!$result['ok']) {
+            return response()->json(['success' => false, 'message' => $result['reason'] ?? 'Stok promo habis'], 409);
+        }
+
+        return response()->json(['success' => true, 'data' => $result['item']]);
     }
 }

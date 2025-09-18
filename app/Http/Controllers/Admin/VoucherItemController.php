@@ -10,6 +10,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
+use Carbon\Carbon;
 
 class VoucherItemController extends Controller
 {
@@ -177,6 +179,78 @@ class VoucherItemController extends Controller
                 'message' => 'Gagal klaim voucher: ' . $th->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Redeem voucher item by code
+     * POST /admin/voucher-items/{id}/redeem
+     */
+    public function redeem(Request $request, $id)
+    {
+        $item = VoucherItem::with('voucher')->find($id);
+        if (! $item) {
+            return response()->json(['success' => false, 'message' => 'Voucher item tidak ditemukan'], 404);
+        }
+
+        // Sudah pernah digunakan
+        if (!is_null($item->used_at) || $item->status === 'redeemed' || $item->status === 'used') {
+            return response()->json(['success' => false, 'message' => 'Voucher sudah digunakan'], 409);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'code' => 'required|string',
+        ], [
+            'code.required' => 'Kode unik wajib diisi.',
+            'code.string'   => 'Kode unik tidak valid.',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => $validator->errors()->first() ?? 'Validasi gagal',
+                'errors'  => $validator->errors(),
+            ], 422);
+        }
+
+        // Cek kode voucher item
+        $inputCode = trim($request->input('code'));
+        if (strcasecmp($inputCode, (string) $item->code) !== 0) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Kode unik tidak valid.',
+            ], 422);
+        }
+
+        $voucher = $item->voucher ?? Voucher::find($item->voucher_id);
+
+        $result = DB::transaction(function () use ($item, $voucher) {
+            // Decrement stok jika stok dikelola (tidak null)
+            if ($voucher && !is_null($voucher->stock)) {
+                $affected = Voucher::where('id', $voucher->id)
+                    ->where('stock', '>', 0)
+                    ->decrement('stock');
+
+                if ($affected === 0) {
+                    return ['ok' => false, 'reason' => 'Stok voucher habis'];
+                }
+            }
+
+            // Tandai sebagai digunakan
+            $item->used_at = Carbon::now();
+            // Opsional jika ada kolom status
+            if (property_exists($item, 'status')) {
+                $item->status = 'used';
+            }
+            $item->save();
+
+            return ['ok' => true, 'item' => $item];
+        });
+
+        if (! $result['ok']) {
+            return response()->json(['success' => false, 'message' => $result['reason'] ?? 'Stok voucher habis'], 409);
+        }
+
+        return response()->json(['success' => true, 'data' => $result['item']]);
     }
 
     /**

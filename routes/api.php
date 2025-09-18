@@ -294,6 +294,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // === Voucher Items (claim) ===
     Route::post('/vouchers/{voucher}/claim', [VoucherItemController::class, 'claim'])->whereNumber('voucher');
+    Route::post('/admin/voucher-items/{id}/redeem', [VoucherItemController::class, 'redeem']);
 
     // User Activity
     Route::prefix('user')->group(function () {

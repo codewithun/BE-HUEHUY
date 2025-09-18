@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB; // ADD
+use Illuminate\Support\Carbon;
 
 class PromoController extends Controller
 {
@@ -636,94 +637,110 @@ class PromoController extends Controller
 
     public function validateCode(Request $request)
     {
-        try {
-            // Validasi input kode unik
-            $validator = Validator::make($request->all(), [
-                'code' => 'required|string',
-            ], [
-                'code.required' => 'Kode unik wajib diisi.',
-                'code.string'   => 'Kode unik tidak valid.',
-            ]);
-
-            if ($validator->fails()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => $validator->errors()->first() ?? 'Validasi gagal',
-                    'errors'  => $validator->errors(),
-                ], 422);
-            }
-
-            $promo = Promo::where('code', $request->code)->first();
-
-            if (!$promo) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Kode unik tidak ditemukan'
-                ], 404);
-            }
-
-            // Cek apakah sudah pernah divalidasi
-            $existingValidation = PromoValidation::where([
-                'promo_id' => $promo->id,
-                'user_id'  => $request->user()?->id ?? auth()->id() ?? null,
-                'code'     => $request->code
-            ])->first();
-
-            if ($existingValidation) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Kode unik sudah pernah divalidasi'
-                ], 409);
-            }
-
-            // Transaksi + decrement stok (jika stok tidak null)
-            $result = DB::transaction(function () use ($request, $promo) {
-                if (!is_null($promo->stock)) {
-                    $affected = Promo::where('id', $promo->id)
-                        ->where('stock', '>', 0)
-                        ->decrement('stock');
-
-                    if ($affected === 0) {
-                        return ['ok' => false, 'reason' => 'Stok promo habis'];
-                    }
-                }
-
-                $validation = PromoValidation::create([
-                    'promo_id'      => $promo->id,
-                    'user_id'       => $request->user()?->id ?? auth()->id() ?? null,
-                    'code'          => $request->code,
-                    'validated_at'  => now(),
-                    'notes'         => $request->input('notes'),
-                ]);
-
-                $promoRefreshed = Promo::find($promo->id);
-
-                return ['ok' => true, 'validation' => $validation, 'promo' => $promoRefreshed];
-            });
-
-            if (!$result['ok']) {
-                return response()->json([
-                    'success' => false,
-                    'message' => $result['reason'] ?? 'Stok promo habis'
-                ], 409);
-            }
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Kode unik valid',
-                'data' => [
-                    'promo'            => $result['promo'],
-                    'validation'       => $result['validation'],
-                    'remaining_stock'  => $result['promo']->stock,
-                ]
-            ]);
-        } catch (\Exception $e) {
-            Log::error("Error in validateCode: " . $e->getMessage());
-            return response()->json([
-                'success' => false,
-                'message' => 'Gagal memvalidasi kode: ' . $e->getMessage()
-            ], 500);
+        $userId = $request->user()->id ?? null;
+        if (! $userId) {
+            return response()->json(['success' => false, 'message' => 'Unauthenticated'], 401);
         }
+
+        $v = Validator::make($request->all(), [
+            'code' => 'required|string',
+        ], [
+            'code.required' => 'Kode unik wajib diisi.',
+            'code.string'   => 'Kode unik tidak valid.',
+        ]);
+        if ($v->fails()) {
+            return response()->json(['success' => false, 'message' => $v->errors()->first() ?? 'Validasi gagal', 'errors' => $v->errors()], 422);
+        }
+
+        $inputCode = trim($request->input('code'));
+
+        $promo = Promo::whereRaw('LOWER(code) = ?', [mb_strtolower($inputCode)])->first();
+        if (! $promo) {
+            return response()->json(['success' => false, 'message' => 'Kode unik tidak valid.'], 422);
+        }
+
+        // Aktifkah?
+        $now   = Carbon::now();
+        $start = $promo->start_date ? Carbon::parse($promo->start_date) : null;
+        $end   = $promo->end_date ? Carbon::parse($promo->end_date) : null;
+
+        $active = false;
+        if (!empty($promo->always_available)) {
+            $active = true;
+        } else {
+            if ($start && $end)       $active = $now->between($start, $end);
+            elseif ($start && !$end)  $active = $now->greaterThanOrEqualTo($start);
+            elseif (!$start && $end)  $active = $now->lessThanOrEqualTo($end);
+            else                      $active = true;
+        }
+        if (! $active) {
+            return response()->json(['success' => false, 'message' => 'Promo tidak aktif atau sudah berakhir'], 422);
+        }
+
+        // Cegah validasi ganda oleh user yg sama
+        $already = PromoValidation::where('promo_id', $promo->id)->where('user_id', $userId)->exists();
+        if ($already) {
+            return response()->json(['success' => false, 'message' => 'Anda sudah memvalidasi promo ini'], 409);
+        }
+
+        $result = DB::transaction(function () use ($promo, $userId, $now) {
+            // Kurangi stok jika stok dikelola
+            if (!is_null($promo->stock)) {
+                $affected = Promo::where('id', $promo->id)->where('stock', '>', 0)->decrement('stock');
+                if ($affected === 0) {
+                    return ['ok' => false, 'reason' => 'Stok promo habis'];
+                }
+            }
+
+            // Catat history validasi
+            $pv = PromoValidation::create([
+                'promo_id'      => $promo->id,
+                'user_id'       => $userId,
+                'code'          => $promo->code,
+                'validated_at'  => $now,
+            ]);
+
+            // Tandai item milik user sebagai redeemed, atau buat baru agar tampil di saku
+            $item = \App\Models\PromoItem::where('promo_id', $promo->id)
+                ->where('user_id', $userId)
+                ->whereIn('status', ['available', 'reserved'])
+                ->orderByDesc('id')
+                ->first();
+
+            if (! $item) {
+                // Buat item baru redeemed (kode item tetap unik sendiri, jangan pakai promo.code)
+                $unique = function () {
+                    do {
+                        $c = strtoupper('PMI-'.\Illuminate\Support\Str::random(8));
+                    } while (\App\Models\PromoItem::where('code', $c)->exists());
+                    return $c;
+                };
+                $item = \App\Models\PromoItem::create([
+                    'promo_id'     => $promo->id,
+                    'user_id'      => $userId,
+                    'code'         => $unique(),
+                    'status'       => 'redeemed',
+                    'redeemed_at'  => $now,
+                    'expires_at'   => $promo->end_date,
+                ]);
+            } else {
+                $item->status = 'redeemed';
+                $item->redeemed_at = $now;
+                $item->save();
+            }
+
+            return ['ok' => true, 'promo' => $promo, 'validation' => $pv, 'item' => $item];
+        });
+
+        if (! $result['ok']) {
+            return response()->json(['success' => false, 'message' => $result['reason'] ?? 'Gagal memvalidasi'], 409);
+        }
+
+        return response()->json(['success' => true, 'data' => [
+            'promo' => $this->transformPromoImageUrls($result['promo']),
+            'validation' => $result['validation'],
+            'item' => $result['item'],
+        ]]);
     }
 
     // endpoint untuk mengambil history validasi promo

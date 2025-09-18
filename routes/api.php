@@ -283,6 +283,8 @@ Route::middleware('auth:sanctum')->group(function () {
     // Promos & Vouchers history
     Route::prefix('promos')->group(function () {
         Route::post('/validate', [PromoController::class, 'validateCode']);
+        // alias agar FE yang pakai /validate-code tidak 405
+        Route::post('/validate-code', [PromoController::class, 'validateCode']);
         Route::get('/{promo}/history', [PromoController::class, 'history'])->whereNumber('promo');
     });
 

@@ -177,4 +177,10 @@ class User extends Authenticatable
             }
         });
     }
+
+    public function adminOfCommunities()
+    {
+        return $this->belongsToMany(\App\Models\Community::class, 'community_admin_contacts')
+            ->withTimestamps();
+    }
 }

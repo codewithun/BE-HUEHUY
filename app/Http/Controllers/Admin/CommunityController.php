@@ -14,11 +14,64 @@ use Illuminate\Support\Facades\DB;
 class CommunityController extends Controller
 {
     /**
+     * Helper: bentuk payload untuk FE (prefill + readable)
+     */
+    private function shapeCommunity($community, ?int $viewerUserId = null)
+    {
+        // pastikan relasi ke-load
+        $community->loadMissing(['adminContacts.role']);
+
+        // hitung members (aktif)
+        $members = $community->members_count
+            ?? (int) DB::table('community_memberships')
+                ->where('community_id', $community->id)
+                ->where('status', 'active')
+                ->count();
+
+        // isJoined untuk viewer (opsional kalau ada auth)
+        $isJoined = false;
+        if ($viewerUserId) {
+            $isJoined = DB::table('community_memberships')
+                ->where('community_id', $community->id)
+                ->where('user_id', $viewerUserId)
+                ->where('status', 'active')
+                ->exists();
+        }
+
+        return [
+            'id'            => $community->id,
+            'name'          => $community->name,
+            'description'   => $community->description,
+            'logo'          => $community->logo,         // FE kamu sudah handle /storage/
+            'category'      => $community->category ?? null,
+            'privacy'       => $community->privacy ?? null,
+            'is_verified'   => (bool) ($community->is_verified ?? false),
+            'members'       => $members,
+            'isJoined'      => (bool) $isJoined,
+
+            // === penting untuk FE ===
+            'admin_contact_ids' => $community->adminContacts->pluck('id')->values(),
+            'admin_contacts'    => $community->adminContacts->map(function ($u) {
+                return [
+                    'id'    => $u->id,
+                    'name'  => $u->name,
+                    'email' => $u->email,
+                    'phone' => $u->phone,
+                    'role'  => ['name' => optional($u->role)->name],
+                ];
+            })->values(),
+
+            'created_at'    => $community->created_at,
+            'updated_at'    => $community->updated_at,
+        ];
+    }
+
+    /**
      * List all communities (public/admin)
      */
     public function index(Request $request)
     {
-        $query = Community::query();
+        $query = Community::query()->with('adminContacts.role');
 
         // Optional: search
         if ($request->filled('search')) {
@@ -28,19 +81,31 @@ class CommunityController extends Controller
         // Optional: sorting
         if ($request->filled('sortBy') && $request->filled('sortDirection')) {
             $query->orderBy($request->sortBy, $request->sortDirection);
+        } else {
+            $query->latest();
         }
 
         // Pagination optional
         if ($request->has('paginate')) {
             $paginate = (int) ($request->paginate ?? 10);
             $data = $query->paginate($paginate);
+
+            $viewerId = optional($request->user())->id;
+            $items = collect($data->items())->map(function ($c) use ($viewerId) {
+                return $this->shapeCommunity($c, $viewerId);
+            });
+
             return response()->json([
-                'data' => $data->items(),
+                'data' => $items,
                 'total_row' => $data->total(),
             ]);
         }
 
-        $data = $query->get();
+        $viewerId = optional($request->user())->id;
+        $data = $query->get()->map(function ($c) use ($viewerId) {
+            return $this->shapeCommunity($c, $viewerId);
+        });
+
         return response()->json([
             'data' => $data,
             'total_row' => $data->count(),
@@ -50,30 +115,32 @@ class CommunityController extends Controller
     /**
      * GET /api/communities/with-membership (auth required)
      * Return communities with fields: members (count) & isJoined (bool)
-     * Response shape: { data: [...] }
      */
     public function withMembership(Request $request)
     {
         try {
             $user = $request->user();
 
-            $communities = Community::select([
+            $communities = Community::with('adminContacts.role')
+                ->select([
                     'communities.*',
-                    DB::raw('(SELECT COUNT(*) FROM community_memberships WHERE community_id = communities.id AND status = "active") AS members'),
-                    DB::raw('CASE WHEN cm.id IS NOT NULL THEN 1 ELSE 0 END AS isJoined'),
+                    DB::raw('(SELECT COUNT(*) FROM community_memberships WHERE community_id = communities.id AND status = "active") AS members_count'),
+                    DB::raw('CASE WHEN cm.id IS NOT NULL THEN 1 ELSE 0 END AS isJoined_dummy'),
                 ])
                 ->leftJoin('community_memberships AS cm', function ($join) use ($user) {
                     $join->on('communities.id', '=', 'cm.community_id')
                         ->where('cm.user_id', '=', $user->id)
                         ->where('cm.status', '=', 'active');
                 })
-                ->get()
-                ->map(function ($c) {
-                    $c->isJoined = (bool) $c->isJoined;
-                    return $c;
-                });
+                ->get();
 
-            return response()->json(['data' => $communities]);
+            $shaped = $communities->map(function ($c) use ($user) {
+                // agar shapeCommunity pakai members_count yang sudah dipilih
+                $c->members_count = (int) ($c->members_count ?? 0);
+                return $this->shapeCommunity($c, $user->id);
+            });
+
+            return response()->json(['data' => $shaped]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -91,7 +158,6 @@ class CommunityController extends Controller
             $user = $request->user();
             $community = Community::findOrFail($id);
 
-            // Already a member?
             if ($community->hasMember($user)) {
                 return response()->json([
                     'success' => false,
@@ -100,24 +166,16 @@ class CommunityController extends Controller
                 ], 422);
             }
 
-            // Add user to community (helper on model)
             $membership = $community->addMember($user);
 
-            // Refresh community with updated members count
-            $updatedCommunity = Community::select([
-                    'communities.*',
-                    DB::raw('(SELECT COUNT(*) FROM community_memberships WHERE community_id = communities.id AND status = "active") AS members'),
-                ])
-                ->where('communities.id', $id)
-                ->first();
-
+            $community->load('adminContacts.role');
             return response()->json([
                 'success' => true,
                 'message' => 'Berhasil bergabung dengan komunitas',
                 'data' => [
-                    'community' => $updatedCommunity,
-                    'membership' => $membership,
-                    'isJoined' => true,
+                    'community'   => $this->shapeCommunity($community->fresh(), $user->id),
+                    'membership'  => $membership,
+                    'isJoined'    => true,
                 ],
             ]);
         } catch (\Exception $e) {
@@ -175,24 +233,29 @@ class CommunityController extends Controller
         try {
             $user = $request->user();
 
-            $communities = Community::select([
+            $communities = Community::with('adminContacts.role')
+                ->select([
                     'communities.*',
-                    DB::raw('(SELECT COUNT(*) FROM community_memberships WHERE community_id = communities.id AND status = "active") AS members'),
+                    DB::raw('(SELECT COUNT(*) FROM community_memberships WHERE community_id = communities.id AND status = "active") AS members_count'),
                     'cm.joined_at',
                 ])
                 ->join('community_memberships AS cm', 'communities.id', '=', 'cm.community_id')
                 ->where('cm.user_id', $user->id)
                 ->where('cm.status', 'active')
                 ->orderBy('cm.joined_at', 'desc')
-                ->get()
-                ->map(function ($c) {
-                    $c->isJoined = true;
-                    return $c;
-                });
+                ->get();
+
+            $shaped = $communities->map(function ($c) use ($user) {
+                $c->members_count = (int) ($c->members_count ?? 0);
+                $payload = $this->shapeCommunity($c, $user->id);
+                $payload['joined_at'] = $c->joined_at;
+                $payload['isJoined']  = true;
+                return $payload;
+            });
 
             return response()->json([
                 'success' => true,
-                'data' => $communities,
+                'data' => $shaped,
             ]);
         } catch (\Exception $e) {
             return response()->json([
@@ -203,18 +266,21 @@ class CommunityController extends Controller
     }
 
     /**
-     * POST /api/admin/communities (or as you wired)
+     * POST /api/admin/communities
      */
     public function store(Request $request)
     {
         try {
             $validator = Validator::make($request->all(), [
-                'name'        => 'required|string|max:255',
-                'description' => 'nullable|string',
-                'logo'        => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
-                'category'    => 'nullable|string|max:100',
-                'privacy'     => 'nullable|in:public,private',
-                'is_verified' => 'nullable|boolean',
+                'name'                => 'required|string|max:255',
+                'description'         => 'nullable|string',
+                'logo'                => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
+                'category'            => 'nullable|string|max:100',
+                'privacy'             => 'nullable|in:public,private',
+                'is_verified'         => 'nullable|boolean',
+                // === Tambahan: kontak admin ===
+                'admin_contact_ids'   => 'nullable|array',
+                'admin_contact_ids.*' => 'integer|exists:users,id',
             ]);
 
             if ($validator->fails()) {
@@ -230,16 +296,30 @@ class CommunityController extends Controller
             // Handle logo upload
             if ($request->hasFile('logo')) {
                 $validated['logo'] = $request->file('logo')->store('communities', 'public');
+            } elseif (is_string($request->input('logo')) && $request->input('logo') !== '') {
+                // dukung string path (opsional)
+                $validated['logo'] = $request->input('logo');
             }
 
-            $community = Community::create($validated);
+            DB::beginTransaction();
+
+            $community = Community::create(collect($validated)->except(['admin_contact_ids'])->toArray());
+
+            // Sinkronisasi admin contacts (pivot)
+            $ids = collect($validated['admin_contact_ids'] ?? [])->unique()->values();
+            if ($ids->isNotEmpty()) {
+                $community->adminContacts()->sync($ids->all());
+            }
+
+            DB::commit();
 
             return response()->json([
                 'success' => true,
                 'message' => 'Community created successfully',
-                'data'    => $community,
+                'data'    => $this->shapeCommunity($community->fresh()),
             ], 201);
         } catch (\Exception $e) {
+            DB::rollBack();
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to create community: ' . $e->getMessage(),
@@ -250,18 +330,15 @@ class CommunityController extends Controller
     /**
      * GET /api/communities/{id} (public)
      */
-    public function show($id)
+    public function show(Request $request, $id)
     {
         try {
-            $community = Community::select([
-                    'communities.*',
-                    DB::raw('(SELECT COUNT(*) FROM community_memberships WHERE community_id = communities.id AND status = "active") AS members'),
-                ])
-                ->findOrFail($id);
+            $community = Community::with('adminContacts.role')->findOrFail($id);
+            $payload = $this->shapeCommunity($community, optional($request->user())->id);
 
             return response()->json([
                 'success' => true,
-                'data'    => $community,
+                'data'    => $payload,
             ]);
         } catch (\Exception $e) {
             return response()->json([
@@ -278,12 +355,15 @@ class CommunityController extends Controller
     {
         try {
             $validator = Validator::make($request->all(), [
-                'name'        => 'required|string|max:255',
-                'description' => 'nullable|string',
-                'logo'        => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
-                'category'    => 'nullable|string|max:100',
-                'privacy'     => 'nullable|in:public,private',
-                'is_verified' => 'nullable|boolean',
+                'name'                => 'required|string|max:255',
+                'description'         => 'nullable|string',
+                'logo'                => 'nullable', // file image ATAU string path
+                'category'            => 'nullable|string|max:100',
+                'privacy'             => 'nullable|in:public,private',
+                'is_verified'         => 'nullable|boolean',
+                // === Tambahan: kontak admin ===
+                'admin_contact_ids'   => 'nullable|array',
+                'admin_contact_ids.*' => 'integer|exists:users,id',
             ]);
 
             if ($validator->fails()) {
@@ -297,22 +377,39 @@ class CommunityController extends Controller
             $community = Community::findOrFail($id);
             $validated = $validator->validated();
 
-            // Handle logo upload (replace)
+            DB::beginTransaction();
+
+            // Handle logo upload / replace
             if ($request->hasFile('logo')) {
                 if ($community->logo && Storage::disk('public')->exists($community->logo)) {
                     Storage::disk('public')->delete($community->logo);
                 }
                 $validated['logo'] = $request->file('logo')->store('communities', 'public');
+            } elseif (is_string($request->input('logo'))) {
+                $validated['logo'] = $request->input('logo');
+            } else {
+                // jika tidak mengirim field 'logo', biarkan apa adanya
+                unset($validated['logo']);
             }
 
-            $community->update($validated);
+            // Update fields utama
+            $community->update(collect($validated)->except(['admin_contact_ids'])->toArray());
+
+            // Sinkronisasi admin contacts bila ada di request
+            if ($request->has('admin_contact_ids')) {
+                $ids = collect($validated['admin_contact_ids'] ?? [])->unique()->values();
+                $community->adminContacts()->sync($ids->all());
+            }
+
+            DB::commit();
 
             return response()->json([
                 'success' => true,
                 'message' => 'Community updated successfully',
-                'data'    => $community,
+                'data'    => $this->shapeCommunity($community->fresh()),
             ]);
         } catch (\Exception $e) {
+            DB::rollBack();
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to update community: ' . $e->getMessage(),
@@ -328,9 +425,14 @@ class CommunityController extends Controller
         try {
             $community = Community::findOrFail($id);
 
+            // bersihkan logo (opsional)
             if ($community->logo && Storage::disk('public')->exists($community->logo)) {
                 Storage::disk('public')->delete($community->logo);
             }
+
+            // hapus pivot admin_contacts ikut terhapus oleh FK cascade (jika di-setup),
+            // kalau belum, bisa manual:
+            // $community->adminContacts()->detach();
 
             $community->delete();
 

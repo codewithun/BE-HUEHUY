@@ -130,4 +130,11 @@ class Community extends Model
             ->where('status', 'active')
             ->count();
     }
+
+    public function adminContacts()
+    {
+        // relasi ke user yang jadi kontak admin/manager tenant
+        return $this->belongsToMany(User::class, 'community_admin_contacts')
+            ->withTimestamps();
+    }
 }

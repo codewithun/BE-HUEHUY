@@ -25,6 +25,7 @@ use App\Http\Controllers\Admin\VoucherController;
 use App\Http\Controllers\Admin\CommunityController; // <- dipakai di bawah
 use App\Http\Controllers\Admin\EventController;
 use App\Http\Controllers\Admin\VoucherItemController;
+use App\Http\Controllers\Admin\UserController as AdminUserController; // <- tambahkan
 
 /**
  * Unauthorized helper
@@ -176,19 +177,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // === Notifications ===
     Route::get('/notification', [NotificationController::class, 'index']);
-
-    // tandai satu notifikasi sebagai terbaca
-    Route::post('/notification/{id}/read', [NotificationController::class, 'markAsRead'])
-        ->whereNumber('id');
-
-    // tandai semua notifikasi user sebagai terbaca
+    Route::post('/notification/{id}/read', [NotificationController::class, 'markAsRead'])->whereNumber('id');
     Route::post('/notification/read-all', [NotificationController::class, 'markAllAsRead']);
-
-    // hapus SATU notifikasi (hard delete)
-    Route::delete('/notification/{id}', [NotificationController::class, 'destroy'])
-        ->whereNumber('id');
-
-    // (opsional) hapus semua notifikasi user (per type bila dikirim ?type=merchant|hunter|voucher|promo|all)
+    Route::delete('/notification/{id}', [NotificationController::class, 'destroy'])->whereNumber('id');
     Route::delete('/notification', [NotificationController::class, 'destroyAll'] ?? fn() => abort(405));
 
     // === Cubes ===
@@ -296,12 +287,30 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // === Voucher Items (claim) ===
     Route::post('/vouchers/{voucher}/claim', [VoucherItemController::class, 'claim'])->whereNumber('voucher');
-    Route::post('/admin/voucher-items/{id}/redeem', [VoucherItemController::class, 'redeem']);
+    Route::post('/admin/voucher-items/{id}/redeem', [VoucherItemController::class, 'redeem'])->whereNumber('id');
 
     // User Activity
     Route::prefix('user')->group(function () {
         Route::get('/promo-validations', [PromoController::class, 'userValidationHistory']);
         Route::get('/voucher-validations', [VoucherController::class, 'userValidationHistory']);
+    });
+
+    /**
+     * =======================
+     * ADMIN BUNDLE (auth)
+     * =======================
+     */
+    Route::prefix('admin')->group(function () {
+        // === USERS (untuk MultiSelectDropdown admin contacts) ===
+        // Contoh: /api/admin/users?only_admin_contacts=true&paginate=all
+        // atau    /api/admin/users?roles[]=admin&roles[]=manager_tenant&paginate=all
+        Route::get('/users', [AdminUserController::class, 'index']);
+
+        // === COMMUNITIES CRUD (Admin) ===
+        Route::get('/communities', [CommunityController::class, 'index']);
+        Route::post('/communities', [CommunityController::class, 'store']);
+        Route::put('/communities/{id}', [CommunityController::class, 'update'])->whereNumber('id');
+        Route::delete('/communities/{id}', [CommunityController::class, 'destroy'])->whereNumber('id');
     });
 
     // Admin/Corporate/Integration bundle

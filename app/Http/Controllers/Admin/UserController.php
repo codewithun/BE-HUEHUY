@@ -10,32 +10,62 @@ use Illuminate\Support\Facades\DB;
 
 class UserController extends Controller
 {
+    /**
+     * Helper: terapkan filter role yang fleksibel.
+     * roles[] bisa berisi: admin, manager tenant, manager_tenant, dll.
+     */
+    private function applyRoleFilter($query, array $roles)
+    {
+        // Normalisasi nama role -> lowercase & trim
+        $roles = collect($roles)->filter()->map(function ($r) {
+            return strtolower(trim($r));
+        })->unique()->values()->all();
+
+        if (empty($roles)) return $query;
+
+        // Asumsi: relasi User::role()->name
+        return $query->whereHas('role', function ($q) use ($roles) {
+            $q->whereIn(DB::raw('LOWER(name)'), $roles);
+        });
+    }
+
     // ========================================>
     // ## Display a listing of the resource.
     // ========================================>
     public function index(Request $request)
-    {   
-        // ? Initial params
+    {
+        // Params default
         $sortDirection = $request->get("sortDirection", "DESC");
-        $sortby = $request->get("sortBy", "created_at");
-        $paginate = $request->get("paginate", 10);
-        $filter = $request->get("filter", null);
+        $sortby        = $request->get("sortBy", "created_at");
 
-        // ? Preparation
+        // paginate:
+        // - angka (default 10) => paginate biasa
+        // - 'all' atau 0 => ambil semua data (untuk MultiSelectDropdown)
+        $paginateRaw   = $request->get("paginate", 10);
+        $paginateAll   = ($paginateRaw === 'all' || (int)$paginateRaw === 0);
+        $paginate      = $paginateAll ? 0 : (int)$paginateRaw;
+
+        $filter        = $request->get("filter", null);
+        $onlyContacts  = $request->boolean('only_admin_contacts', false);
+        $roleFilters   = (array) $request->get('roles', []); // roles[]=admin&roles[]=manager_tenant
+
+        // aliases (kalau kamu pakai remark_column)
         $columnAliases = [];
 
-        // ? Begin
+        // Model & query dasar
         $model = new User();
+        $selectable = property_exists($model, 'selectable') && is_array($model->selectable)
+            ? $model->selectable
+            : ['*']; // fallback kalau properti selectable nggak ada
+
         $query = User::with('role');
 
-        // ? When search
-        if ($request->get("search") != "") {
+        // ==== Search bawaanmu =====
+        if (filled($request->get("search"))) {
             $query = $this->search($request->get("search"), $model, $query);
-        } else {
-            $query = $query;
         }
 
-        // ? When Filter
+        // ==== Filter bawaanmu =====
         if ($filter) {
             $filters = json_decode($filter);
             foreach ($filters as $column => $value) {
@@ -43,23 +73,76 @@ class UserController extends Controller
             }
         }
 
-        // ? Sort & executing with pagination
-        $query = $query->orderBy($this->remark_column($sortby, $columnAliases), $sortDirection)
-            ->select($model->selectable)->paginate($paginate);
+        // ==== Filter admin contacts (role) ====
+        if ($onlyContacts && empty($roleFilters)) {
+            // default FE: admin + manager tenant
+            $roleFilters = ['admin', 'manager tenant', 'manager_tenant'];
+        }
+        if (!empty($roleFilters)) {
+            $query = $this->applyRoleFilter($query, $roleFilters);
+        }
 
-        // ? When empty
-        if (empty($query->items())) {
+        // ==== Sorting ====
+        $query = $query->orderBy($this->remark_column($sortby, $columnAliases), $sortDirection);
+
+        // ==== Eksekusi ====
+        if ($paginateAll) {
+            $users = $query->select($selectable)->get();
+
+            if ($users->isEmpty()) {
+                return response([
+                    "message" => "empty data",
+                    "data"    => [],
+                ], 200);
+            }
+
+            // Payload ringkas untuk FE
+            $data = $users->map(function ($u) {
+                return [
+                    'id'    => $u->id,
+                    'name'  => $u->name,
+                    'email' => $u->email,
+                    'phone' => $u->phone,
+                    'role'  => [
+                        'name' => optional($u->role)->name
+                    ],
+                ];
+            });
+
+            return response([
+                "message"   => "success",
+                "data"      => $data,
+                "total_row" => $data->count(),
+            ]);
+        }
+
+        // Paginate biasa
+        $page = $query->select($selectable)->paginate($paginate);
+
+        if (empty($page->items())) {
             return response([
                 "message" => "empty data",
-                "data" => [],
+                "data"    => [],
             ], 200);
         }
 
-        // ? When success
+        // Payload ringkas untuk FE
+        $items = collect($page->items())->map(function ($u) {
+            return [
+                'id'    => $u->id,
+                'name'  => $u->name,
+                'email' => $u->email,
+                'phone' => $u->phone,
+                'role'  => [
+                    'name' => optional($u->role)->name
+                    ],
+            ];
+        });
+
         return response([
-            "message" => "success",
-            "data" => $query->all(),
-            "total_row" => $query->total(),
+            "message"   => "success",
+            "data"      => $items,
+            "total_row" => $page->total(),
         ]);
     }
 
@@ -70,12 +153,12 @@ class UserController extends Controller
     {
         // ? Validate request
         $validation = $this->validation($request->all(), [
-            'role_id' => 'nullable|numeric|exists:roles,id',
-            'name' => 'nullable|string|max:100',
-            'email' => 'nullable|email',
-            'phone' => 'nullable|string|max:100',
+            'role_id'  => 'nullable|numeric|exists:roles,id',
+            'name'     => 'nullable|string|max:100',
+            'email'    => 'nullable|email',
+            'phone'    => 'nullable|string|max:100',
             'password' => 'nullable|string|min:8|max:50|confirmed',
-            'image' => 'nullable',
+            'image'    => 'nullable',
         ]);
 
         if ($validation) return $validation;
@@ -112,7 +195,7 @@ class UserController extends Controller
 
         return response([
             "message" => "success",
-            "data" => $model
+            "data"    => $model
         ], 201);
     }
 
@@ -128,11 +211,11 @@ class UserController extends Controller
 
         // ? Validate request
         $validation = $this->validation($request->all(), [
-            'name' => 'nullable|string|max:100',
-            'email' => 'nullable|email',
-            'phone' => 'nullable|string|max:100',
+            'name'     => 'nullable|string|max:100',
+            'email'    => 'nullable|email',
+            'phone'    => 'nullable|string|max:100',
             'password' => 'nullable|string|min:8|max:50|confirmed',
-            'image' => 'nullable',
+            'image'    => 'nullable',
         ]);
 
         if ($validation) return $validation;
@@ -144,7 +227,7 @@ class UserController extends Controller
         if ($request->password) {
             $model->password = bcrypt($request->password);
         }
-        
+
         // * Check if has upload file
         if ($request->hasFile('image')) {
             $model->picture_source = $this->upload_file($request->file('image'), 'profile');
@@ -168,7 +251,7 @@ class UserController extends Controller
 
         return response([
             "message" => "success",
-            "data" => $model
+            "data"    => $model
         ]);
     }
 
@@ -195,7 +278,7 @@ class UserController extends Controller
 
         return response([
             "message" => "Success",
-            "data" => $model
+            "data"    => $model
         ]);
     }
 
@@ -210,7 +293,7 @@ class UserController extends Controller
 
         // ? Validate request
         $validation = $this->validation($request->all(), [
-            'point' => 'required|numeric|min:0',
+            'point'           => 'required|numeric|min:0',
             'log_description' => 'nullable|string|max:255'
         ]);
 
@@ -233,8 +316,7 @@ class UserController extends Controller
 
         return response([
             "message" => "success",
-            "data" => $model
+            "data"    => $model
         ]);
     }
 }
-        

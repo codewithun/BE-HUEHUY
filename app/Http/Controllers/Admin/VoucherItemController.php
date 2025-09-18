@@ -12,6 +12,8 @@ use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Log;
 
 class VoucherItemController extends Controller
 {
@@ -187,70 +189,73 @@ class VoucherItemController extends Controller
      */
     public function redeem(Request $request, $id)
     {
-        $item = VoucherItem::with('voucher')->find($id);
-        if (! $item) {
-            return response()->json(['success' => false, 'message' => 'Voucher item tidak ditemukan'], 404);
-        }
+        try {
+            $item = VoucherItem::with('voucher')->find($id);
+            if (! $item) {
+                return response()->json(['success' => false, 'message' => 'Voucher item tidak ditemukan'], 404);
+            }
 
-        // Sudah pernah digunakan
-        if (!is_null($item->used_at) || $item->status === 'redeemed' || $item->status === 'used') {
-            return response()->json(['success' => false, 'message' => 'Voucher sudah digunakan'], 409);
-        }
+            if (!is_null($item->used_at) || ($item->status ?? null) === 'redeemed' || ($item->status ?? null) === 'used') {
+                return response()->json(['success' => false, 'message' => 'Voucher sudah digunakan'], 409);
+            }
 
-        $validator = Validator::make($request->all(), [
-            'code' => 'required|string',
-        ], [
-            'code.required' => 'Kode unik wajib diisi.',
-            'code.string'   => 'Kode unik tidak valid.',
-        ]);
+            $validator = Validator::make($request->all(), [
+                'code' => 'required|string',
+            ], [
+                'code.required' => 'Kode unik wajib diisi.',
+                'code.string'   => 'Kode unik tidak valid.',
+            ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => $validator->errors()->first() ?? 'Validasi gagal',
-                'errors'  => $validator->errors(),
-            ], 422);
-        }
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $validator->errors()->first() ?? 'Validasi gagal',
+                    'errors'  => $validator->errors(),
+                ], 422);
+            }
 
-        // Cek kode voucher item
-        $inputCode = trim($request->input('code'));
-        if (strcasecmp($inputCode, (string) $item->code) !== 0) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Kode unik tidak valid.',
-            ], 422);
-        }
+            $inputCode = trim($request->input('code'));
 
-        $voucher = $item->voucher ?? Voucher::find($item->voucher_id);
-
-        $result = DB::transaction(function () use ($item, $voucher) {
-            // Decrement stok jika stok dikelola (tidak null)
-            if ($voucher && !is_null($voucher->stock)) {
-                $affected = Voucher::where('id', $voucher->id)
-                    ->where('stock', '>', 0)
-                    ->decrement('stock');
-
-                if ($affected === 0) {
-                    return ['ok' => false, 'reason' => 'Stok voucher habis'];
+            // Izinkan match ke item.code atau kode master voucher (opsional)
+            $voucher = $item->voucher ?? Voucher::find($item->voucher_id);
+            $validCodes = array_filter([$item->code, optional($voucher)->code]);
+            $isMatch = false;
+            foreach ($validCodes as $c) {
+                if (strcasecmp($inputCode, (string) $c) === 0) {
+                    $isMatch = true;
+                    break;
                 }
             }
-
-            // Tandai sebagai digunakan
-            $item->used_at = Carbon::now();
-            // Opsional jika ada kolom status
-            if (property_exists($item, 'status')) {
-                $item->status = 'used';
+            if (! $isMatch) {
+                return response()->json(['success' => false, 'message' => 'Kode unik tidak valid.'], 422);
             }
-            $item->save();
 
-            return ['ok' => true, 'item' => $item];
-        });
+            $result = DB::transaction(function () use ($item) {
+                // JANGAN decrement stock di sini (stok sudah berkurang saat klaim)
 
-        if (! $result['ok']) {
-            return response()->json(['success' => false, 'message' => $result['reason'] ?? 'Stok voucher habis'], 409);
+                if (Schema::hasColumn('voucher_items', 'used_at')) {
+                    $item->used_at = Carbon::now();
+                }
+                if (Schema::hasColumn('voucher_items', 'status')) {
+                    $item->status = 'used';
+                }
+                $item->save();
+
+                return ['ok' => true, 'item' => $item];
+            });
+
+            if (! $result['ok']) {
+                return response()->json(['success' => false, 'message' => 'Gagal memproses voucher'], 409);
+            }
+
+            return response()->json(['success' => true, 'data' => $result['item']]);
+        } catch (\Throwable $e) {
+            Log::error('Error redeem voucher item: '.$e->getMessage(), ['id' => $id]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal memproses voucher: '.$e->getMessage()
+            ], 500);
         }
-
-        return response()->json(['success' => true, 'data' => $result['item']]);
     }
 
     /**

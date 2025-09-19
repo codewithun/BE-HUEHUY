@@ -10,7 +10,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\DB; // ADD
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Carbon;
 
 class PromoController extends Controller
@@ -20,7 +20,6 @@ class PromoController extends Controller
      */
     private function transformPromoImageUrls($promo)
     {
-        // Handle main promo image
         if ($promo->image) {
             if (Storage::disk('public')->exists($promo->image)) {
                 $promo->image_url = asset('storage/' . $promo->image);
@@ -53,7 +52,6 @@ class PromoController extends Controller
                     });
                 });
 
-            // Optional filters like in voucher index
             if ($filter) {
                 $filters = is_string($filter) ? json_decode($filter, true) : (array) $filter;
                 foreach ($filters as $column => $value) {
@@ -75,7 +73,11 @@ class PromoController extends Controller
             }
 
             $data  = $query->orderBy($sortby, $sortDirection)->paginate($paginate);
-            $items = collect($data->items())->map(fn ($p) => $this->transformPromoImageUrls($p))->values();
+            $items = collect($data->items())->map(function ($p) {
+                $p = $this->transformPromoImageUrls($p);
+                $p->validation_type = $p->validation_type ?? 'auto'; // penting
+                return $p;
+            })->values();
 
             if ($items->isEmpty()) {
                 return response([
@@ -107,6 +109,7 @@ class PromoController extends Controller
         }
 
         $promo = $this->transformPromoImageUrls($promo);
+        $promo->validation_type = $promo->validation_type ?? 'auto';
 
         return response([
             'message' => 'Success',
@@ -166,6 +169,7 @@ class PromoController extends Controller
                 'updated_at' => $promo->updated_at ?? null,
                 'image_url' => $promo->image_url,
                 'image' => $promo->image,
+                'validation_type' => $promo->validation_type ?? 'auto',
             ];
 
             if (isset($promo->community)) {
@@ -182,7 +186,6 @@ class PromoController extends Controller
                 $responseData['discount_percentage'] = $promo->discount_percentage;
             }
 
-            // FIX: konsisten pakai relasi 'validations' seperti Voucher
             try {
                 $claimedCount = method_exists($promo, 'validations')
                     ? $promo->validations()->count()
@@ -215,7 +218,6 @@ class PromoController extends Controller
 
     public function store(Request $request)
     {
-        // Normalisasi seperti di VoucherController
         $request->merge([
             'community_id'     => in_array($request->input('community_id'), [null, '', 'null', 'undefined'], true) ? null : $request->input('community_id'),
             'always_available' => in_array($request->input('always_available'), [1, '1', true, 'true'], true) ? '1' : '0',
@@ -231,12 +233,17 @@ class PromoController extends Controller
             'always_available'=> 'in:0,1,true,false',
             'stock'           => 'nullable|integer|min:0',
             'promo_type'      => 'required|string|in:offline,online',
+            'validation_type' => 'required|string|in:auto,manual',
             'location'        => 'nullable|string',
             'owner_name'      => 'required|string|max:255',
             'owner_contact'   => 'required|string|max:255',
             'image'           => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
             'community_id'    => 'required|exists:communities,id',
-            'code'            => 'nullable|string|unique:promos,code',
+            'code'            => 'nullable|string|unique:promos,code|required_if:validation_type,manual',
+        ], [
+            'validation_type.required' => 'Tipe validasi wajib diisi.',
+            'validation_type.in'       => 'Tipe validasi harus auto atau manual.',
+            'code.required_if'         => 'Kode wajib diisi untuk tipe validasi manual.',
         ]);
 
         if ($validator->fails()) {
@@ -257,7 +264,13 @@ class PromoController extends Controller
             $data['promo_distance']   = isset($data['promo_distance']) ? (float) $data['promo_distance'] : 0;
             $data['stock']            = isset($data['stock']) ? (int) $data['stock'] : 0;
 
-            // Generate code bila kosong (unique-ish)
+            // normalisasi validation_type
+            $data['validation_type'] = strtolower($data['validation_type'] ?? 'auto');
+            if (!in_array($data['validation_type'], ['auto', 'manual'], true)) {
+                $data['validation_type'] = 'auto';
+            }
+
+            // Generate code bila kosong (auto)
             if (empty($data['code'])) {
                 do {
                     $data['code'] = 'PRM-' . strtoupper(bin2hex(random_bytes(3)));
@@ -298,7 +311,6 @@ class PromoController extends Controller
 
         Log::info('Promo update request data:', $request->all());
 
-        // Normalisasi seperti voucher
         $request->merge([
             'community_id'     => in_array($request->input('community_id'), [null, '', 'null', 'undefined'], true) ? null : $request->input('community_id'),
             'always_available' => in_array($request->input('always_available'), [1, '1', true, 'true'], true) ? '1' : (in_array($request->input('always_available'), [0, '0', false, 'false'], true) ? '0' : null),
@@ -314,12 +326,16 @@ class PromoController extends Controller
             'always_available'=> 'nullable|in:0,1,true,false',
             'stock'           => 'nullable|integer|min:0',
             'promo_type'      => 'sometimes|required|string|in:offline,online',
+            'validation_type' => 'nullable|string|in:auto,manual',
             'location'        => 'nullable|string',
             'owner_name'      => 'sometimes|required|string|max:255',
             'owner_contact'   => 'sometimes|required|string|max:255',
             'image'           => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
             'community_id'    => 'sometimes|required|exists:communities,id',
-            'code'            => 'nullable|string|unique:promos,code,' . $id,
+            'code'            => 'nullable|string|unique:promos,code,' . $id . '|required_if:validation_type,manual',
+        ], [
+            'validation_type.in' => 'Tipe validasi harus auto atau manual.',
+            'code.required_if'   => 'Kode wajib diisi untuk tipe validasi manual.',
         ]);
 
         if ($validator->fails()) {
@@ -340,12 +356,10 @@ class PromoController extends Controller
 
             $data = $validator->validated();
 
-            // Preserve existing community_id if not provided
             if (!array_key_exists('community_id', $data) || $data['community_id'] === null) {
                 $data['community_id'] = $promo->community_id;
             }
 
-            // Normalize booleans & numerics
             if (array_key_exists('always_available', $data) && $data['always_available'] !== null) {
                 $data['always_available'] = in_array($data['always_available'], [1, '1', true, 'true'], true);
             }
@@ -356,7 +370,16 @@ class PromoController extends Controller
                 $data['stock'] = (int) $data['stock'];
             }
 
-            // Handle image upload
+            // normalisasi validation_type (pakai lama jika tidak dikirim)
+            if (!array_key_exists('validation_type', $data) || empty($data['validation_type'])) {
+                $data['validation_type'] = $promo->validation_type ?? 'auto';
+            } else {
+                $data['validation_type'] = strtolower($data['validation_type']);
+                if (!in_array($data['validation_type'], ['auto', 'manual'], true)) {
+                    $data['validation_type'] = $promo->validation_type ?? 'auto';
+                }
+            }
+
             if ($request->hasFile('image')) {
                 if (!empty($promo->image)) {
                     Storage::disk('public')->delete($promo->image);
@@ -418,12 +441,12 @@ class PromoController extends Controller
     public function indexByCommunity($communityId)
     {
         $promos = Promo::where('community_id', $communityId)->get();
-        
-        // Transform image URLs
         $promos = $promos->map(function($promo) {
-            return $this->transformPromoImageUrls($promo);
+            $promo = $this->transformPromoImageUrls($promo);
+            $promo->validation_type = $promo->validation_type ?? 'auto';
+            return $promo;
         });
-        
+
         return response()->json([
             'success' => true,
             'data' => $promos
@@ -433,13 +456,10 @@ class PromoController extends Controller
     // store promo under a specific community (creates new promo and assigns)
     public function storeForCommunity(Request $request, $communityId)
     {
-        // Jika request ingin attach existing promo, delegasikan ke assignToCommunity
         if ($request->boolean('attach_existing') || $request->has('promo_id') && !$request->has('title')) {
-            // pastikan promo_id ada
             return $this->assignToCommunity($request, $communityId);
         }
 
-        // reuse store validation but force community_id for creation
         $request->merge(['community_id' => $communityId]);
 
         return $this->store($request);
@@ -447,7 +467,6 @@ class PromoController extends Controller
 
     /**
      * Returns promos available to be assigned to the community.
-     * (promos that are unassigned OR already belong to the community)
      */
     public function availableForCommunity($communityId)
     {
@@ -461,10 +480,6 @@ class PromoController extends Controller
         ]);
     }
 
-    /**
-     * Assign an existing promo to a community (set community_id).
-     * Body: { promo_id: int }
-     */
     public function assignToCommunity(Request $request, $communityId)
     {
         $validator = Validator::make($request->all(), [
@@ -481,7 +496,6 @@ class PromoController extends Controller
 
         $promo = Promo::findOrFail($request->input('promo_id'));
 
-        // optional: prevent assigning if already assigned to other community
         if ($promo->community_id && $promo->community_id != $communityId) {
             return response()->json([
                 'success' => false,
@@ -499,9 +513,6 @@ class PromoController extends Controller
         ]);
     }
 
-    /**
-     * Detach a promo from a community (set community_id = null).
-     */
     public function detachFromCommunity($communityId, $promoId)
     {
         $promo = Promo::where('id', $promoId)->where('community_id', $communityId)->first();
@@ -523,10 +534,6 @@ class PromoController extends Controller
         ]);
     }
 
-    /**
-     * Show single promo scoped to a community.
-     * GET /api/communities/{community}/promos/{promo}
-     */
     public function showForCommunity($communityId, $promoId)
     {
         try {
@@ -585,6 +592,7 @@ class PromoController extends Controller
                 'updated_at' => $promo->updated_at ?? null,
                 'image_url' => $promo->image_url,
                 'image' => $promo->image,
+                'validation_type' => $promo->validation_type ?? 'auto',
             ];
 
             if (isset($promo->original_price)) {
@@ -604,7 +612,6 @@ class PromoController extends Controller
             ];
 
             try {
-                // FIX: konsisten pakai relasi 'validations'
                 $claimedCount = method_exists($promo, 'validations')
                     ? $promo->validations()->count()
                     : PromoValidation::where('promo_id', $promo->id)->count();
@@ -659,7 +666,6 @@ class PromoController extends Controller
             return response()->json(['success' => false, 'message' => 'Kode unik tidak valid.'], 422);
         }
 
-        // Aktifkah?
         $now   = Carbon::now();
         $start = $promo->start_date ? Carbon::parse($promo->start_date) : null;
         $end   = $promo->end_date ? Carbon::parse($promo->end_date) : null;
@@ -677,14 +683,12 @@ class PromoController extends Controller
             return response()->json(['success' => false, 'message' => 'Promo tidak aktif atau sudah berakhir'], 422);
         }
 
-        // Cegah validasi ganda oleh user yg sama
         $already = PromoValidation::where('promo_id', $promo->id)->where('user_id', $userId)->exists();
         if ($already) {
             return response()->json(['success' => false, 'message' => 'Anda sudah memvalidasi promo ini'], 409);
         }
 
         $result = DB::transaction(function () use ($promo, $userId, $now) {
-            // Kurangi stok jika stok dikelola
             if (!is_null($promo->stock)) {
                 $affected = Promo::where('id', $promo->id)->where('stock', '>', 0)->decrement('stock');
                 if ($affected === 0) {
@@ -692,7 +696,6 @@ class PromoController extends Controller
                 }
             }
 
-            // Catat history validasi
             $pv = PromoValidation::create([
                 'promo_id'      => $promo->id,
                 'user_id'       => $userId,
@@ -700,7 +703,6 @@ class PromoController extends Controller
                 'validated_at'  => $now,
             ]);
 
-            // Tandai item milik user sebagai redeemed, atau buat baru agar tampil di saku
             $item = \App\Models\PromoItem::where('promo_id', $promo->id)
                 ->where('user_id', $userId)
                 ->whereIn('status', ['available', 'reserved'])
@@ -708,7 +710,6 @@ class PromoController extends Controller
                 ->first();
 
             if (! $item) {
-                // Buat item baru redeemed (kode item tetap unik sendiri, jangan pakai promo.code)
                 $unique = function () {
                     do {
                         $c = strtoupper('PMI-'.\Illuminate\Support\Str::random(8));
@@ -743,13 +744,11 @@ class PromoController extends Controller
         ]]);
     }
 
-    // endpoint untuk mengambil history validasi promo
     public function history($promoId)
     {
         Log::info("Fetching history for promo ID: " . $promoId);
 
         try {
-            // FIX: konsisten relasi 'validations' + urutkan desc
             $promo = Promo::with(['validations.user'])->find($promoId);
 
             if (!$promo) {
@@ -777,7 +776,6 @@ class PromoController extends Controller
         }
     }
     
-    // endpoint untuk mengambil history validasi promo untuk user yang login
     public function userValidationHistory(Request $request)
     {
         try {

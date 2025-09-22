@@ -24,16 +24,20 @@ class Voucher extends Model
         'code',
         'community_id',
 
-        // NEW: targeting fields
+        // Targeting
         'target_type',      // all | user | community
         'target_user_id',   // nullable (wajib saat target_type = user)
+
+        // NEW: tipe validasi untuk FE (tampilan QR vs input kode)
+        'validation_type',  // auto | manual
     ];
 
     protected $casts = [
-        'valid_until' => 'date',
-        'stock' => 'integer',
-        'community_id' => 'integer',
+        'valid_until'    => 'date',
+        'stock'          => 'integer',
+        'community_id'   => 'integer',
         'target_user_id' => 'integer',
+        'validation_type'=> 'string',
     ];
 
     // ================= Relations =================
@@ -63,9 +67,6 @@ class Voucher extends Model
         return $this->belongsTo(User::class, 'target_user_id');
     }
 
-    /**
-     * TAMBAHAN: Relationship ke notifications menggunakan polymorphic
-     */
     public function notifications(): MorphMany
     {
         return $this->morphMany(Notification::class, 'target', 'target_type', 'target_id');
@@ -86,66 +87,51 @@ class Voucher extends Model
         return 'active';
     }
 
-    /**
-     * TAMBAHAN: Get formatted image URL
-     */
     public function getImageUrlAttribute(): ?string
     {
         if (!$this->image) {
             return null;
         }
-
-        // Jika sudah absolute URL
         if (filter_var($this->image, FILTER_VALIDATE_URL)) {
             return $this->image;
         }
-
-        // Jika relative path
         return asset('storage/' . $this->image);
     }
 
-    /**
-     * TAMBAHAN: Get target description for display
-     */
     public function getTargetDescriptionAttribute(): string
     {
         switch ($this->target_type) {
             case 'user':
                 $user = $this->targetUser;
                 return $user ? "User: {$user->name}" : "User #" . $this->target_user_id;
-                
             case 'community':
                 $community = $this->community;
                 return $community ? "Community: {$community->name}" : "Community #" . $this->community_id;
-                
             case 'all':
             default:
                 return 'Semua Pengguna';
         }
     }
 
-    /**
-     * TAMBAHAN: Check if voucher is still valid
-     */
     public function getIsValidAttribute(): bool
     {
-        return $this->stock > 0 && 
+        return $this->stock > 0 &&
                (!$this->valid_until || now()->isBefore($this->valid_until));
     }
 
-    /**
-     * TAMBAHAN: Get validation count
-     */
     public function getValidationCountAttribute(): int
     {
         return $this->validations()->count();
     }
 
-    // ================= Scopes / Helpers =================
+    // Pastikan selalu ada default 'auto' ketika null (berguna untuk FE lama)
+    public function getValidationTypeAttribute($value): string
+    {
+        return $value ?: 'auto';
+    }
 
-    /**
-     * Filter voucher yang applicable untuk user tertentu (berdasarkan target_type).
-     */
+    // ================= Scopes =================
+
     public function scopeForUser($query, int $userId)
     {
         return $query->where(function ($q) use ($userId) {
@@ -155,7 +141,6 @@ class Voucher extends Model
                      ->where('target_user_id', $userId);
               })
               ->orWhere(function ($qq) use ($userId) {
-                  // TAMBAHAN: Include voucher untuk community yang user join
                   $qq->where('target_type', 'community')
                      ->whereHas('community.memberships', function($qqq) use ($userId) {
                          $qqq->where('user_id', $userId)
@@ -165,9 +150,6 @@ class Voucher extends Model
         });
     }
 
-    /**
-     * Filter voucher untuk suatu community (target_type = all/community).
-     */
     public function scopeForCommunity($query, int $communityId)
     {
         return $query->where(function ($q) use ($communityId) {
@@ -179,9 +161,6 @@ class Voucher extends Model
         });
     }
 
-    /**
-     * TAMBAHAN: Scope untuk voucher yang masih aktif
-     */
     public function scopeActive($query)
     {
         return $query->where('stock', '>', 0)
@@ -191,9 +170,6 @@ class Voucher extends Model
                      });
     }
 
-    /**
-     * TAMBAHAN: Scope untuk voucher yang expired
-     */
     public function scopeExpired($query)
     {
         return $query->where(function ($q) {
@@ -205,19 +181,21 @@ class Voucher extends Model
         });
     }
 
-    /**
-     * TAMBAHAN: Scope berdasarkan target type
-     */
     public function scopeTargetType($query, string $targetType)
     {
         return $query->where('target_type', $targetType);
     }
 
-    // ================= Helper Methods =================
+    public function scopeIndexByCommunity($query, int $communityId)
+    {
+        return $query->where(function ($q) use ($communityId) {
+            $q->where('community_id', $communityId)
+              ->orWhere('target_type', 'all');
+        });
+    }
 
-    /**
-     * TAMBAHAN: Check apakah user sudah dapat notifikasi untuk voucher ini
-     */
+    // ================= Helpers =================
+
     public function hasNotifiedUser(int $userId): bool
     {
         return $this->notifications()
@@ -225,112 +203,83 @@ class Voucher extends Model
                     ->exists();
     }
 
-    /**
-     * TAMBAHAN: Check apakah user eligible untuk voucher ini
-     */
     public function isEligibleForUser(int $userId): bool
     {
         switch ($this->target_type) {
             case 'all':
                 return true;
-                
             case 'user':
                 return $this->target_user_id == $userId;
-                
             case 'community':
                 if (!$this->community_id) return false;
-                
-                // Check if user is member of this community
                 return User::where('id', $userId)
                           ->whereHas('communityMemberships', function($q) {
                               $q->where('community_id', $this->community_id)
                                 ->where('status', 'active');
                           })
                           ->exists();
-                          
             default:
                 return false;
         }
     }
 
-    /**
-     * TAMBAHAN: Get eligible users untuk voucher ini
-     */
     public function getEligibleUsers()
     {
         switch ($this->target_type) {
             case 'all':
                 return User::whereNotNull('email_verified_at');
-                
             case 'user':
                 return User::where('id', $this->target_user_id);
-                
             case 'community':
                 if (!$this->community_id) {
-                    return User::whereRaw('1 = 0'); // empty query
+                    return User::whereRaw('1 = 0');
                 }
-                
                 return User::whereHas('communityMemberships', function($q) {
                     $q->where('community_id', $this->community_id)
                       ->where('status', 'active');
                 });
-                
             default:
-                return User::whereRaw('1 = 0'); // empty query
+                return User::whereRaw('1 = 0');
         }
     }
 
-    /**
-     * TAMBAHAN: Decrement stock dengan safe checking
-     */
     public function decrementStock(int $amount = 1): bool
     {
         if ($this->stock < $amount) {
             return false;
         }
-
         $this->decrement('stock', $amount);
         return true;
     }
 
-    /**
-     * TAMBAHAN: Get community-based vouchers for indexByCommunity endpoint
-     */
-    public function scopeIndexByCommunity($query, int $communityId)
-    {
-        return $query->where(function ($q) use ($communityId) {
-            // Voucher yang dibuat untuk community ini
-            $q->where('community_id', $communityId)
-              // Atau voucher global yang bisa dipakai semua community
-              ->orWhere('target_type', 'all');
-        });
-    }
-
     // ================= Events =================
 
-    /**
-     * TAMBAHAN: Boot method untuk model events
-     */
     protected static function boot()
     {
         parent::boot();
 
-        // Log saat voucher dibuat
+        // Default-kan validation_type = 'auto' bila null saat create
+        static::creating(function ($voucher) {
+            if (empty($voucher->validation_type)) {
+                $voucher->validation_type = 'auto';
+            }
+        });
+
         static::created(function ($voucher) {
             Log::info("Voucher created", [
-                'id' => $voucher->id,
-                'name' => $voucher->name,
-                'code' => $voucher->code,
-                'target_type' => $voucher->target_type,
-                'stock' => $voucher->stock
+                'id'           => $voucher->id,
+                'name'         => $voucher->name,
+                'code'         => $voucher->code,
+                'target_type'  => $voucher->target_type,
+                'stock'        => $voucher->stock,
+                'validation_type' => $voucher->validation_type,
             ]);
         });
 
-        // Log saat stock berubah
         static::updated(function ($voucher) {
             if ($voucher->isDirty('stock')) {
                 Log::info("Voucher stock updated", [
-                    'id' => $voucher->id,
+                    'id'        => $voucher->id,
                     'old_stock' => $voucher->getOriginal('stock'),
                     'new_stock' => $voucher->stock
                 ]);

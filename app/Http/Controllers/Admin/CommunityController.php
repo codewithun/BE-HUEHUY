@@ -266,6 +266,106 @@ class CommunityController extends Controller
     }
 
     /**
+     * GET /api/admin/communities/{id}/members
+     * Daftar member untuk admin (auth)
+     */
+    public function adminMembers(Request $request, $id)
+    {
+        $community = Community::findOrFail($id);
+
+        $q = CommunityMembership::with(['user.role'])
+            ->where('community_id', $community->id);
+
+        // default aktif; boleh override ?status=active|pending|removed
+        if ($request->filled('status')) {
+            $q->where('status', $request->status);
+        } else {
+            $q->where('status', 'active');
+        }
+
+        // search by user fields
+        if ($request->filled('search')) {
+            $s = trim($request->search);
+            $q->whereHas('user', function ($u) use ($s) {
+                $u->where('name', 'like', "%{$s}%")
+                  ->orWhere('email', 'like', "%{$s}%")
+                  ->orWhere('phone', 'like', "%{$s}%");
+            });
+        }
+
+        $sortBy  = $request->get('sortBy', 'joined_at');
+        $sortDir = $request->get('sortDirection', 'desc');
+        $q->orderBy($sortBy, $sortDir);
+
+        if ($request->has('paginate') && $request->paginate !== 'all') {
+            $per = (int) ($request->paginate ?: 10);
+            $page = $q->paginate($per);
+            $items = collect($page->items())->map(fn($m) => [
+                'id'        => $m->user->id,
+                'name'      => $m->user->name,
+                'email'     => $m->user->email,
+                'phone'     => $m->user->phone,
+                'role'      => ['name' => optional($m->user->role)->name],
+                'joined_at' => $m->joined_at,
+                'status'    => $m->status,
+            ]);
+
+            return response()->json([
+                'data'      => $items->values(),
+                'total_row' => $page->total(),
+            ]);
+        }
+
+        $rows = $q->get()->map(fn($m) => [
+            'id'        => $m->user->id,
+            'name'      => $m->user->name,
+            'email'     => $m->user->email,
+            'phone'     => $m->user->phone,
+            'role'      => ['name' => optional($m->user->role)->name],
+            'joined_at' => $m->joined_at,
+            'status'    => $m->status,
+        ]);
+
+        return response()->json([
+            'data'      => $rows->values(),
+            'total_row' => $rows->count(),
+        ]);
+    }
+
+    /**
+     * GET /api/communities/{id}/members
+     * Versi publik/fallback (aktif saja)
+     */
+    public function publicMembers(Request $request, $id)
+    {
+        $community = Community::findOrFail($id);
+
+        $q = CommunityMembership::with(['user.role'])
+            ->where('community_id', $community->id)
+            ->where('status', 'active');
+
+        if ($request->filled('search')) {
+            $s = trim($request->search);
+            $q->whereHas('user', function ($u) use ($s) {
+                $u->where('name', 'like', "%{$s}%")
+                  ->orWhere('email', 'like', "%{$s}%");
+            });
+        }
+
+        $q->orderBy('joined_at', 'desc');
+
+        $rows = $q->get()->map(fn($m) => [
+            'id'        => $m->user->id,
+            'name'      => $m->user->name,
+            'email'     => $m->user->email,
+            'role'      => ['name' => optional($m->user->role)->name],
+            'joined_at' => $m->joined_at,
+        ]);
+
+        return response()->json(['data' => $rows->values()]);
+    }
+
+    /**
      * POST /api/admin/communities
      */
     public function store(Request $request)
@@ -429,10 +529,6 @@ class CommunityController extends Controller
             if ($community->logo && Storage::disk('public')->exists($community->logo)) {
                 Storage::disk('public')->delete($community->logo);
             }
-
-            // hapus pivot admin_contacts ikut terhapus oleh FK cascade (jika di-setup),
-            // kalau belum, bisa manual:
-            // $community->adminContacts()->detach();
 
             $community->delete();
 

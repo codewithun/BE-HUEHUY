@@ -156,6 +156,11 @@ Route::get('/communities', [CommunityController::class, 'index']);
 Route::get('/communities/{id}', [CommunityController::class, 'show'])->whereNumber('id');
 
 /**
+ * +++ NEW: PUBLIC members fallback +++
+ */
+Route::get('/communities/{id}/members', [CommunityController::class, 'publicMembers'])->whereNumber('id');
+
+/**
  * =======================
  * PROTECTED (auth:sanctum)
  * =======================
@@ -316,6 +321,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/communities', [CommunityController::class, 'store']);
         Route::put('/communities/{id}', [CommunityController::class, 'update'])->whereNumber('id');
         Route::delete('/communities/{id}', [CommunityController::class, 'destroy'])->whereNumber('id');
+
+         // +++ NEW: ADMIN members +++
+        Route::get('/communities/{id}/members', [CommunityController::class, 'adminMembers'])->whereNumber('id');
     });
 
     // Admin/Corporate/Integration bundle

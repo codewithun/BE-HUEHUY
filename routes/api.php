@@ -22,10 +22,11 @@ use App\Http\Controllers\ScriptController;
 use App\Http\Controllers\Admin\CommunityWidgetController;
 use App\Http\Controllers\Admin\PromoController;
 use App\Http\Controllers\Admin\VoucherController;
-use App\Http\Controllers\Admin\CommunityController; // <- dipakai di bawah
+use App\Http\Controllers\Admin\CommunityController;
 use App\Http\Controllers\Admin\EventController;
 use App\Http\Controllers\Admin\VoucherItemController;
-use App\Http\Controllers\Admin\UserController as AdminUserController; // <- tambahkan
+use App\Http\Controllers\Admin\UserController as AdminUserController;
+use App\Http\Controllers\Admin\PromoItemController;
 
 /**
  * Unauthorized helper
@@ -283,6 +284,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/validate', [VoucherController::class, 'validateCode']);
         Route::get('/{voucher}/history', [VoucherController::class, 'history'])->whereNumber('voucher');
         Route::get('/voucher-items', [VoucherController::class, 'voucherItems']);
+        
+        // Tambahan baru untuk admin lookup
+        Route::get('/lookup-by-code/{code}', [VoucherController::class, 'lookupByCode']);
+        Route::get('/user-voucher-items/{userId}', [VoucherController::class, 'getUserVoucherItems'])->whereNumber('userId');
     });
 
     // === Voucher Items (claim) ===
@@ -323,3 +328,19 @@ Route::middleware('auth:sanctum')->group(function () {
  * Fallback 404
  */
 Route::fallback(fn () => response()->json(['message' => 'Not Found'], 404));
+
+/**
+ * =======================
+ * ADMIN PROMO ITEMS MANAGEMENT
+ * =======================
+ */
+// Tambahkan di routes/api.php dalam grup auth:sanctum
+Route::prefix('admin')->group(function () {
+    // Endpoint untuk mengambil daftar promo items user
+    Route::get('/promo-items', [PromoItemController::class, 'index']);
+    
+    // Endpoint untuk redeem/update status promo item
+    Route::post('/promo-items/{id}/redeem', [PromoItemController::class, 'redeem']);
+    
+    // Atau alternatif: pastikan endpoint /promos/validate sudah mengupdate status item user
+});

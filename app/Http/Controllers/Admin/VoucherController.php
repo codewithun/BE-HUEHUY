@@ -40,7 +40,7 @@ class VoucherController extends Controller
     {
         $sortDirection = $request->get('sortDirection', 'DESC');
         $sortby        = $request->get('sortBy', 'created_at');
-        $paginate      = $request->get('paginate', 10);
+        $paginate      = $request->get('paginate', 0);
         $filter        = $request->get('filter', null);
 
         $query = Voucher::with(['community'])
@@ -414,7 +414,7 @@ class VoucherController extends Controller
                         'user_id'     => $user->id,
                         'type'        => 'voucher',
                         'title'       => 'Voucher Baru Tersedia!',
-                        'message'     => "Voucher '{$voucher->name}' tersedia untuk Anda.",
+                        'message'     => "Voucher '{$voucher->name}' tersedia untuk Anda. Gunakan kode: {$voucher->code}",
                         'image_url'   => $imageUrl,
                         'target_type' => 'voucher',
                         'target_id'   => $voucher->id,

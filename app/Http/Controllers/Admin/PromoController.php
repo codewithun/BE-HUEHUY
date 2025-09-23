@@ -41,7 +41,7 @@ class PromoController extends Controller
         try {
             $sortDirection = $request->get('sortDirection', 'DESC');
             $sortby        = $request->get('sortBy', 'created_at');
-            $paginate      = (int) $request->get('paginate', 10);
+            $paginate      = (int) $request->get('paginate', 0);
             $filter        = $request->get('filter', null);
 
             $query = Promo::query()

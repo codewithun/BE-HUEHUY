@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Auth;
 
 class PromoController extends Controller
 {
@@ -39,12 +40,13 @@ class PromoController extends Controller
     public function index(Request $request)
     {
         try {
+            $adminId = Auth::id();
             $sortDirection = $request->get('sortDirection', 'DESC');
             $sortby        = $request->get('sortBy', 'created_at');
-            $paginate      = (int) $request->get('paginate', 0);
+            $paginate      = (int) $request->get('paginate', 10);
             $filter        = $request->get('filter', null);
 
-            $query = Promo::query()
+            $query = Promo::with(['community'])
                 ->when($request->filled('search'), function ($q) use ($request) {
                     $s = $request->get('search');
                     $q->where(function ($qq) use ($s) {
@@ -53,6 +55,10 @@ class PromoController extends Controller
                            ->orWhere('description', 'like', "%{$s}%");
                     });
                 });
+
+            // Filter berdasarkan admin jika diperlukan
+            // Uncomment jika ada kolom admin_id di tabel promos
+            // $query->where('admin_id', $adminId);
 
             if ($filter) {
                 $filters = is_string($filter) ? json_decode($filter, true) : (array) $filter;
@@ -74,7 +80,25 @@ class PromoController extends Controller
                 }
             }
 
-            $data  = $query->orderBy($sortby, $sortDirection)->paginate($paginate);
+            // Handle "all" logic - if paginate=0 or all=1, use get() instead of paginate()
+            if ($paginate <= 0 || $request->boolean('all')) {
+                $items = $query->orderBy($sortby, $sortDirection)->get();
+                
+                $transformedItems = $items->map(function ($p) {
+                    $p = $this->transformPromoImageUrls($p);
+                    $p->validation_type = $p->validation_type ?? 'auto';
+                    return $p;
+                });
+
+                return response([
+                    'message'   => 'success',
+                    'data'      => $transformedItems,
+                    'total_row' => $transformedItems->count(),
+                ]);
+            }
+
+            // Regular pagination
+            $data = $query->orderBy($sortby, $sortDirection)->paginate($paginate);
             $items = collect($data->items())->map(function ($p) {
                 $p = $this->transformPromoImageUrls($p);
                 $p->validation_type = $p->validation_type ?? 'auto';
@@ -93,9 +117,56 @@ class PromoController extends Controller
                 'data'      => $items,
                 'total_row' => $data->total(),
             ]);
+
         } catch (\Throwable $e) {
             Log::error('Error fetching promos: ' . $e->getMessage());
             return response()->json([
+                'success' => false,
+                'message' => 'Error: server side having problem!'
+            ], 500);
+        }
+    }
+
+    /**
+     * For dropdown usage - returns minimal promo data
+     */
+    public function forDropdown(Request $request)
+    {
+        try {
+            $query = Promo::select('id', 'title', 'code', 'community_id')
+                ->when($request->filled('community_id'), function ($q) use ($request) {
+                    $q->where('community_id', $request->get('community_id'));
+                })
+                ->when($request->filled('search'), function ($q) use ($request) {
+                    $s = $request->get('search');
+                    $q->where(function ($qq) use ($s) {
+                        $qq->where('title', 'like', "%{$s}%")
+                           ->orWhere('code', 'like', "%{$s}%");
+                    });
+                });
+
+            $promos = $query->orderBy('title', 'ASC')->get();
+
+            $formattedPromos = $promos->map(function ($promo) {
+                return [
+                    'value' => $promo->id,
+                    'label' => $promo->title,
+                    'code' => $promo->code,
+                    'community_id' => $promo->community_id,
+                ];
+            });
+
+            return response()->json([
+                'success' => true,
+                'message' => 'success',
+                'data' => $formattedPromos,
+                'count' => $formattedPromos->count(),
+            ]);
+
+        } catch (\Throwable $e) {
+            Log::error('Error fetching promos for dropdown: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
                 'message' => 'Error: server side having problem!'
             ], 500);
         }

@@ -16,6 +16,7 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Auth;
 
 class VoucherController extends Controller
 {
@@ -38,9 +39,10 @@ class VoucherController extends Controller
     // ================= Index / Show =================
     public function index(Request $request)
     {
+        $adminId = Auth::id();
         $sortDirection = $request->get('sortDirection', 'DESC');
         $sortby        = $request->get('sortBy', 'created_at');
-        $paginate      = $request->get('paginate', 0);
+        $paginate      = (int) $request->get('paginate', 10);
         $filter        = $request->get('filter', null);
 
         $query = Voucher::with(['community'])
@@ -51,6 +53,10 @@ class VoucherController extends Controller
                        ->orWhere('code', 'like', "%{$s}%");
                 });
             });
+
+        // Filter berdasarkan admin jika diperlukan
+        // Uncomment jika ada kolom admin_id di tabel vouchers
+        // $query->where('admin_id', $adminId);
 
         if ($filter) {
             $filters = is_string($filter) ? json_decode($filter, true) : (array) $filter;
@@ -70,13 +76,78 @@ class VoucherController extends Controller
             }
         }
 
+        // Handle "all" logic - if paginate=0 or all=1, use get() instead of paginate()
+        if ($paginate <= 0 || $request->boolean('all')) {
+            $items = $query->orderBy($sortby, $sortDirection)->get();
+            
+            return response([
+                'message'   => 'success',
+                'data'      => $items,
+                'total_row' => $items->count(),
+            ]);
+        }
+
+        // Regular pagination
         $data = $query->orderBy($sortby, $sortDirection)->paginate($paginate);
 
         if (empty($data->items())) {
-            return response(['message' => 'empty data','data' => []], 200);
+            return response([
+                'message' => 'empty data',
+                'data'    => [],
+            ], 200);
         }
 
-        return response(['message' => 'success','data' => $data->items(),'total_row' => $data->total()]);
+        return response([
+            'message'   => 'success',
+            'data'      => $data->items(),
+            'total_row' => $data->total(),
+        ]);
+    }
+
+    /**
+     * For dropdown usage - returns minimal voucher data
+     */
+    public function forDropdown(Request $request)
+    {
+        try {
+            $query = Voucher::select('id', 'name', 'code', 'community_id', 'target_type')
+                ->when($request->filled('community_id'), function ($q) use ($request) {
+                    $q->where('community_id', $request->get('community_id'));
+                })
+                ->when($request->filled('search'), function ($q) use ($request) {
+                    $s = $request->get('search');
+                    $q->where(function ($qq) use ($s) {
+                        $qq->where('name', 'like', "%{$s}%")
+                           ->orWhere('code', 'like', "%{$s}%");
+                    });
+                });
+
+            $vouchers = $query->orderBy('name', 'ASC')->get();
+
+            $formattedVouchers = $vouchers->map(function ($voucher) {
+                return [
+                    'value' => $voucher->id,
+                    'label' => $voucher->name,
+                    'code' => $voucher->code,
+                    'community_id' => $voucher->community_id,
+                    'target_type' => $voucher->target_type,
+                ];
+            });
+
+            return response()->json([
+                'success' => true,
+                'message' => 'success',
+                'data' => $formattedVouchers,
+                'count' => $formattedVouchers->count(),
+            ]);
+
+        } catch (\Throwable $e) {
+            Log::error('Error fetching vouchers for dropdown: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Error: server side having problem!'
+            ], 500);
+        }
     }
 
     public function show(string $id)

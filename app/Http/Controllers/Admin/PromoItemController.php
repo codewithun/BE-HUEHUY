@@ -107,7 +107,7 @@ class PromoItemController extends Controller
 
         // Use promo.code from database instead of always generating
         if ($promo && !empty($promo->code)) {
-            $baseCode = strtoupper($promo->code);
+            $baseCode = (string) $promo->code;
             $code = $baseCode;
 
             $suffix = 1;
@@ -241,8 +241,9 @@ class PromoItemController extends Controller
         }
 
         // Cek kecocokan kode unik terhadap QR milik item (pesan generic)
-        $inputCode = trim($request->input('code'));
-        if (strcasecmp($inputCode, (string) $item->code) !== 0) {
+        $inputCode = trim((string) $request->input('code'));
+
+        if (!hash_equals((string) $item->code, $inputCode)) {
             return response()->json([
                 'success' => false,
                 'message' => 'Kode unik tidak valid.',

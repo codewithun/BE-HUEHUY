@@ -217,12 +217,11 @@ class VoucherController extends Controller
     {
         Log::info('Update voucher request data:', $request->all());
 
-        if ($request->has('image') && empty($request->input('image')) && !$request->hasFile('image')) {
-            $request->request->remove('image');
-        }
+        // Normalize data
         $request->merge([
             'target_type' => $request->input('target_type', 'all'),
         ]);
+
         if ($request->has('valid_until') && $request->input('valid_until') === '') {
             $request->merge(['valid_until' => null]);
         }
@@ -252,30 +251,47 @@ class VoucherController extends Controller
             $request->merge(['community_id' => null]);
         }
 
-        $validator = Validator::make($request->all(), [
+        // Create dynamic validation rules based on whether image is being uploaded
+        $validationRules = [
             'name'            => 'required|string|max:255',
             'description'     => 'nullable|string',
-            'image'           => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
             'type'            => 'nullable|string',
             'valid_until'     => 'nullable|date',
             'tenant_location' => 'nullable|string|max:255',
             'stock'           => 'required|integer|min:0',
-
             'validation_type' => ['nullable', Rule::in(['auto','manual'])],
             'code'            => ['nullable','string','max:255', Rule::unique('vouchers','code')->ignore($id)],
-
             'target_type'     => ['required', Rule::in(['all','user','community'])],
             'target_user_id'  => 'nullable|integer|exists:users,id',
             'target_user_ids' => ['exclude_unless:target_type,user', 'required_if:target_type,user', 'array', 'min:1'],
             'target_user_ids.*' => 'integer|exists:users,id',
             'community_id'    => 'nullable|required_if:target_type,community|exists:communities,id',
-        ], [], [
+        ];
+
+        // Only validate image as file if it's actually being uploaded
+        if ($request->hasFile('image')) {
+            $validationRules['image'] = 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048';
+        } else {
+            // Allow image field to be a string (existing URL) or null
+            $validationRules['image'] = 'nullable|string';
+        }
+
+        $validator = Validator::make($request->all(), $validationRules, [], [
             'target_user_id'  => 'user',
             'target_user_ids' => 'daftar user',
         ]);
 
         if ($validator->fails()) {
-            return response()->json(['success'=>false,'message'=>'Validasi gagal','errors'=>$validator->errors()], 422);
+            Log::error('Validation failed on voucher update', [
+                'errors'       => $validator->errors()->toArray(),
+                'request_data' => $request->all()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Validasi gagal',
+                'errors' => $validator->errors()
+            ], 422);
         }
 
         try {
@@ -283,6 +299,11 @@ class VoucherController extends Controller
 
             $model = Voucher::findOrFail($id);
             $data  = $validator->validated();
+
+            // Remove image from data if it's just a URL string (not a new upload)
+            if (isset($data['image']) && is_string($data['image']) && !$request->hasFile('image')) {
+                unset($data['image']);
+            }
 
             $explicitUserIds = $request->input('target_user_ids', []);
             if (($data['target_type'] ?? 'all') !== 'user') {
@@ -298,6 +319,7 @@ class VoucherController extends Controller
             $incomingType = $data['validation_type'] ?? $model->validation_type ?? 'auto';
             $data['validation_type'] = $incomingType;
 
+            // Only handle file upload if there's actually a new file
             if ($request->hasFile('image')) {
                 if ($model->image && Storage::disk('public')->exists($model->image)) {
                     Storage::disk('public')->delete($model->image);
@@ -326,10 +348,22 @@ class VoucherController extends Controller
             $model->fill($data)->save();
 
             DB::commit();
-            return response()->json(['success'=>true,'message'=>'Voucher berhasil diupdate','data'=>$model]);
+            return response()->json([
+                'success' => true,
+                'message' => 'Voucher berhasil diupdate',
+                'data' => $model
+            ]);
         } catch (\Throwable $e) {
             DB::rollBack();
-            return response()->json(['success'=>false,'message'=>'Gagal mengupdate voucher: ' . $e->getMessage()], 500);
+            Log::error('Error updating voucher', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengupdate voucher: ' . $e->getMessage()
+            ], 500);
         }
     }
 

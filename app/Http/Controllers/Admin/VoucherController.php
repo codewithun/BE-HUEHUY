@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Schema;
 
 class VoucherController extends Controller
 {
@@ -94,256 +95,243 @@ class VoucherController extends Controller
     }
 
     /// ================= Store =================
-public function store(Request $request)
-{
-    Log::info('Store voucher request data:', $request->all());
+    public function store(Request $request)
+    {
+        Log::info('Store voucher request data:', $request->all());
 
-    // --- normalisasi awal ---
-    // image: jika string kosong & bukan file, buang
-    if ($request->has('image') && empty($request->input('image')) && !$request->hasFile('image')) {
-        $request->request->remove('image');
-    }
-
-    // default target_type = all jika kosong
-    $request->merge([
-        'target_type' => $request->input('target_type', 'all'),
-    ]);
-
-    // valid_until kosong -> null (biar lolos nullable|date)
-    if ($request->has('valid_until') && $request->input('valid_until') === '') {
-        $request->merge(['valid_until' => null]);
-    }
-
-    // handle target_user_ids dari berbagai format
-    if ($request->has('target_user_ids')) {
-        $tu = $request->input('target_user_ids');
-        if (is_string($tu)) {
-            if (str_starts_with($tu, '[')) {
-                $tu = json_decode($tu, true) ?: [];
-            } else {
-                $tu = explode(',', $tu);
-            }
+        // --- normalisasi awal ---
+        if ($request->has('image') && empty($request->input('image')) && !$request->hasFile('image')) {
+            $request->request->remove('image');
         }
-        $request->merge(['target_user_ids' => $this->normalizeUserIds($tu)]);
-    }
 
-    // community_id: mapping nilai "kosong"
-    $request->merge([
-        'community_id'   => in_array($request->input('community_id'), [null,'','null','undefined'], true) ? null : $request->input('community_id'),
-        'target_user_id' => in_array($request->input('target_user_id'), [null,'','null','undefined'], true) ? null : $request->input('target_user_id'),
-    ]);
+        $request->merge([
+            'target_type' => $request->input('target_type', 'all'),
+        ]);
 
-    // kalau bukan user, singkirkan field user targeting
-    if ($request->input('target_type') !== 'user') {
-        $request->request->remove('target_user_ids');
-        $request->request->remove('target_user_id');
-    }
-    // kalau bukan community, kosongkan community_id
-    if ($request->input('target_type') !== 'community') {
-        $request->merge(['community_id' => null]);
-    }
+        if ($request->has('valid_until') && $request->input('valid_until') === '') {
+            $request->merge(['valid_until' => null]);
+        }
 
-    // --- VALIDASI ---
-    $validator = Validator::make($request->all(), [
-        'name'            => 'required|string|max:255',
-        'description'     => 'nullable|string',
-        'image'           => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
-        'type'            => 'nullable|string',
-        'valid_until'     => 'nullable|date',
-        'tenant_location' => 'nullable|string|max:255',
-        'stock'           => 'required|integer|min:0',
+        if ($request->has('target_user_ids')) {
+            $tu = $request->input('target_user_ids');
+            if (is_string($tu)) {
+                if (str_starts_with($tu, '[')) {
+                    $tu = json_decode($tu, true) ?: [];
+                } else {
+                    $tu = explode(',', $tu);
+                }
+            }
+            $request->merge(['target_user_ids' => $this->normalizeUserIds($tu)]);
+        }
 
-        'validation_type' => ['nullable', Rule::in(['auto','manual'])],
-        'code'            => [
-            Rule::requiredIf(fn () => ($request->input('validation_type') ?: 'auto') === 'manual'),
-            'string','max:255', Rule::unique('vouchers','code')
-        ],
+        $request->merge([
+            'community_id'   => in_array($request->input('community_id'), [null,'','null','undefined'], true) ? null : $request->input('community_id'),
+            'target_user_id' => in_array($request->input('target_user_id'), [null,'','null','undefined'], true) ? null : $request->input('target_user_id'),
+        ]);
 
-        'target_type'     => ['required', Rule::in(['all','user','community'])],
-        'target_user_id'  => 'nullable|integer|exists:users,id',
-        // KUNCI: exclude_unless agar rule lain tidak dieksekusi bila bukan user
-        'target_user_ids' => ['exclude_unless:target_type,user', 'required_if:target_type,user', 'array', 'min:1'],
-        'target_user_ids.*' => 'integer|exists:users,id',
-        'community_id'    => 'nullable|required_if:target_type,community|exists:communities,id',
-    ], [], [
-        'target_user_id'  => 'user',
-        'target_user_ids' => 'daftar user',
-    ]);
+        if ($request->input('target_type') !== 'user') {
+            $request->request->remove('target_user_ids');
+            $request->request->remove('target_user_id');
+        }
+        if ($request->input('target_type') !== 'community') {
+            $request->merge(['community_id' => null]);
+        }
 
-    if ($validator->fails()) {
-        return response()->json(['success'=>false,'message'=>'Validasi gagal','errors'=>$validator->errors()], 422);
-    }
+        // --- VALIDASI ---
+        $validator = Validator::make($request->all(), [
+            'name'            => 'required|string|max:255',
+            'description'     => 'nullable|string',
+            'image'           => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
+            'type'            => 'nullable|string',
+            'valid_until'     => 'nullable|date',
+            'tenant_location' => 'nullable|string|max:255',
+            'stock'           => 'required|integer|min:0',
 
-    try {
-        DB::beginTransaction();
+            'validation_type' => ['nullable', Rule::in(['auto','manual'])],
+            'code'            => [
+                Rule::requiredIf(fn () => ($request->input('validation_type') ?: 'auto') === 'manual'),
+                'string','max:255', Rule::unique('vouchers','code')
+            ],
 
-        $data = $validator->validated();
+            'target_type'     => ['required', Rule::in(['all','user','community'])],
+            'target_user_id'  => 'nullable|integer|exists:users,id',
+            'target_user_ids' => ['exclude_unless:target_type,user', 'required_if:target_type,user', 'array', 'min:1'],
+            'target_user_ids.*' => 'integer|exists:users,id',
+            'community_id'    => 'nullable|required_if:target_type,community|exists:communities,id',
+        ], [], [
+            'target_user_id'  => 'user',
+            'target_user_ids' => 'daftar user',
+        ]);
 
-        $explicitUserIds = $request->input('target_user_ids', []);
-        if (($data['target_type'] ?? 'all') !== 'user') {
-            $data['target_user_id'] = null;
-        } else {
-            if (is_array($explicitUserIds) && count($explicitUserIds) === 1) {
-                $data['target_user_id'] = $explicitUserIds[0];
-            } elseif (empty($data['target_user_id'])) {
+        if ($validator->fails()) {
+            return response()->json(['success'=>false,'message'=>'Validasi gagal','errors'=>$validator->errors()], 422);
+        }
+
+        try {
+            DB::beginTransaction();
+
+            $data = $validator->validated();
+
+            $explicitUserIds = $request->input('target_user_ids', []);
+            if (($data['target_type'] ?? 'all') !== 'user') {
                 $data['target_user_id'] = null;
+            } else {
+                if (is_array($explicitUserIds) && count($explicitUserIds) === 1) {
+                    $data['target_user_id'] = $explicitUserIds[0];
+                } elseif (empty($data['target_user_id'])) {
+                    $data['target_user_id'] = null;
+                }
             }
+
+            $data['validation_type'] = $data['validation_type'] ?? 'auto';
+
+            if ($request->hasFile('image')) {
+                $data['image'] = $request->file('image')->store('vouchers', 'public');
+            }
+
+            if ($data['validation_type'] === 'auto' && empty($data['code'])) {
+                $data['code'] = $this->generateCode();
+            }
+
+            unset($data['target_user_ids']);
+
+            $model = Voucher::create($data);
+
+            $notificationCount = $this->sendVoucherNotifications($model, $explicitUserIds);
+
+            DB::commit();
+            return response()->json([
+                'success' => true,
+                'message' => "Voucher berhasil dibuat dan {$notificationCount} notifikasi terkirim",
+                'data'    => $model
+            ], 201);
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            Log::error('Error creating voucher: ' . $e->getMessage());
+            return response()->json(['success'=>false,'message'=>'Gagal membuat voucher: ' . $e->getMessage()], 500);
         }
-
-        $data['validation_type'] = $data['validation_type'] ?? 'auto';
-
-        if ($request->hasFile('image')) {
-            $data['image'] = $request->file('image')->store('vouchers', 'public');
-        }
-
-        if ($data['validation_type'] === 'auto' && empty($data['code'])) {
-            $data['code'] = $this->generateCode();
-        }
-
-        unset($data['target_user_ids']);
-
-        $model = Voucher::create($data);
-
-        $notificationCount = $this->sendVoucherNotifications($model, $explicitUserIds);
-
-        DB::commit();
-        return response()->json([
-            'success' => true,
-            'message' => "Voucher berhasil dibuat dan {$notificationCount} notifikasi terkirim",
-            'data'    => $model
-        ], 201);
-    } catch (\Throwable $e) {
-        DB::rollBack();
-        Log::error('Error creating voucher: ' . $e->getMessage());
-        return response()->json(['success'=>false,'message'=>'Gagal membuat voucher: ' . $e->getMessage()], 500);
     }
-}
-
 
     // ================= Update =================
-public function update(Request $request, string $id)
-{
-    Log::info('Update voucher request data:', $request->all());
+    public function update(Request $request, string $id)
+    {
+        Log::info('Update voucher request data:', $request->all());
 
-    // --- normalisasi awal ---
-    if ($request->has('image') && empty($request->input('image')) && !$request->hasFile('image')) {
-        $request->request->remove('image');
-    }
-    $request->merge([
-        'target_type' => $request->input('target_type', 'all'),
-    ]);
-    if ($request->has('valid_until') && $request->input('valid_until') === '') {
-        $request->merge(['valid_until' => null]);
-    }
-
-    if ($request->has('target_user_ids')) {
-        $tu = $request->input('target_user_ids');
-        if (is_string($tu)) {
-            if (str_starts_with($tu, '[')) {
-                $tu = json_decode($tu, true) ?: [];
-            } else {
-                $tu = explode(',', $tu);
-            }
+        if ($request->has('image') && empty($request->input('image')) && !$request->hasFile('image')) {
+            $request->request->remove('image');
         }
-        $request->merge(['target_user_ids' => $this->normalizeUserIds($tu)]);
-    }
+        $request->merge([
+            'target_type' => $request->input('target_type', 'all'),
+        ]);
+        if ($request->has('valid_until') && $request->input('valid_until') === '') {
+            $request->merge(['valid_until' => null]);
+        }
 
-    $request->merge([
-        'community_id'   => in_array($request->input('community_id'), [null,'','null','undefined'], true) ? null : $request->input('community_id'),
-        'target_user_id' => in_array($request->input('target_user_id'), [null,'','null','undefined'], true) ? null : $request->input('target_user_id'),
-    ]);
+        if ($request->has('target_user_ids')) {
+            $tu = $request->input('target_user_ids');
+            if (is_string($tu)) {
+                if (str_starts_with($tu, '[')) {
+                    $tu = json_decode($tu, true) ?: [];
+                } else {
+                    $tu = explode(',', $tu);
+                }
+            }
+            $request->merge(['target_user_ids' => $this->normalizeUserIds($tu)]);
+        }
 
-    if ($request->input('target_type') !== 'user') {
-        $request->request->remove('target_user_ids');
-        $request->request->remove('target_user_id');
-    }
-    if ($request->input('target_type') !== 'community') {
-        $request->merge(['community_id' => null]);
-    }
+        $request->merge([
+            'community_id'   => in_array($request->input('community_id'), [null,'','null','undefined'], true) ? null : $request->input('community_id'),
+            'target_user_id' => in_array($request->input('target_user_id'), [null,'','null','undefined'], true) ? null : $request->input('target_user_id'),
+        ]);
 
-    // --- VALIDASI ---
-    $validator = Validator::make($request->all(), [
-        'name'            => 'required|string|max:255',
-        'description'     => 'nullable|string',
-        'image'           => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
-        'type'            => 'nullable|string',
-        'valid_until'     => 'nullable|date',
-        'tenant_location' => 'nullable|string|max:255',
-        'stock'           => 'required|integer|min:0',
+        if ($request->input('target_type') !== 'user') {
+            $request->request->remove('target_user_ids');
+            $request->request->remove('target_user_id');
+        }
+        if ($request->input('target_type') !== 'community') {
+            $request->merge(['community_id' => null]);
+        }
 
-        'validation_type' => ['nullable', Rule::in(['auto','manual'])],
-        'code'            => ['nullable','string','max:255', Rule::unique('vouchers','code')->ignore($id)],
+        $validator = Validator::make($request->all(), [
+            'name'            => 'required|string|max:255',
+            'description'     => 'nullable|string',
+            'image'           => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
+            'type'            => 'nullable|string',
+            'valid_until'     => 'nullable|date',
+            'tenant_location' => 'nullable|string|max:255',
+            'stock'           => 'required|integer|min:0',
 
-        'target_type'     => ['required', Rule::in(['all','user','community'])],
-        'target_user_id'  => 'nullable|integer|exists:users,id',
-        // KUNCI: exclude_unless + required_if
-        'target_user_ids' => ['exclude_unless:target_type,user', 'required_if:target_type,user', 'array', 'min:1'],
-        'target_user_ids.*' => 'integer|exists:users,id',
-        'community_id'    => 'nullable|required_if:target_type,community|exists:communities,id',
-    ], [], [
-        'target_user_id'  => 'user',
-        'target_user_ids' => 'daftar user',
-    ]);
+            'validation_type' => ['nullable', Rule::in(['auto','manual'])],
+            'code'            => ['nullable','string','max:255', Rule::unique('vouchers','code')->ignore($id)],
 
-    if ($validator->fails()) {
-        return response()->json(['success'=>false,'message'=>'Validasi gagal','errors'=>$validator->errors()], 422);
-    }
+            'target_type'     => ['required', Rule::in(['all','user','community'])],
+            'target_user_id'  => 'nullable|integer|exists:users,id',
+            'target_user_ids' => ['exclude_unless:target_type,user', 'required_if:target_type,user', 'array', 'min:1'],
+            'target_user_ids.*' => 'integer|exists:users,id',
+            'community_id'    => 'nullable|required_if:target_type,community|exists:communities,id',
+        ], [], [
+            'target_user_id'  => 'user',
+            'target_user_ids' => 'daftar user',
+        ]);
 
-    try {
-        DB::beginTransaction();
+        if ($validator->fails()) {
+            return response()->json(['success'=>false,'message'=>'Validasi gagal','errors'=>$validator->errors()], 422);
+        }
 
-        $model = Voucher::findOrFail($id);
-        $data  = $validator->validated();
+        try {
+            DB::beginTransaction();
 
-        $explicitUserIds = $request->input('target_user_ids', []);
-        if (($data['target_type'] ?? 'all') !== 'user') {
-            $data['target_user_id'] = null;
-        } else {
-            if (is_array($explicitUserIds) && count($explicitUserIds) === 1) {
-                $data['target_user_id'] = $explicitUserIds[0];
-            } elseif (empty($data['target_user_id'])) {
+            $model = Voucher::findOrFail($id);
+            $data  = $validator->validated();
+
+            $explicitUserIds = $request->input('target_user_ids', []);
+            if (($data['target_type'] ?? 'all') !== 'user') {
                 $data['target_user_id'] = null;
+            } else {
+                if (is_array($explicitUserIds) && count($explicitUserIds) === 1) {
+                    $data['target_user_id'] = $explicitUserIds[0];
+                } elseif (empty($data['target_user_id'])) {
+                    $data['target_user_id'] = null;
+                }
             }
+
+            $incomingType = $data['validation_type'] ?? $model->validation_type ?? 'auto';
+            $data['validation_type'] = $incomingType;
+
+            if ($request->hasFile('image')) {
+                if ($model->image && Storage::disk('public')->exists($model->image)) {
+                    Storage::disk('public')->delete($model->image);
+                }
+                $data['image'] = $request->file('image')->store('vouchers', 'public');
+            }
+
+            if ($data['validation_type'] === 'manual') {
+                $finalCode = $data['code'] ?? $model->code;
+                if (empty($finalCode)) {
+                    DB::rollBack();
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Kode wajib diisi saat tipe validasi "manual".'
+                    ], 422);
+                }
+                $data['code'] = $finalCode;
+            } else {
+                if (!array_key_exists('code', $data) || empty($data['code'])) {
+                    $data['code'] = $model->code ?: $this->generateCode();
+                }
+            }
+
+            unset($data['target_user_ids']);
+
+            $model->fill($data)->save();
+
+            DB::commit();
+            return response()->json(['success'=>true,'message'=>'Voucher berhasil diupdate','data'=>$model]);
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            return response()->json(['success'=>false,'message'=>'Gagal mengupdate voucher: ' . $e->getMessage()], 500);
         }
-
-        $incomingType = $data['validation_type'] ?? $model->validation_type ?? 'auto';
-        $data['validation_type'] = $incomingType;
-
-        if ($request->hasFile('image')) {
-            if ($model->image && Storage::disk('public')->exists($model->image)) {
-                Storage::disk('public')->delete($model->image);
-            }
-            $data['image'] = $request->file('image')->store('vouchers', 'public');
-        }
-
-        if ($data['validation_type'] === 'manual') {
-            $finalCode = $data['code'] ?? $model->code;
-            if (empty($finalCode)) {
-                DB::rollBack();
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Kode wajib diisi saat tipe validasi "manual".'
-                ], 422);
-            }
-            $data['code'] = $finalCode;
-        } else {
-            if (!array_key_exists('code', $data) || empty($data['code'])) {
-                $data['code'] = $model->code ?: $this->generateCode();
-            }
-        }
-
-        unset($data['target_user_ids']);
-
-        $model->fill($data)->save();
-
-        DB::commit();
-        return response()->json(['success'=>true,'message'=>'Voucher berhasil diupdate','data'=>$model]);
-    } catch (\Throwable $e) {
-        DB::rollBack();
-        return response()->json(['success'=>false,'message'=>'Gagal mengupdate voucher: ' . $e->getMessage()], 500);
     }
-}
-
 
     // ================= Destroy =================
     public function destroy(string $id)
@@ -434,45 +422,114 @@ public function update(Request $request, string $id)
     }
 
     // ================= Validate Code / History / Items =================
+    /**
+     * Idempotent validation:
+     * - Cari VoucherItem dari code / item_id hint / (voucher master + owner)
+     * - Update used_at (+ status='used' jika kolom ada)
+     * - Kalau sudah digunakan, balas 200 OK (bukan 409)
+     */
     public function validateCode(Request $request)
     {
-        try {
-            $request->validate(['code' => 'required|string']);
+        $user = $request->user();
+        if (! $user) {
+            return response()->json(['success' => false, 'message' => 'Unauthenticated'], 401);
+        }
 
-            $voucher = Voucher::where('code', $request->code)->first();
-            if (!$voucher) {
-                return response()->json(['success'=>false,'message'=>'Kode voucher tidak ditemukan'], 404);
+        $data = $request->validate([
+            'code'               => 'required|string',
+            'is_tenant_validation' => 'sometimes|boolean',
+            'validator_role'     => 'sometimes|in:tenant',
+            'item_id'            => 'sometimes|integer',
+            'item_owner_id'      => 'sometimes|integer',
+            'expected_type'      => 'sometimes|in:voucher',
+            'validation_purpose' => 'sometimes|string',
+            'qr_timestamp'       => 'sometimes',
+        ], [
+            'code.required' => 'Kode voucher wajib diisi.',
+        ]);
+
+        $code       = trim($data['code']);
+        $itemIdHint = $data['item_id']      ?? null;
+        $ownerHint  = $data['item_owner_id']?? null;
+
+        // 1) by voucher_items.code
+        $item = VoucherItem::with(['voucher', 'voucher.community', 'user'])
+            ->where('code', $code)
+            ->first();
+
+        // 2) fallback: by item_id hint
+        if (! $item && $itemIdHint) {
+            $item = VoucherItem::with(['voucher', 'voucher.community', 'user'])->find($itemIdHint);
+        }
+
+        // 3) fallback: by master voucher code + owner
+        if (! $item) {
+            $voucher = Voucher::where('code', $code)->first();
+            if ($voucher && $ownerHint) {
+                $item = VoucherItem::with(['voucher', 'voucher.community', 'user'])
+                    ->where('voucher_id', $voucher->id)
+                    ->where('user_id', $ownerHint)
+                    ->latest('id')
+                    ->first();
             }
+        }
 
-            $userId = $request->user()?->id ?? auth()->id() ?? null;
+        if (! $item) {
+            return response()->json(['success'=>false,'message'=>'Voucher item tidak ditemukan'], 404);
+        }
 
-            $existingValidation = VoucherValidation::where([
-                'voucher_id' => $voucher->id,
-                'user_id'    => $userId,
-                'code'       => $request->code
-            ])->first();
+        // optional expiry check
+        if (!empty($item->voucher?->valid_until) && now()->greaterThan($item->voucher->valid_until)) {
+            return response()->json(['success'=>false,'message'=>'Voucher kedaluwarsa'], 422);
+        }
 
-            if ($existingValidation) {
-                return response()->json(['success'=>false,'message'=>'Kode voucher sudah pernah divalidasi'], 409);
-            }
-
-            $validation = VoucherValidation::create([
-                'voucher_id'   => $voucher->id,
-                'user_id'      => $userId,
-                'code'         => $request->code,
-                'validated_at' => now(),
-                'notes'        => $request->input('notes'),
-            ]);
-
+        // idempotent
+        if (!is_null($item->used_at) || ($item->status ?? null) === 'used' || ($item->status ?? null) === 'redeemed') {
             return response()->json([
                 'success' => true,
-                'message' => 'Kode voucher valid',
-                'data'    => ['voucher' => $voucher,'validation' => $validation]
-            ]);
-        } catch (\Throwable $e) {
-            Log::error('Error in validateCode: ' . $e->getMessage());
-            return response()->json(['success'=>false,'message'=>'Gagal memvalidasi kode: ' . $e->getMessage()], 500);
+                'message' => 'Voucher sudah divalidasi sebelumnya',
+                'data'    => [
+                    'voucher_item_id' => $item->id,
+                    'voucher_item'    => $item,
+                    'voucher'         => $item->voucher,
+                ],
+            ], 200);
         }
+
+        DB::transaction(function () use ($item, $user, $code, $request) {
+            if (Schema::hasColumn('voucher_items', 'used_at')) {
+                $item->used_at = now();
+            }
+            if (Schema::hasColumn('voucher_items', 'status')) {
+                $item->status = 'used';
+            }
+            $item->save();
+
+            // optional: simpan jejak validasi
+            try {
+                VoucherValidation::create([
+                    'voucher_id'   => $item->voucher_id,
+                    'user_id'      => $user->id, // validator (tenant) atau user login
+                    'code'         => $code,
+                    'validated_at' => now(),
+                    'notes'        => $request->input('validation_purpose'),
+                ]);
+            } catch (\Throwable $e) {
+                // jangan gagalkan proses jika tabel tidak ada
+            }
+        });
+
+        $item->refresh();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Validasi berhasil',
+            'data'    => [
+                'voucher_item_id' => $item->id,
+                'voucher_item'    => $item,
+                'voucher'         => $item->voucher,
+            ],
+        ], 200);
     }
 
     public function history($voucherId)

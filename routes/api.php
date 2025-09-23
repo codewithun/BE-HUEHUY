@@ -280,9 +280,11 @@ Route::middleware('auth:sanctum')->group(function () {
     // Promos & Vouchers history
     Route::prefix('promos')->group(function () {
         Route::post('/validate', [PromoController::class, 'validateCode']);
-        // alias agar FE yang pakai /validate-code tidak 405
         Route::post('/validate-code', [PromoController::class, 'validateCode']);
         Route::get('/{promo}/history', [PromoController::class, 'history'])->whereNumber('promo');
+
+        Route::post('/{promo}/items', [PromoItemController::class, 'storeForPromo'])
+            ->whereNumber('promo');
     });
 
     Route::prefix('vouchers')->group(function () {
@@ -290,7 +292,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/{voucher}/history', [VoucherController::class, 'history'])->whereNumber('voucher');
         Route::get('/voucher-items', [VoucherController::class, 'voucherItems']);
         
-        // Tambahan baru untuk admin lookup
         Route::get('/lookup-by-code/{code}', [VoucherController::class, 'lookupByCode']);
         Route::get('/user-voucher-items/{userId}', [VoucherController::class, 'getUserVoucherItems'])->whereNumber('userId');
     });
@@ -342,7 +343,6 @@ Route::fallback(fn () => response()->json(['message' => 'Not Found'], 404));
  * ADMIN PROMO ITEMS MANAGEMENT
  * =======================
  */
-// Tambahkan di routes/api.php dalam grup auth:sanctum
 Route::prefix('admin')->group(function () {
     // Endpoint untuk mengambil daftar promo items user
     Route::get('/promo-items', [PromoItemController::class, 'index']);

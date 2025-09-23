@@ -414,7 +414,7 @@ class VoucherController extends Controller
                         'user_id'     => $user->id,
                         'type'        => 'voucher',
                         'title'       => 'Voucher Baru Tersedia!',
-                        'message'     => "Voucher '{$voucher->name}' tersedia untuk Anda. Gunakan kode: {$voucher->code}",
+                        'message'     => "Voucher '{$voucher->name}' tersedia untuk Anda.",
                         'image_url'   => $imageUrl,
                         'target_type' => 'voucher',
                         'target_id'   => $voucher->id,

@@ -337,18 +337,3 @@ Route::middleware('auth:sanctum')->group(function () {
  * Fallback 404
  */
 Route::fallback(fn () => response()->json(['message' => 'Not Found'], 404));
-
-/**
- * =======================
- * ADMIN PROMO ITEMS MANAGEMENT
- * =======================
- */
-Route::prefix('admin')->group(function () {
-    // Endpoint untuk mengambil daftar promo items user
-    Route::get('/promo-items', [PromoItemController::class, 'index']);
-    
-    // Endpoint untuk redeem/update status promo item
-    Route::post('/promo-items/{id}/redeem', [PromoItemController::class, 'redeem']);
-    
-    // Atau alternatif: pastikan endpoint /promos/validate sudah mengupdate status item user
-});

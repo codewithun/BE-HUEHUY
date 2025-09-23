@@ -110,7 +110,7 @@ class VoucherItemController extends Controller
      * Klaim voucher → create VoucherItem untuk user login & kurangi stock.
      * Opsional: hapus/tandai-baca notifikasi sumber klaim (via notification_id).
      */
-   public function claim(Request $request, $voucherId)
+    public function claim(Request $request, $voucherId)
     {
         $userId = $request->user()?->id ?? Auth::id();
         if (!$userId) {
@@ -171,9 +171,8 @@ class VoucherItemController extends Controller
                 'success' => true,
                 'message' => 'Voucher berhasil diklaim',
                 'notification_deleted' => $deleted,
-                'data'    => $item->load(['voucher','voucher.community'])
+                'data'    => $item->load(['voucher', 'voucher.community'])
             ], 201);
-
         } catch (\Throwable $th) {
             DB::rollBack();
             return response()->json([
@@ -216,17 +215,9 @@ class VoucherItemController extends Controller
 
             $inputCode = trim($request->input('code'));
 
-            // Izinkan match ke item.code atau kode master voucher (opsional)
-            $voucher = $item->voucher ?? Voucher::find($item->voucher_id);
-            $validCodes = array_filter([$item->code, optional($voucher)->code]);
-            $isMatch = false;
-            foreach ($validCodes as $c) {
-                if (strcasecmp($inputCode, (string) $c) === 0) {
-                    $isMatch = true;
-                    break;
-                }
-            }
-            if (! $isMatch) {
+            $inputCode = trim((string) $request->input('code'));
+
+            if (!hash_equals((string) $item->code, $inputCode)) {
                 return response()->json(['success' => false, 'message' => 'Kode unik tidak valid.'], 422);
             }
 
@@ -250,10 +241,10 @@ class VoucherItemController extends Controller
 
             return response()->json(['success' => true, 'data' => $result['item']]);
         } catch (\Throwable $e) {
-            Log::error('Error redeem voucher item: '.$e->getMessage(), ['id' => $id]);
+            Log::error('Error redeem voucher item: ' . $e->getMessage(), ['id' => $id]);
             return response()->json([
                 'success' => false,
-                'message' => 'Gagal memproses voucher: '.$e->getMessage()
+                'message' => 'Gagal memproses voucher: ' . $e->getMessage()
             ], 500);
         }
     }

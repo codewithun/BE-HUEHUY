@@ -315,7 +315,8 @@ class PromoController extends Controller
             'always_available' => in_array($request->input('always_available'), [1, '1', true, 'true'], true) ? '1' : (in_array($request->input('always_available'), [0, '0', false, 'false'], true) ? '0' : null),
         ]);
 
-        $validator = Validator::make($request->all(), [
+        // Create dynamic validation rules based on whether image is being uploaded
+        $validationRules = [
             'title'           => 'sometimes|required|string|max:255',
             'description'     => 'sometimes|required|string',
             'detail'          => 'nullable|string',
@@ -329,10 +330,19 @@ class PromoController extends Controller
             'location'        => 'nullable|string',
             'owner_name'      => 'sometimes|required|string|max:255',
             'owner_contact'   => 'sometimes|required|string|max:255',
-            'image'           => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
             'community_id'    => 'sometimes|required|exists:communities,id',
             'code'            => 'nullable|string|unique:promos,code,' . $id . '|required_if:validation_type,manual',
-        ], [
+        ];
+
+        // Only validate image as file if it's actually being uploaded
+        if ($request->hasFile('image')) {
+            $validationRules['image'] = 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048';
+        } else {
+            // Allow image field to be a string (existing URL) or null
+            $validationRules['image'] = 'nullable|string';
+        }
+
+        $validator = Validator::make($request->all(), $validationRules, [
             'validation_type.in' => 'Tipe validasi harus auto atau manual.',
             'code.required_if'   => 'Kode wajib diisi untuk tipe validasi manual.',
         ]);
@@ -354,6 +364,11 @@ class PromoController extends Controller
             DB::beginTransaction();
 
             $data = $validator->validated();
+
+            // Remove image from data if it's just a URL string (not a new upload)
+            if (isset($data['image']) && is_string($data['image']) && !$request->hasFile('image')) {
+                unset($data['image']);
+            }
 
             if (!array_key_exists('community_id', $data) || $data['community_id'] === null) {
                 $data['community_id'] = $promo->community_id;
@@ -378,6 +393,7 @@ class PromoController extends Controller
                 }
             }
 
+            // Only handle file upload if there's actually a new file
             if ($request->hasFile('image')) {
                 if (!empty($promo->image)) {
                     Storage::disk('public')->delete($promo->image);

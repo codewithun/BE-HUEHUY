@@ -108,7 +108,7 @@ class QrcodeController extends Controller
 
             $qrData = $this->buildQrTargetUrl($request->voucher_id, $request->promo_id);
 
-            $svg = QrCode::format('svg')
+            $svg = QrCodeFacade::format('svg') // <-- Ubah QrCode menjadi QrCodeFacade
                 ->size(512)
                 ->errorCorrection('H')
                 ->margin(1)

@@ -112,6 +112,7 @@ Route::prefix('admin')->name('admin.')->group(function () {
 
     // QR Code routes
     Route::get('/qrcodes', [QrcodeController::class, 'index']);
+    Route::post('/qrcodes', [QrcodeController::class, 'generate']); // Add this line
     Route::post('/qrcodes/generate', [QrcodeController::class, 'generate']);
     Route::put('/qrcodes/{id}', [QrcodeController::class, 'update']);
     Route::delete('/qrcodes/{id}', [QrcodeController::class, 'destroy']);

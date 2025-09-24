@@ -1075,17 +1075,32 @@ class PromoController extends Controller
                 ], 401);
             }
 
-            $validations = PromoValidation::with([
-                'user',
-                'promo'
-            ])->where('user_id', $userId)
+            // eager load dua-duanya biar aman
+            $rows = PromoValidation::with(['promo', 'user'])
+                ->where('user_id', $userId)
                 ->orderBy('validated_at', 'desc')
                 ->get();
 
-            return response()->json([
-                'success' => true,
-                'data' => $validations
-            ]);
+            // Samakan shape seperti voucher
+            $data = $rows->map(function ($r) {
+                $promo = $r->promo;
+                if ($promo) {
+                    // FE baca "title" → pastikan ada
+                    $promo->title = $promo->title ?? 'Promo';
+                }
+
+                return [
+                    'id'           => $r->id,
+                    'code'         => $r->code,
+                    'validated_at' => $r->validated_at,
+                    'notes'        => $r->notes,
+                    'promo'        => $promo,
+                    'user'         => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null,
+                    'itemType'     => 'promo', // konsisten dengan voucher
+                ];
+            });
+
+            return response()->json(['success' => true, 'data' => $data]);
         } catch (\Exception $e) {
             Log::error("Error in userValidationHistory method: " . $e->getMessage());
             return response()->json([

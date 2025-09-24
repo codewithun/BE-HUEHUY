@@ -372,8 +372,12 @@ class PromoController extends Controller
         if ($request->filled('owner_user_id')) {
             $user = User::find($request->input('owner_user_id'));
             [$uname, $uphone] = $this->extractUserNamePhone($user);
-            if ($uname)  { $request->merge(['owner_name'    => $uname]); }
-            if ($uphone) { $request->merge(['owner_contact' => $uphone]); }
+            if ($uname) {
+                $request->merge(['owner_name'    => $uname]);
+            }
+            if ($uphone) {
+                $request->merge(['owner_contact' => $uphone]);
+            }
         }
 
         $validator = Validator::make($request->all(), [
@@ -402,7 +406,7 @@ class PromoController extends Controller
         ]);
 
         // Kalau owner_user_id dikirim tapi nomor user kosong → error yang jelas
-        $validator->after(function($v) use ($request) {
+        $validator->after(function ($v) use ($request) {
             if ($request->filled('owner_user_id') && !$request->filled('owner_contact')) {
                 $v->errors()->add('owner_contact', 'Nomor telepon manager pada data user belum diisi.');
             }
@@ -487,8 +491,12 @@ class PromoController extends Controller
         if ($request->filled('owner_user_id')) {
             $user = User::find($request->input('owner_user_id'));
             [$uname, $uphone] = $this->extractUserNamePhone($user);
-            if ($uname)  { $request->merge(['owner_name'    => $uname]); }
-            if ($uphone) { $request->merge(['owner_contact' => $uphone]); }
+            if ($uname) {
+                $request->merge(['owner_name'    => $uname]);
+            }
+            if ($uphone) {
+                $request->merge(['owner_contact' => $uphone]);
+            }
         }
 
         // Create dynamic validation rules based on whether image is being uploaded
@@ -524,7 +532,7 @@ class PromoController extends Controller
         ]);
 
         // Opsional: kalau owner_user_id dikirim tapi nomor tak terisi
-        $validator->after(function($v) use ($request) {
+        $validator->after(function ($v) use ($request) {
             if ($request->filled('owner_user_id')) {
                 if ($request->has('owner_contact') && ($request->input('owner_contact') === null || $request->input('owner_contact') === '')) {
                     $v->errors()->add('owner_contact', 'Nomor telepon manager pada data user belum diisi.');
@@ -939,7 +947,7 @@ class PromoController extends Controller
                 return $c;
             };
 
-            $item = \Illuminate\Support\Facades\DB::transaction(function () use ($promo, $ownerHint, $uniqueCode, $now) {
+            $item = \Illuminate\Support\Facades\DB::transaction(function () use ($promo, $ownerHint, $uniqueCode, $now, $user) {
                 $pi = \App\Models\PromoItem::create([
                     'promo_id'     => $promo->id,
                     'user_id'      => $ownerHint,
@@ -952,7 +960,7 @@ class PromoController extends Controller
                 try {
                     \App\Models\PromoValidation::create([
                         'promo_id'     => $promo->id,
-                        'user_id'      => $ownerHint,
+                        'user_id'      => $user->id,   // <-- validator, bukan owner
                         'code'         => $promo->code,
                         'validated_at' => $now,
                     ]);
@@ -986,7 +994,7 @@ class PromoController extends Controller
             ], 200);
         }
 
-        \Illuminate\Support\Facades\DB::transaction(function () use ($promo, $item, $now) {
+        \Illuminate\Support\Facades\DB::transaction(function () use ($promo, $item, $now, $user) {
             if (!is_null($promo->stock)) {
                 \App\Models\Promo::where('id', $promo->id)->where('stock', '>', 0)->decrement('stock');
             }
@@ -1002,7 +1010,7 @@ class PromoController extends Controller
             try {
                 \App\Models\PromoValidation::create([
                     'promo_id'     => $promo->id,
-                    'user_id'      => $item->user_id,
+                    'user_id'      => $user->id,   // <-- ganti dari $item->user_id
                     'code'         => $promo->code,
                     'validated_at' => $now,
                 ]);

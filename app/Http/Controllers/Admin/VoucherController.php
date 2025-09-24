@@ -743,8 +743,14 @@ class VoucherController extends Controller
             }
         }
 
-        if (! $item) {
-            return response()->json(['success' => false, 'message' => 'Voucher item tidak ditemukan'], 404);
+        $inputCode  = trim((string) ($data['code'] ?? $code));
+        $actualCode = (string) $item->code;
+
+        if (!hash_equals($actualCode, $inputCode)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Kode unik tidak valid.'
+            ], 422);
         }
 
         // optional expiry check

@@ -16,18 +16,63 @@ use Throwable;
 
 class QrcodeController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
-        $adminId = Auth::id();
+        $adminId       = Auth::id();
+        $sortDirection = strtoupper($request->get('sortDirection', 'DESC')) === 'ASC' ? 'ASC' : 'DESC';
+        $sortBy        = $request->get('sortBy', 'created_at');
+        $paginate      = (int) $request->get('paginate', 10);
+        $search        = $request->get('search', null);
 
-        $qrcodes = Qrcode::with(['voucher', 'promo.community'])
+        // Whitelist kolom agar aman dari SQL injection nama kolom
+        $sortable = ['created_at', 'tenant_name', 'id'];
+        if (!in_array($sortBy, $sortable, true)) {
+            $sortBy = 'created_at';
+        }
+
+        $query = \App\Models\Qrcode::with(['voucher', 'promo.community'])
             ->where('admin_id', $adminId)
-            ->get();
+            ->when($search, function ($q) use ($search) {
+                $s = trim($search);
+                $q->where(function ($qq) use ($s) {
+                    $qq->where('tenant_name', 'like', "%{$s}%")
+                       ->orWhereHas('voucher', function ($qv) use ($s) {
+                           $qv->where('name', 'like', "%{$s}%")
+                              ->orWhere('code', 'like', "%{$s}%");
+                       })
+                       ->orWhereHas('promo', function ($qp) use ($s) {
+                           $qp->where('name', 'like', "%{$s}%")
+                              ->orWhere('title', 'like', "%{$s}%");
+                       });
+                });
+            });
+
+        // Mode ambil semua (tanpa pagination)
+        if ($paginate <= 0 || $request->boolean('all')) {
+            $items = $query->orderBy($sortBy, $sortDirection)->get();
+
+            return response()->json([
+                'message'   => 'success',
+                'data'      => $items,
+                'total_row' => $items->count(),
+            ]);
+        }
+
+        // Mode paginate (TableSupervision biasanya pakai ini untuk server-side sort)
+        $page = $query->orderBy($sortBy, $sortDirection)->paginate($paginate);
+
+        // Kalau kosong, samakan gaya respons Voucher
+        if (empty($page->items())) {
+            return response()->json([
+                'message' => 'empty data',
+                'data'    => [],
+            ], 200);
+        }
 
         return response()->json([
-            'success' => true,
-            'count'   => $qrcodes->count(),
-            'data'    => $qrcodes,
+            'message'   => 'success',
+            'data'      => $page->items(),
+            'total_row' => $page->total(),
         ]);
     }
 

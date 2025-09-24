@@ -1067,46 +1067,38 @@ class PromoController extends Controller
     {
         try {
             $userId = $request->user()?->id ?? auth()->id();
-
             if (!$userId) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'User tidak terautentikasi'
-                ], 401);
+                return response()->json(['success' => false, 'message' => 'User tidak terautentikasi'], 401);
             }
 
-            // eager load dua-duanya biar aman
+            // Ambil riwayat validasi oleh validator login
             $rows = PromoValidation::with(['promo', 'user'])
                 ->where('user_id', $userId)
                 ->orderBy('validated_at', 'desc')
                 ->get();
 
-            // Samakan shape seperti voucher
+            // Samakan shape dengan voucher agar FE bisa merge 2 list
             $data = $rows->map(function ($r) {
                 $promo = $r->promo;
                 if ($promo) {
-                    // FE baca "title" → pastikan ada
+                    // FE pakai "title" untuk label — pastikan ada
                     $promo->title = $promo->title ?? 'Promo';
                 }
-
                 return [
                     'id'           => $r->id,
                     'code'         => $r->code,
                     'validated_at' => $r->validated_at,
                     'notes'        => $r->notes,
-                    'promo'        => $promo,
+                    'promo'        => $promo,                                   // <- tersedia di FE: v.promo
                     'user'         => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null,
-                    'itemType'     => 'promo', // konsisten dengan voucher
+                    'itemType'     => 'promo',                                   // <- kunci untuk FE
                 ];
             });
 
             return response()->json(['success' => true, 'data' => $data]);
-        } catch (\Exception $e) {
-            Log::error("Error in userValidationHistory method: " . $e->getMessage());
-            return response()->json([
-                'success' => false,
-                'message' => 'Gagal mengambil riwayat validasi: ' . $e->getMessage()
-            ], 500);
+        } catch (\Throwable $e) {
+            Log::error("Error in userValidationHistory (promo): " . $e->getMessage());
+            return response()->json(['success' => false, 'message' => 'Gagal mengambil riwayat validasi: ' . $e->getMessage()], 500);
         }
     }
 }

@@ -7,12 +7,12 @@ use Illuminate\Database\Eloquent\Model;
 class PromoValidation extends Model
 {
     protected $fillable = ['promo_id', 'user_id', 'code', 'validated_at', 'notes'];
+    public $timestamps = false;
 
-    public $timestamps = false; 
+    protected $casts = ['validated_at' => 'datetime'];
 
-    protected $casts = [
-        'validated_at' => 'datetime',
-    ];
+    // === TAMBAHKAN BARIS INI ===
+    protected $with = ['promo', 'user'];
 
     public function promo()
     {

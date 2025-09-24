@@ -34,40 +34,63 @@ class PromoController extends Controller
     /** Temukan user (tenant pemilik promo) dari owner_contact / owner_name */
     private function resolveTenantUserIdByPromo(Promo $promo): ?int
     {
-        // 1) Cocokkan via nomor HP (paling akurat)
-        $ownerPhone = $this->normalizePhone($promo->owner_contact ?? null);
-        if ($ownerPhone) {
-            $u = \App\Models\User::query()
-                ->where(function ($q) use ($ownerPhone) {
-                    foreach (['phone', 'phone_number', 'telp', 'telpon', 'mobile', 'contact', 'whatsapp', 'wa'] as $col) {
-                        // samakan hanya dengan angka; izinkan prefix 0/62
-                        $q->orWhereRaw(
-                            "REGEXP_REPLACE(COALESCE($col,''),'[^0-9]','') REGEXP ?",
-                            ["^(0|62)?$ownerPhone$"]
-                        );
-                    }
-                })
-                // kalau punya rule role_id = 6 untuk manager tenant, aktifkan baris ini:
-                // ->where('role_id', 6)
-                ->first();
-            if ($u) return $u->id;
-        }
+        try {
+            $ownerPhone = $this->normalizePhone($promo->owner_contact ?? null);
 
-        // 2) Fallback by nama (kurang akurat, opsional)
-        $ownerName = trim((string)($promo->owner_name ?? ''));
-        if ($ownerName !== '') {
-            $u = \App\Models\User::query()
-                ->where(function ($q) use ($ownerName) {
-                    foreach (['name', 'full_name', 'username', 'display_name', 'company_name'] as $col) {
-                        $q->orWhere($col, $ownerName);
-                    }
-                })
-                // ->where('role_id', 6)
-                ->first();
-            if ($u) return $u->id;
-        }
+            // Ambil daftar kolom users yang benar2 ada
+            $allUserCols = \Illuminate\Support\Facades\Schema::getColumnListing('users');
 
-        return null;
+            $phoneCols = array_values(array_intersect(
+                $allUserCols,
+                ['phone', 'phone_number', 'telp', 'telpon', 'mobile', 'contact', 'whatsapp', 'wa']
+            ));
+
+            // 1) Cocokkan via nomor HP (paling akurat)
+            if ($ownerPhone && !empty($phoneCols)) {
+                $u = \App\Models\User::query()
+                    ->where(function ($q) use ($ownerPhone, $phoneCols) {
+                        foreach ($phoneCols as $col) {
+                            // samakan hanya digit; izinkan prefix 0/62
+                            $q->orWhereRaw(
+                                "REGEXP_REPLACE(COALESCE($col,''),'[^0-9]','') REGEXP ?",
+                                ["^(0|62)?$ownerPhone$"]
+                            );
+                        }
+                    })
+                    // ->where('role_id', 6) // kalau perlu batasi role manager tenant
+                    ->first();
+
+                if ($u) return $u->id;
+            }
+
+            // 2) Fallback by nama (opsional)
+            $nameCols = array_values(array_intersect(
+                $allUserCols,
+                ['name', 'full_name', 'username', 'display_name', 'company_name']
+            ));
+            $ownerName = trim((string)($promo->owner_name ?? ''));
+            if ($ownerName !== '' && !empty($nameCols)) {
+                $u = \App\Models\User::query()
+                    ->where(function ($q) use ($ownerName, $nameCols) {
+                        foreach ($nameCols as $col) {
+                            $q->orWhere($col, $ownerName);
+                        }
+                    })
+                    // ->where('role_id', 6)
+                    ->first();
+
+                if ($u) return $u->id;
+            }
+
+            return null;
+        } catch (\Throwable $e) {
+            Log::error('resolveTenantUserIdByPromo failed: ' . $e->getMessage(), [
+                'promo_id'      => $promo->id ?? null,
+                'owner_name'    => $promo->owner_name ?? null,
+                'owner_contact' => $promo->owner_contact ?? null,
+            ]);
+            return null; // fallback aman agar tidak 500
+        }
     }
 
     /**

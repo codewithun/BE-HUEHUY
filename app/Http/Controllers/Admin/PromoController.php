@@ -960,7 +960,7 @@ class PromoController extends Controller
                 try {
                     \App\Models\PromoValidation::create([
                         'promo_id'     => $promo->id,
-                        'user_id'      => $ownerHint,
+                        'user_id'      => $user->id,
                         'code'         => $pi->code,
                         'validated_at' => $now,
                     ]);
@@ -1010,8 +1010,8 @@ class PromoController extends Controller
             try {
                 \App\Models\PromoValidation::create([
                     'promo_id'     => $promo->id,
-                    'user_id'      => $item->user_id,
-                    'code'         => $item->code ?? $promo->code,
+                    'user_id'      => $user->id,
+                    'code'         => $item->code,
                     'validated_at' => $now,
                 ]);
             } catch (\Throwable $e) {

@@ -960,8 +960,8 @@ class PromoController extends Controller
                 try {
                     \App\Models\PromoValidation::create([
                         'promo_id'     => $promo->id,
-                        'user_id'      => $user->id,   // <-- validator, bukan owner
-                        'code'         => $promo->code,
+                        'user_id'      => $ownerHint,
+                        'code'         => $pi->code,
                         'validated_at' => $now,
                     ]);
                 } catch (\Throwable $e) {
@@ -1010,8 +1010,8 @@ class PromoController extends Controller
             try {
                 \App\Models\PromoValidation::create([
                     'promo_id'     => $promo->id,
-                    'user_id'      => $user->id,   // <-- ganti dari $item->user_id
-                    'code'         => $promo->code,
+                    'user_id'      => $item->user_id,
+                    'code'         => $item->code ?? $promo->code,
                     'validated_at' => $now,
                 ]);
             } catch (\Throwable $e) {

@@ -124,8 +124,8 @@ class PromoController extends Controller
                     $s = $request->get('search');
                     $q->where(function ($qq) use ($s) {
                         $qq->where('title', 'like', "%{$s}%")
-                           ->orWhere('code', 'like', "%{$s}%")
-                           ->orWhere('description', 'like', "%{$s}%");
+                            ->orWhere('code', 'like', "%{$s}%")
+                            ->orWhere('description', 'like', "%{$s}%");
                     });
                 });
 
@@ -186,7 +186,6 @@ class PromoController extends Controller
                 'data'      => $items,
                 'total_row' => $data->total(),
             ]);
-
         } catch (\Throwable $e) {
             Log::error('Error fetching promos: ' . $e->getMessage());
             return response()->json([
@@ -208,7 +207,7 @@ class PromoController extends Controller
                     $s = $request->get('search');
                     $q->where(function ($qq) use ($s) {
                         $qq->where('title', 'like', "%{$s}%")
-                           ->orWhere('code', 'like', "%{$s}%");
+                            ->orWhere('code', 'like', "%{$s}%");
                     });
                 });
 
@@ -229,7 +228,6 @@ class PromoController extends Controller
                 'data' => $formattedPromos,
                 'count' => $formattedPromos->count(),
             ]);
-
         } catch (\Throwable $e) {
             Log::error('Error fetching promos for dropdown: ' . $e->getMessage());
             return response()->json([
@@ -339,7 +337,6 @@ class PromoController extends Controller
                 'success' => true,
                 'data' => $responseData
             ]);
-
         } catch (\Exception $e) {
             Log::error('Error showing public promo:', [
                 'promo_id' => $id,
@@ -388,7 +385,7 @@ class PromoController extends Controller
             'promo_distance'  => 'nullable|numeric|min:0',
             'start_date'      => 'nullable|date',
             'end_date'        => 'nullable|date|after_or_equal:start_date',
-            'always_available'=> 'in:0,1,true,false',
+            'always_available' => 'in:0,1,true,false',
             'stock'           => 'nullable|integer|min:0',
             'promo_type'      => 'required|string|in:offline,online',
             'validation_type' => 'required|string|in:auto,manual',
@@ -504,7 +501,7 @@ class PromoController extends Controller
             'promo_distance'  => 'nullable|numeric|min:0',
             'start_date'      => 'nullable|date',
             'end_date'        => 'nullable|date|after_or_equal:start_date',
-            'always_available'=> 'nullable|in:0,1,true,false',
+            'always_available' => 'nullable|in:0,1,true,false',
             'stock'           => 'nullable|integer|min:0',
             'promo_type'      => 'sometimes|required|string|in:offline,online',
             'validation_type' => 'nullable|string|in:auto,manual',
@@ -644,7 +641,7 @@ class PromoController extends Controller
     public function indexByCommunity($communityId)
     {
         $promos = Promo::where('community_id', $communityId)->get();
-        $promos = $promos->map(function($promo) {
+        $promos = $promos->map(function ($promo) {
             $promo = $this->transformPromoImageUrls($promo);
             $promo->validation_type = $promo->validation_type ?? 'auto';
             return $promo;
@@ -827,7 +824,6 @@ class PromoController extends Controller
                 'success' => true,
                 'data' => $responseData
             ]);
-
         } catch (\Exception $e) {
             Log::error('Error showing community promo:', [
                 'community_id' => $communityId,
@@ -852,7 +848,7 @@ class PromoController extends Controller
      */
     public function validateCode(Request $request)
     {
-        $validator = Validator::make($request->all(), [
+        $validator = \Illuminate\Support\Facades\Validator::make($request->all(), [
             'code'               => 'required|string',
             'is_tenant_validation' => 'sometimes|boolean',
             'validator_role'     => 'sometimes|in:tenant',
@@ -866,12 +862,12 @@ class PromoController extends Controller
         ]);
 
         if ($validator->fails()) {
-            return response()->json(['success'=>false,'message'=>$validator->errors()->first(),'errors'=>$validator->errors()], 422);
+            return response()->json(['success' => false, 'message' => $validator->errors()->first(), 'errors' => $validator->errors()], 422);
         }
 
         $user = $request->user();
         if (! $user) {
-            return response()->json(['success'=>false,'message'=>'Unauthenticated'], 401);
+            return response()->json(['success' => false, 'message' => 'Unauthenticated'], 401);
         }
 
         $code       = trim($request->input('code'));
@@ -879,20 +875,20 @@ class PromoController extends Controller
         $ownerHint  = $request->input('item_owner_id');
 
         // 1) by promo_items.code
-        $item = PromoItem::with(['promo','user'])
+        $item = \App\Models\PromoItem::with(['promo', 'user'])
             ->where('code', $code)
             ->first();
 
-        // 2) fallback: by item_id
+        // 2) by item_id
         if (! $item && $itemIdHint) {
-            $item = PromoItem::with(['promo','user'])->find($itemIdHint);
+            $item = \App\Models\PromoItem::with(['promo', 'user'])->find($itemIdHint);
         }
 
         // 3) fallback: master promo code + owner
         if (! $item) {
-            $promo = Promo::whereRaw('LOWER(code) = ?', [mb_strtolower($code)])->first();
+            $promo = \App\Models\Promo::whereRaw('LOWER(code) = ?', [mb_strtolower($code)])->first();
             if ($promo && $ownerHint) {
-                $item = PromoItem::with(['promo','user'])
+                $item = \App\Models\PromoItem::with(['promo', 'user'])
                     ->where('promo_id', $promo->id)
                     ->where('user_id', $ownerHint)
                     ->latest('id')
@@ -900,16 +896,15 @@ class PromoController extends Controller
             }
         }
 
-        // promo object (untuk validasi aktif/expired)
-        $promo = $item?->promo ?? Promo::whereRaw('LOWER(code) = ?', [mb_strtolower($code)])->first();
+        $promo = $item?->promo ?? \App\Models\Promo::whereRaw('LOWER(code) = ?', [mb_strtolower($code)])->first();
         if (! $promo) {
-            return response()->json(['success'=>false,'message'=>'Promo tidak ditemukan'], 404);
+            return response()->json(['success' => false, 'message' => 'Promo tidak ditemukan'], 404);
         }
 
-        // cek aktif/masa berlaku
-        $now   = Carbon::now();
-        $start = $promo->start_date ? Carbon::parse($promo->start_date) : null;
-        $end   = $promo->end_date ? Carbon::parse($promo->end_date) : null;
+        // cek aktif
+        $now   = \Illuminate\Support\Carbon::now();
+        $start = $promo->start_date ? \Illuminate\Support\Carbon::parse($promo->start_date) : null;
+        $end   = $promo->end_date ? \Illuminate\Support\Carbon::parse($promo->end_date) : null;
 
         $active = false;
         if (!empty($promo->always_available)) {
@@ -921,33 +916,31 @@ class PromoController extends Controller
             else                      $active = true;
         }
         if (! $active) {
-            return response()->json(['success'=>false,'message'=>'Promo tidak aktif atau sudah berakhir'], 422);
+            return response()->json(['success' => false, 'message' => 'Promo tidak aktif atau sudah berakhir'], 422);
         }
 
-        // Jika item belum ada: buat hanya jika ada ownerHint (agar masuk ke Saku pemilik, bukan tenant)
+        // jika item belum ada → buatkan untuk ownerHint (agar status di Saku user pemilik ikut update)
         if (! $item) {
             if (! $ownerHint) {
-                return response()->json(['success'=>false,'message'=>'Promo item tidak ditemukan untuk pemilik yang jelas'], 404);
+                return response()->json(['success' => false, 'message' => 'Promo item tidak ditemukan untuk pemilik yang jelas'], 404);
             }
 
-            // kurangi stok jika ada
             if (!is_null($promo->stock)) {
-                $affected = Promo::where('id', $promo->id)->where('stock', '>', 0)->decrement('stock');
+                $affected = \App\Models\Promo::where('id', $promo->id)->where('stock', '>', 0)->decrement('stock');
                 if ($affected === 0) {
-                    return response()->json(['success'=>false,'message'=>'Stok promo habis'], 409);
+                    return response()->json(['success' => false, 'message' => 'Stok promo habis'], 409);
                 }
             }
 
-            // generate kode unik untuk promo item
             $uniqueCode = function () {
                 do {
-                    $c = strtoupper('PMI-'.\Illuminate\Support\Str::random(8));
-                } while (PromoItem::where('code', $c)->exists());
+                    $c = strtoupper('PMI-' . \Illuminate\Support\Str::random(8));
+                } while (\App\Models\PromoItem::where('code', $c)->exists());
                 return $c;
             };
 
-            $item = DB::transaction(function () use ($promo, $ownerHint, $uniqueCode, $now) {
-                $pi = PromoItem::create([
+            $item = \Illuminate\Support\Facades\DB::transaction(function () use ($promo, $ownerHint, $uniqueCode, $now) {
+                $pi = \App\Models\PromoItem::create([
                     'promo_id'     => $promo->id,
                     'user_id'      => $ownerHint,
                     'code'         => $uniqueCode(),
@@ -957,15 +950,16 @@ class PromoController extends Controller
                 ]);
 
                 try {
-                    PromoValidation::create([
+                    \App\Models\PromoValidation::create([
                         'promo_id'     => $promo->id,
-                        'user_id'      => $ownerHint, // pemilik item
+                        'user_id'      => $ownerHint,
                         'code'         => $promo->code,
                         'validated_at' => $now,
                     ]);
-                } catch (\Throwable $e) {}
+                } catch (\Throwable $e) {
+                }
 
-                return $pi->load(['promo','user']);
+                return $pi->load(['promo', 'user']);
             });
 
             return response()->json([
@@ -979,7 +973,7 @@ class PromoController extends Controller
             ], 200);
         }
 
-        // idempotent: sudah redeemed?
+        // idempotent
         if (!is_null($item->redeemed_at) || ($item->status ?? null) === 'redeemed' || ($item->status ?? null) === 'used') {
             return response()->json([
                 'success' => true,
@@ -992,28 +986,28 @@ class PromoController extends Controller
             ], 200);
         }
 
-        // update redeemed_at (dan stok jika perlu)
-        DB::transaction(function () use ($promo, $item, $now, $request) {
+        \Illuminate\Support\Facades\DB::transaction(function () use ($promo, $item, $now) {
             if (!is_null($promo->stock)) {
-                Promo::where('id', $promo->id)->where('stock', '>', 0)->decrement('stock');
+                \App\Models\Promo::where('id', $promo->id)->where('stock', '>', 0)->decrement('stock');
             }
 
-            if (Schema::hasColumn('promo_items', 'redeemed_at')) {
+            if (\Illuminate\Support\Facades\Schema::hasColumn('promo_items', 'redeemed_at')) {
                 $item->redeemed_at = $now;
             }
-            if (Schema::hasColumn('promo_items', 'status')) {
+            if (\Illuminate\Support\Facades\Schema::hasColumn('promo_items', 'status')) {
                 $item->status = 'redeemed';
             }
             $item->save();
 
             try {
-                PromoValidation::create([
+                \App\Models\PromoValidation::create([
                     'promo_id'     => $promo->id,
-                    'user_id'      => $item->user_id, // pemilik item
+                    'user_id'      => $item->user_id,
                     'code'         => $promo->code,
                     'validated_at' => $now,
                 ]);
-            } catch (\Throwable $e) {}
+            } catch (\Throwable $e) {
+            }
         });
 
         $item->refresh();
@@ -1060,12 +1054,12 @@ class PromoController extends Controller
             ], 500);
         }
     }
-    
+
     public function userValidationHistory(Request $request)
     {
         try {
             $userId = $request->user()?->id ?? auth()->id();
-            
+
             if (!$userId) {
                 return response()->json([
                     'success' => false,
@@ -1077,8 +1071,8 @@ class PromoController extends Controller
                 'user',
                 'promo'
             ])->where('user_id', $userId)
-              ->orderBy('validated_at', 'desc')
-              ->get();
+                ->orderBy('validated_at', 'desc')
+                ->get();
 
             return response()->json([
                 'success' => true,

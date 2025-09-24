@@ -25,7 +25,7 @@ class VoucherController extends Controller
     {
         if (is_null($raw) || $raw === '') return [];
         $arr = is_array($raw) ? $raw : preg_split('/[,\s]+/', (string) $raw, -1, PREG_SPLIT_NO_EMPTY);
-        return collect($arr)->map(fn ($v) => (int) $v)->filter(fn ($v) => $v > 0)->unique()->values()->all();
+        return collect($arr)->map(fn($v) => (int) $v)->filter(fn($v) => $v > 0)->unique()->values()->all();
     }
 
     private function generateCode(): string
@@ -50,7 +50,7 @@ class VoucherController extends Controller
                 $s = $request->get('search');
                 $q->where(function ($qq) use ($s) {
                     $qq->where('name', 'like', "%{$s}%")
-                       ->orWhere('code', 'like', "%{$s}%");
+                        ->orWhere('code', 'like', "%{$s}%");
                 });
             });
 
@@ -79,7 +79,7 @@ class VoucherController extends Controller
         // Handle "all" logic - if paginate=0 or all=1, use get() instead of paginate()
         if ($paginate <= 0 || $request->boolean('all')) {
             $items = $query->orderBy($sortby, $sortDirection)->get();
-            
+
             return response([
                 'message'   => 'success',
                 'data'      => $items,
@@ -118,7 +118,7 @@ class VoucherController extends Controller
                     $s = $request->get('search');
                     $q->where(function ($qq) use ($s) {
                         $qq->where('name', 'like', "%{$s}%")
-                           ->orWhere('code', 'like', "%{$s}%");
+                            ->orWhere('code', 'like', "%{$s}%");
                     });
                 });
 
@@ -140,7 +140,6 @@ class VoucherController extends Controller
                 'data' => $formattedVouchers,
                 'count' => $formattedVouchers->count(),
             ]);
-
         } catch (\Throwable $e) {
             Log::error('Error fetching vouchers for dropdown: ' . $e->getMessage());
             return response()->json([
@@ -153,16 +152,16 @@ class VoucherController extends Controller
     public function show(string $id)
     {
         $model = Voucher::with([
-                'community',
-                'voucher_items',
-                'voucher_items.user',
-            ])->where('id', $id)->first();
+            'community',
+            'voucher_items',
+            'voucher_items.user',
+        ])->where('id', $id)->first();
 
         if (!$model) {
             return response(['messaege' => 'Data not found'], 404);
         }
 
-        return response(['message' => 'Success','data' => $model]);
+        return response(['message' => 'Success', 'data' => $model]);
     }
 
     /// ================= Store =================
@@ -196,8 +195,8 @@ class VoucherController extends Controller
         }
 
         $request->merge([
-            'community_id'   => in_array($request->input('community_id'), [null,'','null','undefined'], true) ? null : $request->input('community_id'),
-            'target_user_id' => in_array($request->input('target_user_id'), [null,'','null','undefined'], true) ? null : $request->input('target_user_id'),
+            'community_id'   => in_array($request->input('community_id'), [null, '', 'null', 'undefined'], true) ? null : $request->input('community_id'),
+            'target_user_id' => in_array($request->input('target_user_id'), [null, '', 'null', 'undefined'], true) ? null : $request->input('target_user_id'),
         ]);
 
         if ($request->input('target_type') !== 'user') {
@@ -218,13 +217,15 @@ class VoucherController extends Controller
             'tenant_location' => 'nullable|string|max:255',
             'stock'           => 'required|integer|min:0',
 
-            'validation_type' => ['nullable', Rule::in(['auto','manual'])],
+            'validation_type' => ['nullable', Rule::in(['auto', 'manual'])],
             'code'            => [
-                Rule::requiredIf(fn () => ($request->input('validation_type') ?: 'auto') === 'manual'),
-                'string','max:255', Rule::unique('vouchers','code')
+                Rule::requiredIf(fn() => ($request->input('validation_type') ?: 'auto') === 'manual'),
+                'string',
+                'max:255',
+                Rule::unique('vouchers', 'code')
             ],
 
-            'target_type'     => ['required', Rule::in(['all','user','community'])],
+            'target_type'     => ['required', Rule::in(['all', 'user', 'community'])],
             'target_user_id'  => 'nullable|integer|exists:users,id',
             'target_user_ids' => ['exclude_unless:target_type,user', 'required_if:target_type,user', 'array', 'min:1'],
             'target_user_ids.*' => 'integer|exists:users,id',
@@ -235,7 +236,7 @@ class VoucherController extends Controller
         ]);
 
         if ($validator->fails()) {
-            return response()->json(['success'=>false,'message'=>'Validasi gagal','errors'=>$validator->errors()], 422);
+            return response()->json(['success' => false, 'message' => 'Validasi gagal', 'errors' => $validator->errors()], 422);
         }
 
         try {
@@ -279,7 +280,7 @@ class VoucherController extends Controller
         } catch (\Throwable $e) {
             DB::rollBack();
             Log::error('Error creating voucher: ' . $e->getMessage());
-            return response()->json(['success'=>false,'message'=>'Gagal membuat voucher: ' . $e->getMessage()], 500);
+            return response()->json(['success' => false, 'message' => 'Gagal membuat voucher: ' . $e->getMessage()], 500);
         }
     }
 
@@ -310,8 +311,8 @@ class VoucherController extends Controller
         }
 
         $request->merge([
-            'community_id'   => in_array($request->input('community_id'), [null,'','null','undefined'], true) ? null : $request->input('community_id'),
-            'target_user_id' => in_array($request->input('target_user_id'), [null,'','null','undefined'], true) ? null : $request->input('target_user_id'),
+            'community_id'   => in_array($request->input('community_id'), [null, '', 'null', 'undefined'], true) ? null : $request->input('community_id'),
+            'target_user_id' => in_array($request->input('target_user_id'), [null, '', 'null', 'undefined'], true) ? null : $request->input('target_user_id'),
         ]);
 
         if ($request->input('target_type') !== 'user') {
@@ -330,9 +331,9 @@ class VoucherController extends Controller
             'valid_until'     => 'nullable|date',
             'tenant_location' => 'nullable|string|max:255',
             'stock'           => 'required|integer|min:0',
-            'validation_type' => ['nullable', Rule::in(['auto','manual'])],
-            'code'            => ['nullable','string','max:255', Rule::unique('vouchers','code')->ignore($id)],
-            'target_type'     => ['required', Rule::in(['all','user','community'])],
+            'validation_type' => ['nullable', Rule::in(['auto', 'manual'])],
+            'code'            => ['nullable', 'string', 'max:255', Rule::unique('vouchers', 'code')->ignore($id)],
+            'target_type'     => ['required', Rule::in(['all', 'user', 'community'])],
             'target_user_id'  => 'nullable|integer|exists:users,id',
             'target_user_ids' => ['exclude_unless:target_type,user', 'required_if:target_type,user', 'array', 'min:1'],
             'target_user_ids.*' => 'integer|exists:users,id',
@@ -448,9 +449,9 @@ class VoucherController extends Controller
             }
             $model->delete();
 
-            return response(['message'=>'Success','data'=>$model]);
+            return response(['message' => 'Success', 'data' => $model]);
         } catch (\Throwable $th) {
-            return response(['message'=>'Error: server side having problem!'], 500);
+            return response(['message' => 'Error: server side having problem!'], 500);
         }
     }
 
@@ -472,7 +473,7 @@ class VoucherController extends Controller
                     $builder->whereRaw('1=0');
                 }
             } elseif ($voucher->target_type === 'community' && $voucher->community_id) {
-                $builder->whereHas('communityMemberships', function($q) use ($voucher) {
+                $builder->whereHas('communityMemberships', function ($q) use ($voucher) {
                     $q->where('community_id', $voucher->community_id)->where('status', 'active');
                 });
             }
@@ -555,23 +556,23 @@ class VoucherController extends Controller
 
         $code       = trim($data['code']);
         $itemIdHint = $data['item_id']      ?? null;
-        $ownerHint  = $data['item_owner_id']?? null;
+        $ownerHint  = $data['item_owner_id'] ?? null;
 
         // 1) by voucher_items.code
-        $item = VoucherItem::with(['voucher', 'voucher.community', 'user'])
+        $item = \App\Models\VoucherItem::with(['voucher', 'voucher.community', 'user'])
             ->where('code', $code)
             ->first();
 
         // 2) fallback: by item_id hint
         if (! $item && $itemIdHint) {
-            $item = VoucherItem::with(['voucher', 'voucher.community', 'user'])->find($itemIdHint);
+            $item = \App\Models\VoucherItem::with(['voucher', 'voucher.community', 'user'])->find($itemIdHint);
         }
 
         // 3) fallback: by master voucher code + owner
         if (! $item) {
-            $voucher = Voucher::where('code', $code)->first();
+            $voucher = \App\Models\Voucher::where('code', $code)->first();
             if ($voucher && $ownerHint) {
-                $item = VoucherItem::with(['voucher', 'voucher.community', 'user'])
+                $item = \App\Models\VoucherItem::with(['voucher', 'voucher.community', 'user'])
                     ->where('voucher_id', $voucher->id)
                     ->where('user_id', $ownerHint)
                     ->latest('id')
@@ -580,12 +581,12 @@ class VoucherController extends Controller
         }
 
         if (! $item) {
-            return response()->json(['success'=>false,'message'=>'Voucher item tidak ditemukan'], 404);
+            return response()->json(['success' => false, 'message' => 'Voucher item tidak ditemukan'], 404);
         }
 
         // optional expiry check
         if (!empty($item->voucher?->valid_until) && now()->greaterThan($item->voucher->valid_until)) {
-            return response()->json(['success'=>false,'message'=>'Voucher kedaluwarsa'], 422);
+            return response()->json(['success' => false, 'message' => 'Voucher kedaluwarsa'], 422);
         }
 
         // idempotent
@@ -601,26 +602,25 @@ class VoucherController extends Controller
             ], 200);
         }
 
-        DB::transaction(function () use ($item, $user, $code, $request) {
-            if (Schema::hasColumn('voucher_items', 'used_at')) {
+        \Illuminate\Support\Facades\DB::transaction(function () use ($item, $user, $code, $request) {
+            if (\Illuminate\Support\Facades\Schema::hasColumn('voucher_items', 'used_at')) {
                 $item->used_at = now();
             }
-            if (Schema::hasColumn('voucher_items', 'status')) {
+            if (\Illuminate\Support\Facades\Schema::hasColumn('voucher_items', 'status')) {
                 $item->status = 'used';
             }
             $item->save();
 
-            // optional: simpan jejak validasi
+            // jejak validasi (abaikan jika tabel tidak ada)
             try {
-                VoucherValidation::create([
+                \App\Models\VoucherValidation::create([
                     'voucher_id'   => $item->voucher_id,
-                    'user_id'      => $user->id, // validator (tenant) atau user login
+                    'user_id'      => $user->id,
                     'code'         => $code,
                     'validated_at' => now(),
                     'notes'        => $request->input('validation_purpose'),
                 ]);
             } catch (\Throwable $e) {
-                // jangan gagalkan proses jika tabel tidak ada
             }
         });
 
@@ -645,7 +645,7 @@ class VoucherController extends Controller
             $voucher = Voucher::with(['validations.user'])->find($voucherId);
 
             if (!$voucher) {
-                return response()->json(['success'=>false,'message'=>'Voucher tidak ditemukan'], 404);
+                return response()->json(['success' => false, 'message' => 'Voucher tidak ditemukan'], 404);
             }
 
             $validations = $voucher->validations()
@@ -653,10 +653,10 @@ class VoucherController extends Controller
                 ->orderBy('validated_at', 'desc')
                 ->get();
 
-            return response()->json(['success'=>true,'data'=>$validations]);
+            return response()->json(['success' => true, 'data' => $validations]);
         } catch (\Throwable $e) {
             Log::error('Error in history method: ' . $e->getMessage());
-            return response()->json(['success'=>false,'message'=>'Gagal mengambil riwayat validasi: ' . $e->getMessage()], 500);
+            return response()->json(['success' => false, 'message' => 'Gagal mengambil riwayat validasi: ' . $e->getMessage()], 500);
         }
     }
 
@@ -666,7 +666,7 @@ class VoucherController extends Controller
             $userId = $request->user()?->id ?? auth()->id();
 
             if (!$userId) {
-                return response()->json(['success'=>false,'message'=>'User tidak terautentikasi'], 401);
+                return response()->json(['success' => false, 'message' => 'User tidak terautentikasi'], 401);
             }
 
             $voucherItems = VoucherItem::with(['voucher.community'])
@@ -674,10 +674,10 @@ class VoucherController extends Controller
                 ->orderBy('created_at', 'desc')
                 ->get();
 
-            return response()->json(['success'=>true,'data'=>$voucherItems]);
+            return response()->json(['success' => true, 'data' => $voucherItems]);
         } catch (\Throwable $e) {
             Log::error('Error in voucherItems: ' . $e->getMessage());
-            return response()->json(['success'=>false,'message'=>'Gagal mengambil voucher items: ' . $e->getMessage()], 500);
+            return response()->json(['success' => false, 'message' => 'Gagal mengambil voucher items: ' . $e->getMessage()], 500);
         }
     }
 }

@@ -7,6 +7,7 @@ use App\Models\Promo;
 use App\Models\PromoItem;
 use App\Models\PromoValidation;
 use App\Models\Community;
+use App\Models\User; // ambil data manager merchant
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
@@ -36,6 +37,78 @@ class PromoController extends Controller
         return $promo;
     }
 
+    /** Helper pilih nilai pertama yang tidak kosong */
+    private function pick(...$candidates)
+    {
+        foreach ($candidates as $v) {
+            if (isset($v) && trim((string)$v) !== '') return $v;
+        }
+        return null;
+    }
+
+    /**
+     * Ambil nama & telepon dari berbagai kemungkinan kolom user dengan AMAN.
+     * Tidak pernah akses $user->profile / $user->meta sebagai properti langsung.
+     */
+    private function extractUserNamePhone(?User $user): array
+    {
+        if (!$user) return [null, null];
+
+        $name = $this->pick(
+            $user->name ?? null,
+            $user->full_name ?? null,
+            $user->username ?? null,
+            $user->display_name ?? null,
+            $user->company_name ?? null
+        );
+
+        $phone = $this->pick(
+            $user->phone ?? null,
+            $user->phone_number ?? null,
+            $user->telp ?? null,
+            $user->telpon ?? null,
+            $user->mobile ?? null,
+            $user->contact ?? null,
+            $user->whatsapp ?? null,
+            $user->wa ?? null
+        );
+
+        // Fallback dari relasi profile() jika ADA
+        if (method_exists($user, 'profile')) {
+            $profile = $user->profile()->first();
+            if ($profile) {
+                $name = $name ?: $this->pick(
+                    $profile->name ?? null,
+                    $profile->full_name ?? null,
+                    $profile->display_name ?? null
+                );
+                $phone = $phone ?: $this->pick(
+                    $profile->phone ?? null,
+                    $profile->phone_number ?? null,
+                    $profile->telp ?? null,
+                    $profile->telpon ?? null,
+                    $profile->mobile ?? null,
+                    $profile->whatsapp ?? null
+                );
+            }
+        }
+
+        // Fallback dari relasi meta() jika ADA
+        if (method_exists($user, 'meta')) {
+            $meta = $user->meta()->first();
+            if ($meta) {
+                $phone = $phone ?: $this->pick(
+                    $meta->phone ?? null,
+                    $meta->phone_number ?? null,
+                    $meta->contact ?? null,
+                    $meta->whatsapp ?? null
+                );
+            }
+        }
+
+        return [$name, $phone ? trim((string)$phone) : null];
+    }
+
     // Align with VoucherController index (search/sort/paginate + response shape)
     public function index(Request $request)
     {
@@ -56,8 +129,6 @@ class PromoController extends Controller
                     });
                 });
 
-            // Filter berdasarkan admin jika diperlukan
-            // Uncomment jika ada kolom admin_id di tabel promos
             // $query->where('admin_id', $adminId);
 
             if ($filter) {
@@ -80,7 +151,6 @@ class PromoController extends Controller
                 }
             }
 
-            // Handle "all" logic - if paginate=0 or all=1, use get() instead of paginate()
             if ($paginate <= 0 || $request->boolean('all')) {
                 $items = $query->orderBy($sortby, $sortDirection)->get();
 
@@ -97,7 +167,6 @@ class PromoController extends Controller
                 ]);
             }
 
-            // Regular pagination
             $data = $query->orderBy($sortby, $sortDirection)->paginate($paginate);
             $items = collect($data->items())->map(function ($p) {
                 $p = $this->transformPromoImageUrls($p);
@@ -126,9 +195,7 @@ class PromoController extends Controller
         }
     }
 
-    /**
-     * For dropdown usage - returns minimal promo data
-     */
+    /** For dropdown usage */
     public function forDropdown(Request $request)
     {
         try {
@@ -175,7 +242,7 @@ class PromoController extends Controller
         $promo = Promo::find($id);
         if (!$promo) {
             return response()->json([
-                'messaege' => 'Data not found'
+                'message' => 'Data not found'
             ], 404);
         }
 
@@ -188,9 +255,7 @@ class PromoController extends Controller
         ]);
     }
 
-    /**
-     * Show promo for public access (QR entry) - No authentication required
-     */
+    /** Public (QR) */
     public function showPublic($id)
     {
         try {
@@ -288,12 +353,32 @@ class PromoController extends Controller
 
     public function store(Request $request)
     {
+        // Default validation_type
+        if (!$request->filled('validation_type')) {
+            $request->merge(['validation_type' => 'auto']);
+        }
+
         $request->merge([
             'community_id'     => in_array($request->input('community_id'), [null, '', 'null', 'undefined'], true) ? null : $request->input('community_id'),
             'always_available' => in_array($request->input('always_available'), [1, '1', true, 'true'], true) ? '1' : '0',
         ]);
 
+        // TERIMA alias dari FE (owner_manager_id) → map ke owner_user_id
+        if ($request->filled('owner_manager_id') && !$request->filled('owner_user_id')) {
+            $request->merge(['owner_user_id' => $request->input('owner_manager_id')]);
+        }
+
+        // Ambil dari user manager kalau owner_user_id ada
+        if ($request->filled('owner_user_id')) {
+            $user = User::find($request->input('owner_user_id'));
+            [$uname, $uphone] = $this->extractUserNamePhone($user);
+            if ($uname)  { $request->merge(['owner_name'    => $uname]); }
+            if ($uphone) { $request->merge(['owner_contact' => $uphone]); }
+        }
+
         $validator = Validator::make($request->all(), [
+            'owner_user_id'   => 'nullable|integer|exists:users,id',
+
             'title'           => 'required|string|max:255',
             'description'     => 'required|string',
             'detail'          => 'nullable|string',
@@ -316,6 +401,13 @@ class PromoController extends Controller
             'code.required_if'         => 'Kode wajib diisi untuk tipe validasi manual.',
         ]);
 
+        // Kalau owner_user_id dikirim tapi nomor user kosong → error yang jelas
+        $validator->after(function($v) use ($request) {
+            if ($request->filled('owner_user_id') && !$request->filled('owner_contact')) {
+                $v->errors()->add('owner_contact', 'Nomor telepon manager pada data user belum diisi.');
+            }
+        });
+
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
@@ -328,6 +420,9 @@ class PromoController extends Controller
             DB::beginTransaction();
 
             $data = $validator->validated();
+
+            // HINDARI mass assignment: buang field yang bukan kolom
+            unset($data['owner_user_id']); // <— penting
 
             $data['always_available'] = in_array($data['always_available'] ?? '0', [1, '1', true, 'true'], true);
             $data['promo_distance']   = isset($data['promo_distance']) ? (float) $data['promo_distance'] : 0;
@@ -383,8 +478,23 @@ class PromoController extends Controller
             'always_available' => in_array($request->input('always_available'), [1, '1', true, 'true'], true) ? '1' : (in_array($request->input('always_available'), [0, '0', false, 'false'], true) ? '0' : null),
         ]);
 
+        // TERIMA alias dari FE (owner_manager_id) → map ke owner_user_id
+        if ($request->filled('owner_manager_id') && !$request->filled('owner_user_id')) {
+            $request->merge(['owner_user_id' => $request->input('owner_manager_id')]);
+        }
+
+        // Ambil dari user manager kalau dikirim
+        if ($request->filled('owner_user_id')) {
+            $user = User::find($request->input('owner_user_id'));
+            [$uname, $uphone] = $this->extractUserNamePhone($user);
+            if ($uname)  { $request->merge(['owner_name'    => $uname]); }
+            if ($uphone) { $request->merge(['owner_contact' => $uphone]); }
+        }
+
         // Create dynamic validation rules based on whether image is being uploaded
         $validationRules = [
+            'owner_user_id'   => 'nullable|integer|exists:users,id',
+
             'title'           => 'sometimes|required|string|max:255',
             'description'     => 'sometimes|required|string',
             'detail'          => 'nullable|string',
@@ -402,11 +512,9 @@ class PromoController extends Controller
             'code'            => 'nullable|string|unique:promos,code,' . $id . '|required_if:validation_type,manual',
         ];
 
-        // Only validate image as file if it's actually being uploaded
         if ($request->hasFile('image')) {
             $validationRules['image'] = 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048';
         } else {
-            // Allow image field to be a string (existing URL) or null
             $validationRules['image'] = 'nullable|string';
         }
 
@@ -414,6 +522,15 @@ class PromoController extends Controller
             'validation_type.in' => 'Tipe validasi harus auto atau manual.',
             'code.required_if'   => 'Kode wajib diisi untuk tipe validasi manual.',
         ]);
+
+        // Opsional: kalau owner_user_id dikirim tapi nomor tak terisi
+        $validator->after(function($v) use ($request) {
+            if ($request->filled('owner_user_id')) {
+                if ($request->has('owner_contact') && ($request->input('owner_contact') === null || $request->input('owner_contact') === '')) {
+                    $v->errors()->add('owner_contact', 'Nomor telepon manager pada data user belum diisi.');
+                }
+            }
+        });
 
         if ($validator->fails()) {
             Log::error('Validation failed on promo update', [
@@ -433,7 +550,9 @@ class PromoController extends Controller
 
             $data = $validator->validated();
 
-            // Remove image from data if it's just a URL string (not a new upload)
+            // HINDARI mass assignment
+            unset($data['owner_user_id']); // <— penting
+
             if (isset($data['image']) && is_string($data['image']) && !$request->hasFile('image')) {
                 unset($data['image']);
             }
@@ -461,7 +580,6 @@ class PromoController extends Controller
                 }
             }
 
-            // Only handle file upload if there's actually a new file
             if ($request->hasFile('image')) {
                 if (!empty($promo->image)) {
                     Storage::disk('public')->delete($promo->image);
@@ -538,7 +656,7 @@ class PromoController extends Controller
     // store promo under a specific community (creates new promo and assigns)
     public function storeForCommunity(Request $request, $communityId)
     {
-        if ($request->boolean('attach_existing') || $request->has('promo_id') && !$request->has('title')) {
+        if ($request->boolean('attach_existing') || ($request->has('promo_id') && !$request->has('title'))) {
             return $this->assignToCommunity($request, $communityId);
         }
 
@@ -547,9 +665,7 @@ class PromoController extends Controller
         return $this->store($request);
     }
 
-    /**
-     * Returns promos available to be assigned to the community.
-     */
+    /** Returns promos available to be assigned to the community. */
     public function availableForCommunity($communityId)
     {
         $promos = Promo::whereNull('community_id')

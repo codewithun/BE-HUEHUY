@@ -36,6 +36,72 @@ class VoucherController extends Controller
         return $code;
     }
 
+        /**
+     * Filter builder ke "regular user" (bukan admin/superadmin/manager/tenant_manager/staff/owner).
+     * Flexible: dukung kolom role/level/type, roles (json/string), serta flags boolean umum.
+     * UPDATED: Tambahan support untuk relasi role()->name
+     */
+    private function applyRegularUserFilter(\Illuminate\Database\Eloquent\Builder $builder): \Illuminate\Database\Eloquent\Builder
+    {
+        $deny = ['admin','superadmin','manager','tenant','tenant_manager','manager_tenant','staff','owner','operator','moderator'];
+
+        // 1) Cek relasi role()->name (jika ada)
+        if (Schema::hasTable('roles') && method_exists(\App\Models\User::class, 'role')) {
+            $builder->whereHas('role', function ($q) {
+                $q->where(DB::raw('LOWER(name)'), 'user');
+            });
+        }
+        // 2) Fallback ke kolom langsung di users table
+        elseif (Schema::hasColumn('users', 'role')) {
+            $builder->whereRaw('LOWER(role) = ?', ['user']);
+        } elseif (Schema::hasColumn('users', 'level')) {
+            $builder->whereRaw('LOWER(level) = ?', ['user']);
+        } elseif (Schema::hasColumn('users', 'type')) {
+            $builder->whereRaw('LOWER(type) = ?', ['user']);
+        } elseif (Schema::hasColumn('users', 'roles')) {
+            $builder->where(function ($q) {
+                $q->where('roles', 'like', '%"user"%')
+                ->orWhere('roles', 'like', '%user%');
+            });
+            foreach ($deny as $ban) {
+                $builder->where(function ($q) use ($ban) {
+                    $q->whereNull('roles')->orWhere('roles', 'not like', "%{$ban}%");
+                });
+            }
+        }
+
+        // 3) Hardening dengan flags boolean (jika ada)
+        $boolFalse = function ($q, $col) {
+            $q->where(function ($qq) use ($col) {
+                $qq->whereNull($col)->orWhere($col, false)->orWhere($col, 0)->orWhere($col, '0');
+            });
+        };
+        
+        if (Schema::hasColumn('users', 'is_admin'))          { $boolFalse($builder, 'is_admin'); }
+        if (Schema::hasColumn('users', 'is_superadmin'))     { $boolFalse($builder, 'is_superadmin'); }
+        if (Schema::hasColumn('users', 'is_staff'))          { $boolFalse($builder, 'is_staff'); }
+        if (Schema::hasColumn('users', 'is_manager'))        { $boolFalse($builder, 'is_manager'); }
+        if (Schema::hasColumn('users', 'is_tenant_manager')) { $boolFalse($builder, 'is_tenant_manager'); }
+        if (Schema::hasColumn('users', 'tenant_manager'))    { $boolFalse($builder, 'tenant_manager'); }
+
+        return $builder;
+    }
+
+    /**
+     * Dari daftar ID, ambil yang benar-benar "regular user" saja.
+     */
+    private function filterRegularUserIds(array $ids): array
+    {
+        if (empty($ids)) return [];
+        $ids = array_values(array_unique(array_map('intval', $ids)));
+
+        $q = \App\Models\User::query()->whereIn('id', $ids);
+        $q = $this->applyRegularUserFilter($q);
+
+        return $q->pluck('id')->map(fn($v) => (int) $v)->all();
+    }
+
+
     // ================= Index / Show =================
     public function index(Request $request)
     {
@@ -456,76 +522,106 @@ class VoucherController extends Controller
     }
 
     // ================= Notifications =================
-    private function sendVoucherNotifications(Voucher $voucher, array $explicitUserIds = [])
-    {
-        try {
-            $now      = now();
-            $imageUrl = $voucher->image ? asset('storage/' . $voucher->image) : null;
+   private function sendVoucherNotifications(Voucher $voucher, array $explicitUserIds = [])
+{
+    try {
+        $now      = now();
+        $imageUrl = $voucher->image ? asset('storage/' . $voucher->image) : null;
 
-            $builder = User::query()->whereNotNull('verified_at');
+        // mulai dari user terverifikasi
+        $builder = User::query()->whereNotNull('verified_at');
 
-            if ($voucher->target_type === 'user') {
-                if (!empty($explicitUserIds)) {
-                    $builder->whereIn('id', $explicitUserIds);
-                } elseif ($voucher->target_user_id) {
-                    $builder->where('id', $voucher->target_user_id);
-                } else {
-                    $builder->whereRaw('1=0');
+        if ($voucher->target_type === 'user') {
+            // 1) jika ada explicit IDs, tetap DI-SARING lagi ke regular user only
+            if (!empty($explicitUserIds)) {
+                $safeIds = $this->filterRegularUserIds($explicitUserIds);
+                if (empty($safeIds)) {
+                    // tidak ada penerima valid
+                    Log::info('No regular-user recipients after filtering explicit ids.');
+                    return 0;
                 }
-            } elseif ($voucher->target_type === 'community' && $voucher->community_id) {
-                $builder->whereHas('communityMemberships', function ($q) use ($voucher) {
-                    $q->where('community_id', $voucher->community_id)->where('status', 'active');
-                });
+                $builder->whereIn('id', $safeIds);
+            }
+            // 2) jika hanya single target_user_id di master, tetap DI-SARING juga
+            elseif ($voucher->target_user_id) {
+                $safeIds = $this->filterRegularUserIds([$voucher->target_user_id]);
+                if (empty($safeIds)) {
+                    Log::info('Single target_user_id filtered out (not a regular user).');
+                    return 0;
+                }
+                $builder->whereIn('id', $safeIds);
+            }
+            // 3) tidak ada target user -> kosong
+            else {
+                $builder->whereRaw('1=0');
             }
 
-            $sent = 0;
-            $builder->select('id')->chunkById(500, function ($users) use ($voucher, $now, $imageUrl, &$sent) {
-                $batch = [];
-                foreach ($users as $user) {
-                    $batch[] = [
-                        'user_id'     => $user->id,
-                        'type'        => 'voucher',
-                        'title'       => 'Voucher Baru Tersedia!',
-                        'message'     => "Voucher '{$voucher->name}' tersedia untuk Anda.",
-                        'image_url'   => $imageUrl,
-                        'target_type' => 'voucher',
-                        'target_id'   => $voucher->id,
-                        'action_url'  => "/vouchers/{$voucher->id}",
-                        'meta'        => json_encode([
-                            'voucher_code' => $voucher->code,
-                            'valid_until'  => $voucher->valid_until,
-                            'community_id' => $voucher->community_id,
-                            'target_type'  => $voucher->target_type
-                        ]),
-                        'created_at'  => $now,
-                        'updated_at'  => $now,
-                    ];
-                }
+            // **tambahan pengaman**: walau 'user', pastikan itu benar-benar user biasa
+            // (sudah difilter di filterRegularUserIds, tapi untuk extra safety)
+            $builder = $this->applyRegularUserFilter($builder);
 
-                if (!empty($batch)) {
-                    foreach (array_chunk($batch, 100) as $chunk) {
-                        Notification::insert($chunk);
-                    }
-                    $sent += count($batch);
-                }
+        } elseif ($voucher->target_type === 'community' && $voucher->community_id) {
+            $builder->whereHas('communityMemberships', function ($q) use ($voucher) {
+                $q->where('community_id', $voucher->community_id)->where('status', 'active');
             });
+            // community juga wajib regular user
+            $builder = $this->applyRegularUserFilter($builder);
 
-            Log::info("Voucher notifications sent", [
-                'voucher_id' => $voucher->id,
-                'voucher_name' => $voucher->name,
-                'target_type' => $voucher->target_type,
-                'notifications_sent' => $sent
-            ]);
-
-            return $sent;
-        } catch (\Throwable $e) {
-            Log::error('Error sending voucher notifications: ' . $e->getMessage(), [
-                'voucher_id' => $voucher->id,
-                'error' => $e->getMessage()
-            ]);
-            return 0;
+        } else {
+            // === 'all' atau nilai lain ===
+            // <<<< FIX PENTING: HANYA REGULAR USERS >>>>
+            $builder = $this->applyRegularUserFilter($builder);
         }
+
+        $sent = 0;
+        $builder->select('id')->chunkById(500, function ($users) use ($voucher, $now, $imageUrl, &$sent) {
+            $batch = [];
+            foreach ($users as $user) {
+                $batch[] = [
+                    'user_id'     => $user->id,
+                    'type'        => 'voucher',
+                    'title'       => 'Voucher Baru Tersedia!',
+                    'message'     => "Voucher '{$voucher->name}' tersedia untuk Anda.",
+                    'image_url'   => $imageUrl,
+                    'target_type' => 'voucher',
+                    'target_id'   => $voucher->id,
+                    'action_url'  => "/vouchers/{$voucher->id}",
+                    'meta'        => json_encode([
+                        'voucher_code' => $voucher->code,
+                        'valid_until'  => $voucher->valid_until,
+                        'community_id' => $voucher->community_id,
+                        'target_type'  => $voucher->target_type
+                    ]),
+                    'created_at'  => $now,
+                    'updated_at'  => $now,
+                ];
+            }
+
+            if (!empty($batch)) {
+                foreach (array_chunk($batch, 100) as $chunk) {
+                    \App\Models\Notification::insert($chunk);
+                }
+                $sent += count($batch);
+            }
+        });
+
+        Log::info("Voucher notifications sent", [
+            'voucher_id' => $voucher->id,
+            'voucher_name' => $voucher->name,
+            'target_type' => $voucher->target_type,
+            'notifications_sent' => $sent
+        ]);
+
+        return $sent;
+    } catch (\Throwable $e) {
+        Log::error('Error sending voucher notifications: ' . $e->getMessage(), [
+            'voucher_id' => $voucher->id,
+            'error' => $e->getMessage()
+        ]);
+        return 0;
     }
+}
+
 
     // ================= Validate Code / History / Items =================
     /**

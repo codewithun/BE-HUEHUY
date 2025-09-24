@@ -19,6 +19,57 @@ use Illuminate\Support\Facades\Auth;
 
 class PromoController extends Controller
 {
+
+    /** Normalisasi nomor HP: ambil digit, buang 0/62 di depan */
+    private function normalizePhone(?string $raw): ?string
+    {
+        if (!$raw) return null;
+        $d = preg_replace('/\D+/', '', $raw);
+        if ($d === '') return null;
+        // buang prefix umum Indonesia
+        $d = preg_replace('/^(?:0|62)/', '', $d);
+        return $d;
+    }
+
+    /** Temukan user (tenant pemilik promo) dari owner_contact / owner_name */
+    private function resolveTenantUserIdByPromo(Promo $promo): ?int
+    {
+        // 1) Cocokkan via nomor HP (paling akurat)
+        $ownerPhone = $this->normalizePhone($promo->owner_contact ?? null);
+        if ($ownerPhone) {
+            $u = \App\Models\User::query()
+                ->where(function ($q) use ($ownerPhone) {
+                    foreach (['phone', 'phone_number', 'telp', 'telpon', 'mobile', 'contact', 'whatsapp', 'wa'] as $col) {
+                        // samakan hanya dengan angka; izinkan prefix 0/62
+                        $q->orWhereRaw(
+                            "REGEXP_REPLACE(COALESCE($col,''),'[^0-9]','') REGEXP ?",
+                            ["^(0|62)?$ownerPhone$"]
+                        );
+                    }
+                })
+                // kalau punya rule role_id = 6 untuk manager tenant, aktifkan baris ini:
+                // ->where('role_id', 6)
+                ->first();
+            if ($u) return $u->id;
+        }
+
+        // 2) Fallback by nama (kurang akurat, opsional)
+        $ownerName = trim((string)($promo->owner_name ?? ''));
+        if ($ownerName !== '') {
+            $u = \App\Models\User::query()
+                ->where(function ($q) use ($ownerName) {
+                    foreach (['name', 'full_name', 'username', 'display_name', 'company_name'] as $col) {
+                        $q->orWhere($col, $ownerName);
+                    }
+                })
+                // ->where('role_id', 6)
+                ->first();
+            if ($u) return $u->id;
+        }
+
+        return null;
+    }
+
     /**
      * Transform promo image URLs
      */
@@ -909,6 +960,26 @@ class PromoController extends Controller
             return response()->json(['success' => false, 'message' => 'Promo tidak ditemukan'], 404);
         }
 
+        // ========= Tentukan tenant pemilik promo & role validator =========
+        $tenantId = $this->resolveTenantUserIdByPromo($promo);
+        $validatorRole = $request->input('validator_role'); // 'tenant' jika QR di-tenant, selain itu = user submit kode unik
+
+        if ($validatorRole === 'tenant') {
+            // QR mode: hanya tenant pemilik (Tenant A) yang boleh validasi
+            if (!$tenantId || $user->id !== $tenantId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'QR ini hanya dapat divalidasi oleh tenant pemilik promo.'
+                ], 403);
+            }
+            // kalau lolos, validatornya = tenant yang login
+            $validatorId = $user->id;
+        } else {
+            // Kode unik (user submit): kreditkan validasi ke tenant pemilik promo,
+            // agar riwayat muncul di user (via join promo_items.user_id) dan di tenant (promo_validations.user_id)
+            $validatorId = $tenantId ?: $user->id; // fallback ke user kalau tenant tidak ditemukan
+        }
+
         // cek aktif
         $now   = \Illuminate\Support\Carbon::now();
         $start = $promo->start_date ? \Illuminate\Support\Carbon::parse($promo->start_date) : null;
@@ -947,7 +1018,7 @@ class PromoController extends Controller
                 return $c;
             };
 
-            $item = \Illuminate\Support\Facades\DB::transaction(function () use ($promo, $ownerHint, $uniqueCode, $now, $user) {
+            $item = \Illuminate\Support\Facades\DB::transaction(function () use ($promo, $ownerHint, $uniqueCode, $now, $validatorId) {
                 $pi = \App\Models\PromoItem::create([
                     'promo_id'     => $promo->id,
                     'user_id'      => $ownerHint,
@@ -960,7 +1031,7 @@ class PromoController extends Controller
                 try {
                     \App\Models\PromoValidation::create([
                         'promo_id'     => $promo->id,
-                        'user_id'      => $user->id,
+                        'user_id'      => $validatorId,
                         'code'         => $pi->code,
                         'validated_at' => $now,
                     ]);
@@ -994,7 +1065,7 @@ class PromoController extends Controller
             ], 200);
         }
 
-        \Illuminate\Support\Facades\DB::transaction(function () use ($promo, $item, $now, $user) {
+        \Illuminate\Support\Facades\DB::transaction(function () use ($promo, $item, $now, $validatorId) {
             if (!is_null($promo->stock)) {
                 \App\Models\Promo::where('id', $promo->id)->where('stock', '>', 0)->decrement('stock');
             }
@@ -1010,7 +1081,7 @@ class PromoController extends Controller
             try {
                 \App\Models\PromoValidation::create([
                     'promo_id'     => $promo->id,
-                    'user_id'      => $user->id,
+                    'user_id'      => $validatorId,
                     'code'         => $item->code,
                     'validated_at' => $now,
                 ]);

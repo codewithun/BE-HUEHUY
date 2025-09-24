@@ -8,6 +8,8 @@ class PromoValidation extends Model
 {
     protected $fillable = ['promo_id', 'user_id', 'code', 'validated_at', 'notes'];
 
+    public $timestamps = false; 
+
     protected $casts = [
         'validated_at' => 'datetime',
     ];

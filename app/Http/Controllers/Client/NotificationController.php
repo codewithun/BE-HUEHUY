@@ -36,7 +36,7 @@ class NotificationController extends Controller
      * - sortDirection: ASC|DESC (default: DESC)
      * - paginate: 1..100 (default: 10)
      */
-    public function index(Request $request)
+   public function index(Request $request)
     {
         $sortDirection = strtoupper($request->get('sortDirection', 'DESC')) === 'ASC' ? 'ASC' : 'DESC';
 
@@ -46,11 +46,18 @@ class NotificationController extends Controller
             $sortBy = 'created_at';
         }
 
-        $paginate = (int) $request->get('paginate', 10);
-        if ($paginate <= 0 || $paginate > 100) $paginate = 10;
+        // ====== PAGINATION FLEXIBLE ======
+        $paginateRaw = $request->get('paginate', 25); // default lebih besar dari 10 biar terasa “muncul banyak”
+        $paginateAll = ($paginateRaw === 'all' || (int)$paginateRaw === 0 || $request->boolean('all'));
+        $paginate    = $paginateAll ? 0 : (int) $paginateRaw;
+
+        if (! $paginateAll) {
+            if ($paginate < 1)   $paginate = 25;
+            if ($paginate > 200) $paginate = 200; // ceiling aman untuk mobile
+        }
 
         $tabParam  = $request->get('tab');   // opsional
-        $typeParam = $request->get('type');  // kompat dgn FE lama
+        $typeParam = $request->get('type');  // kompat FE lama
         $tab = $tabParam ?: $typeParam;      // pakai salah satu
 
         $unreadOnly = (bool) $request->boolean('unread_only', false);
@@ -66,7 +73,7 @@ class NotificationController extends Controller
             'tab'     => $tab,
             'sortBy'  => $sortBy,
             'dir'     => $sortDirection,
-            'paginate'=> $paginate,
+            'paginate'=> $paginateAll ? 'all' : $paginate,
             'unread'  => $unreadOnly,
             'since'   => $sinceRaw,
         ]);
@@ -81,7 +88,6 @@ class NotificationController extends Controller
         if ($typesFromTab) {
             $query->whereIn('type', $typesFromTab);
         } elseif ($tab && $tab !== 'all') {
-            // misal spesifik "voucher", "promo", dst.
             $query->where('type', $tab);
         }
 
@@ -90,7 +96,7 @@ class NotificationController extends Controller
             $query->whereNull('read_at');
         }
 
-        // ====== FILTER SINCE (tanggal/datetime) ======
+        // ====== FILTER SINCE ======
         if (!empty($sinceRaw)) {
             $ts = strtotime($sinceRaw);
             if ($ts !== false) {
@@ -98,31 +104,38 @@ class NotificationController extends Controller
             }
         }
 
-        // ====== Search & Filter Helper (opsional) ======
-        if ($request->filled('search') && method_exists($this, 'search')) {
-            $query = $this->search($request->get('search'), new Notification(), $query);
-        }
-        if ($request->filled('filter') && method_exists($this, 'filter')) {
-            $filters = json_decode($request->get('filter'), true) ?: [];
-            if (is_array($filters)) {
-                foreach ($filters as $column => $value) {
-                    $query = $this->filter($column, $value, new Notification(), $query);
-                }
-            }
-        }
-
         try {
-            // Ringkasan tipe (seluruh notif user ini, tanpa filter tab) untuk debug FE
+            // Ringkasan tipe (tanpa filter tab) & unread count
             $typesCount = Notification::where('user_id', $user->id)
                 ->selectRaw('type, COUNT(*) as cnt')
                 ->groupBy('type')
                 ->pluck('cnt','type');
 
-            // Unread count global
             $unreadCount = Notification::where('user_id', $user->id)
                 ->whereNull('read_at')
                 ->count();
 
+            // ====== AMBIL SEMUA ======
+            if ($paginateAll) {
+                $items = $query->orderBy($sortBy, $sortDirection)->get();
+
+                return response()->json([
+                    'message'   => ($items->isEmpty() ? 'empty data' : 'success'),
+                    'data'      => $items,
+                    'total_row' => $items->count(),
+                    'meta'      => [
+                        'applied_tab'   => $tab ?? 'all',
+                        'applied_types' => $typesFromTab ?: ($tab && $tab !== 'all' ? [$tab] : null),
+                        'types_cnt'     => $typesCount,
+                        'unread_cnt'    => $unreadCount,
+                        'pagination'    => null,
+                        'sorting'       => ['by'=>$sortBy,'dir'=>$sortDirection],
+                        'filters'       => ['unread_only'=>$unreadOnly,'since'=>$sinceRaw],
+                    ],
+                ], 200);
+            }
+
+            // ====== PAGINATE BIASA ======
             $paginator = $query->orderBy($sortBy, $sortDirection)->paginate($paginate);
             $items     = $paginator->items();
 
@@ -137,24 +150,20 @@ class NotificationController extends Controller
                 'data'      => $items,
                 'total_row' => $paginator->total(),
                 'meta'      => [
-                    'applied_tab'  => $tab ?? 'all',
-                    'applied_types'=> $typesFromTab ?: ($tab && $tab !== 'all' ? [$tab] : null),
-                    'types_cnt'    => $typesCount, // { "voucher": 5, "merchant": 2, ... }
-                    'unread_cnt'   => $unreadCount,
-                    'pagination'   => [
+                    'applied_tab'   => $tab ?? 'all',
+                    'applied_types' => $typesFromTab ?: ($tab && $tab !== 'all' ? [$tab] : null),
+                    'types_cnt'     => $typesCount,
+                    'unread_cnt'    => $unreadCount,
+                    'pagination'    => [
                         'current_page' => $paginator->currentPage(),
                         'per_page'     => $paginator->perPage(),
                         'last_page'    => $paginator->lastPage(),
                         'total'        => $paginator->total(),
+                        'next_page_url'=> $paginator->nextPageUrl(),
+                        'prev_page_url'=> $paginator->previousPageUrl(),
                     ],
-                    'sorting' => [
-                        'by'   => $sortBy,
-                        'dir'  => $sortDirection,
-                    ],
-                    'filters' => [
-                        'unread_only' => $unreadOnly,
-                        'since'       => $sinceRaw,
-                    ],
+                    'sorting' => ['by'=>$sortBy,'dir'=>$sortDirection],
+                    'filters' => ['unread_only'=>$unreadOnly,'since'=>$sinceRaw],
                 ],
             ], 200);
 
@@ -170,6 +179,7 @@ class NotificationController extends Controller
             ], 500);
         }
     }
+
 
     /**
      * POST /api/notification/{id}/read

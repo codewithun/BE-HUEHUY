@@ -680,4 +680,51 @@ class VoucherController extends Controller
             return response()->json(['success' => false, 'message' => 'Gagal mengambil voucher items: ' . $e->getMessage()], 500);
         }
     }
+
+    public function userValidationHistory(Request $request)
+    {
+        try {
+            $userId = $request->user()?->id ?? auth()->id();
+
+            if (!$userId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'User tidak terautentikasi'
+                ], 401);
+            }
+
+            // Ambil riwayat validasi milik user (validator) yang login
+            $rows = \App\Models\VoucherValidation::with(['voucher'])
+                ->where('user_id', $userId)
+                ->orderBy('validated_at', 'desc')
+                ->get();
+
+            // (Opsional) samakan shape dengan FE agar judul tampil:
+            // Voucher punya kolom "name", FE kadang membaca "title".
+            $data = $rows->map(function ($r) {
+                $voucher = $r->voucher;
+                if ($voucher) {
+                    // buat alias title agar FE tidak kosong
+                    $voucher->title = $voucher->title ?? $voucher->name ?? 'Voucher';
+                }
+                return [
+                    'id'           => $r->id,
+                    'code'         => $r->code,
+                    'validated_at' => $r->validated_at,
+                    'notes'        => $r->notes,
+                    'voucher'      => $voucher,
+                    'user'         => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null,
+                    'itemType'     => 'voucher', // supaya FE gampang merge
+                ];
+            });
+
+            return response()->json(['success' => true, 'data' => $data]);
+        } catch (\Throwable $e) {
+            Log::error("Error in userValidationHistory (voucher): " . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengambil riwayat validasi: ' . $e->getMessage()
+            ], 500);
+        }
+    }
 }

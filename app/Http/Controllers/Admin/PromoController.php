@@ -1036,8 +1036,7 @@ class PromoController extends Controller
         Log::info("Fetching history for promo ID: " . $promoId);
 
         try {
-            $promo = Promo::with(['validations.user'])->find($promoId);
-
+            $promo = Promo::find($promoId);
             if (!$promo) {
                 return response()->json([
                     'success' => false,
@@ -1045,15 +1044,37 @@ class PromoController extends Controller
                 ], 404);
             }
 
-            $validations = $promo->validations()
-                ->with(['user', 'promo'])
-                ->orderBy('validated_at', 'desc')
+            $rows = PromoValidation::query()
+                ->with(['promo', 'user']) // user = validator (tenant)
+                ->leftJoin('promo_items', 'promo_items.code', '=', 'promo_validations.code')
+                ->select('promo_validations.*', 'promo_items.user_id as owner_id')
+                ->where('promo_validations.promo_id', $promoId)
+                ->orderBy('promo_validations.validated_at', 'desc')
                 ->get();
 
-            return response()->json([
-                'success' => true,
-                'data' => $validations
-            ]);
+            $ownerIds = $rows->pluck('owner_id')->filter()->unique()->values();
+            $owners = $ownerIds->isNotEmpty()
+                ? User::whereIn('id', $ownerIds)->get(['id', 'name'])->keyBy('id')
+                : collect();
+
+            $data = $rows->map(function ($r) use ($owners) {
+                $owner = null;
+                if ($r->owner_id && isset($owners[$r->owner_id])) {
+                    $owner = ['id' => $r->owner_id, 'name' => $owners[$r->owner_id]->name];
+                }
+                return [
+                    'id'           => $r->id,
+                    'code'         => $r->code,
+                    'validated_at' => $r->validated_at,
+                    'notes'        => $r->notes,
+                    'promo'        => $r->promo,
+                    'user'         => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null, // validator (tenant)
+                    'owner'        => $owner, // pemilik item (user)
+                    'itemType'     => 'promo',
+                ];
+            });
+
+            return response()->json(['success' => true, 'data' => $data]);
         } catch (\Exception $e) {
             Log::error("Error in history method: " . $e->getMessage());
             return response()->json([
@@ -1071,27 +1092,52 @@ class PromoController extends Controller
                 return response()->json(['success' => false, 'message' => 'User tidak terautentikasi'], 401);
             }
 
-            // Ambil riwayat validasi oleh validator login
-            $rows = PromoValidation::with(['promo', 'user'])
-                ->where('user_id', $userId)
-                ->orderBy('validated_at', 'desc')
+            // Ambil riwayat yang relevan untuk kedua sisi:
+            // - Sebagai OWNER (pemilik item) → join ke promo_items by code
+            // - Sebagai VALIDATOR (tenant) → langsung dari promo_validations.user_id
+            $rows = PromoValidation::query()
+                ->with(['promo', 'user']) // 'user' = validator (tenant)
+                ->leftJoin('promo_items', 'promo_items.code', '=', 'promo_validations.code')
+                ->select('promo_validations.*', 'promo_items.user_id as owner_id')
+                ->where(function ($q) use ($userId) {
+                    $q->where('promo_items.user_id', $userId)       // user sebagai owner
+                        ->orWhere('promo_validations.user_id', $userId); // user sebagai validator (tenant)
+                })
+                ->orderBy('promo_validations.validated_at', 'desc')
                 ->get();
 
-            // Samakan shape dengan voucher agar FE bisa merge 2 list
-            $data = $rows->map(function ($r) {
+            // Ambil info owner (jika ada)
+            $ownerIds = $rows->pluck('owner_id')->filter()->unique()->values();
+            $owners = $ownerIds->isNotEmpty()
+                ? User::whereIn('id', $ownerIds)->get(['id', 'name'])->keyBy('id')
+                : collect();
+
+            $data = $rows->map(function ($r) use ($owners) {
                 $promo = $r->promo;
                 if ($promo) {
-                    // FE pakai "title" untuk label — pastikan ada
                     $promo->title = $promo->title ?? 'Promo';
                 }
+
+                // owner (pemilik item) — dari join promo_items
+                $owner = null;
+                if ($r->owner_id && isset($owners[$r->owner_id])) {
+                    $owner = [
+                        'id'   => $r->owner_id,
+                        'name' => $owners[$r->owner_id]->name,
+                    ];
+                }
+
                 return [
                     'id'           => $r->id,
                     'code'         => $r->code,
                     'validated_at' => $r->validated_at,
                     'notes'        => $r->notes,
-                    'promo'        => $promo,                                   // <- tersedia di FE: v.promo
+                    'promo'        => $promo,
+                    // user = validator (tenant) -> dipakai FE untuk "Divalidasi oleh ..."
                     'user'         => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null,
-                    'itemType'     => 'promo',                                   // <- kunci untuk FE
+                    // owner = pemilik promo item -> dipakai FE sisi tenant untuk "Promo milik ..."
+                    'owner'        => $owner,
+                    'itemType'     => 'promo',
                 ];
             });
 

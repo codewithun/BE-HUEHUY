@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Carbon;
 
 class Voucher extends Model
 {
@@ -29,19 +30,23 @@ class Voucher extends Model
         'target_type',      // all | user | community
         'target_user_id',   // nullable (wajib saat target_type = user)
 
-        // NEW: tipe validasi untuk FE (tampilan QR vs input kode)
+        // Tipe validasi
         'validation_type',  // auto | manual
+
+        // Versi gambar
+        'image_updated_at',
     ];
 
     protected $casts = [
-        'valid_until'    => 'date',
-        'stock'          => 'integer',
-        'community_id'   => 'integer',
-        'target_user_id' => 'integer',
-        'validation_type'=> 'string',
+        'valid_until'      => 'datetime',
+        'stock'            => 'integer',
+        'community_id'     => 'integer',
+        'target_user_id'   => 'integer',
+        'validation_type'  => 'string',
+        'image_updated_at' => 'datetime',
     ];
 
-    // Tambahkan ini agar image_url otomatis ikut di JSON response
+    // agar ikut di JSON
     protected $appends = ['image_url', 'image_url_versioned'];
 
     // ================= Relations =================
@@ -80,49 +85,45 @@ class Voucher extends Model
 
     public function getStatusAttribute(): string
     {
-        if ((int) $this->stock <= 0) {
-            return 'inactive';
-        }
-
-        if ($this->valid_until && now()->isAfter($this->valid_until)) {
-            return 'expired';
-        }
-
+        if ((int) $this->stock <= 0) return 'inactive';
+        if ($this->valid_until && now()->isAfter($this->valid_until)) return 'expired';
         return 'active';
     }
 
     public function getImageUrlAttribute(): ?string
-    {
-        if (!$this->image) {
-            return null;
-        }
-        if (filter_var($this->image, FILTER_VALIDATE_URL)) {
-            return $this->image;
-        }
-        return asset('storage/' . $this->image);
+{
+    if (!$this->image) return null;
+    if (filter_var($this->image, FILTER_VALIDATE_URL)) {
+        return $this->image;
     }
+
+    /** @var \Illuminate\Filesystem\FilesystemAdapter $disk */
+    $disk = \Illuminate\Support\Facades\Storage::disk('public');
+    return $disk->url(ltrim($this->image, '/'));
+}
 
     public function getImageUrlVersionedAttribute(): ?string
     {
         $url = $this->image_url;
         if (!$url) return null;
 
-        // pakai lastModified file (lebih akurat) -> fallback ke ms timestamp
+        // PERBAIKAN: Prioritas versioning yang lebih robust
         $ver = null;
-        try {
-            if ($this->image && Storage::disk('public')->exists($this->image)) {
-                $ver = Storage::disk('public')->lastModified($this->image); // detik dari filesystem
-            }
-        } catch (\Throwable $e) {}
 
-        // Carbon 2: getTimestampMs(); fallback microtime ms
-        $ms = method_exists(optional($this->updated_at), 'getTimestampMs')
-            ? optional($this->updated_at)->getTimestampMs()
-            : (int) round(microtime(true) * 1000);
+        // 1) Prioritas tertinggi: image_updated_at (ketika file diganti)
+        if ($this->image_updated_at instanceof Carbon) {
+            $ver = $this->image_updated_at->getTimestamp();
+        } 
+        // 2) Fallback: updated_at (ketika record berubah)
+        else if ($this->updated_at instanceof Carbon) {
+            $ver = $this->updated_at->getTimestamp();
+        }
+        // 3) Fallback terakhir: ID + current time
+        else {
+            $ver = $this->id ? ($this->id * 1000 + (time() % 1000)) : time();
+        }
 
-        $v = $ver ?: $ms;
-
-        return str_contains($url, '?') ? "{$url}&v={$v}" : "{$url}?v={$v}";
+        return str_contains($url, '?') ? "{$url}&v={$ver}" : "{$url}?v={$ver}";
     }
 
     public function getTargetDescriptionAttribute(): string
@@ -130,11 +131,10 @@ class Voucher extends Model
         switch ($this->target_type) {
             case 'user':
                 $user = $this->targetUser;
-                return $user ? "User: {$user->name}" : "User #" . $this->target_user_id;
+                return $user ? "User: {$user->name}" : "User #{$this->target_user_id}";
             case 'community':
                 $community = $this->community;
-                return $community ? "Community: {$community->name}" : "Community #" . $this->community_id;
-            case 'all':
+                return $community ? "Community: {$community->name}" : "Community #{$this->community_id}";
             default:
                 return 'Semua Pengguna';
         }
@@ -151,7 +151,6 @@ class Voucher extends Model
         return $this->validations()->count();
     }
 
-    // Pastikan selalu ada default 'auto' ketika null (berguna untuk FE lama)
     public function getValidationTypeAttribute($value): string
     {
         return $value ?: 'auto';
@@ -170,8 +169,7 @@ class Voucher extends Model
               ->orWhere(function ($qq) use ($userId) {
                   $qq->where('target_type', 'community')
                      ->whereHas('community.memberships', function($qqq) use ($userId) {
-                         $qqq->where('user_id', $userId)
-                             ->where('status', 'active');
+                         $qqq->where('user_id', $userId)->where('status', 'active');
                      });
               });
         });
@@ -225,67 +223,67 @@ class Voucher extends Model
 
     public function hasNotifiedUser(int $userId): bool
     {
-        return $this->notifications()
-                    ->where('user_id', $userId)
-                    ->exists();
+        return $this->notifications()->where('user_id', $userId)->exists();
     }
 
     public function isEligibleForUser(int $userId): bool
     {
         switch ($this->target_type) {
-            case 'all':
-                return true;
-            case 'user':
-                return $this->target_user_id == $userId;
+            case 'all': return true;
+            case 'user': return $this->target_user_id == $userId;
             case 'community':
                 if (!$this->community_id) return false;
                 return User::where('id', $userId)
-                          ->whereHas('communityMemberships', function($q) {
-                              $q->where('community_id', $this->community_id)
-                                ->where('status', 'active');
-                          })
-                          ->exists();
-            default:
-                return false;
+                    ->whereHas('communityMemberships', function($q) {
+                        $q->where('community_id', $this->community_id)->where('status', 'active');
+                    })
+                    ->exists();
+            default: return false;
         }
     }
 
     public function getEligibleUsers()
     {
         switch ($this->target_type) {
-            case 'all':
-                return User::whereNotNull('email_verified_at');
-            case 'user':
-                return User::where('id', $this->target_user_id);
+            case 'all': return User::whereNotNull('email_verified_at');
+            case 'user': return User::where('id', $this->target_user_id);
             case 'community':
-                if (!$this->community_id) {
-                    return User::whereRaw('1 = 0');
-                }
+                if (!$this->community_id) return User::whereRaw('1 = 0');
                 return User::whereHas('communityMemberships', function($q) {
-                    $q->where('community_id', $this->community_id)
-                      ->where('status', 'active');
+                    $q->where('community_id', $this->community_id)->where('status', 'active');
                 });
-            default:
-                return User::whereRaw('1 = 0');
+            default: return User::whereRaw('1 = 0');
         }
     }
 
     public function decrementStock(int $amount = 1): bool
     {
-        if ($this->stock < $amount) {
-            return false;
-        }
+        if ($this->stock < $amount) return false;
         $this->decrement('stock', $amount);
         return true;
     }
 
-    // ================= Events =================
+    // ================= Mutator =================
+    public function setImageAttribute($value): void
+    {
+        $original = $this->attributes['image'] ?? null;
+        
+        // Hanya set jika benar-benar ada nilai dan berbeda
+        if ($value !== null && $value !== '') {
+            $this->attributes['image'] = $value;
+            
+            // Update timestamp hanya jika nilai benar-benar berubah
+            if ($value !== $original) {
+                $this->attributes['image_updated_at'] = now();
+            }
+        }
+    }
 
+    // ================= Events =================
     protected static function boot()
     {
         parent::boot();
 
-        // Default-kan validation_type = 'auto' bila null saat create
         static::creating(function ($voucher) {
             if (empty($voucher->validation_type)) {
                 $voucher->validation_type = 'auto';
@@ -294,11 +292,11 @@ class Voucher extends Model
 
         static::created(function ($voucher) {
             Log::info("Voucher created", [
-                'id'           => $voucher->id,
-                'name'         => $voucher->name,
-                'code'         => $voucher->code,
-                'target_type'  => $voucher->target_type,
-                'stock'        => $voucher->stock,
+                'id'              => $voucher->id,
+                'name'            => $voucher->name,
+                'code'            => $voucher->code,
+                'target_type'     => $voucher->target_type,
+                'stock'           => $voucher->stock,
                 'validation_type' => $voucher->validation_type,
             ]);
         });

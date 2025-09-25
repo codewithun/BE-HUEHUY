@@ -212,9 +212,9 @@ class VoucherController extends Controller
 
             return response([
                 'message'   => 'success',
-                'data'      => $items,
+                'data'      => $items->map->toArray()->values(),
                 'total_row' => $items->count(),
-            ]);
+            ])->header('Cache-Control', 'no-store');
         }
 
         // Regular pagination
@@ -224,7 +224,7 @@ class VoucherController extends Controller
             return response([
                 'message' => 'empty data',
                 'data'    => [],
-            ], 200);
+            ], 200)->header('Cache-Control', 'no-store');
         }
 
         $items = collect($page->items());
@@ -234,9 +234,9 @@ class VoucherController extends Controller
 
         return response([
             'message'   => 'success',
-            'data'      => $items->values(),
+            'data'      => $items->map->toArray()->values(),
             'total_row' => $page->total(),
-        ]);
+        ])->header('Cache-Control', 'no-store');
     }
 
     /**
@@ -293,10 +293,10 @@ class VoucherController extends Controller
         ])->where('id', $id)->first();
 
         if (!$model) {
-            return response(['messaege' => 'Data not found'], 404);
+            return response(['messaege' => 'Data not found'], 404)->header('Cache-Control', 'no-store');
         }
 
-        return response(['message' => 'Success', 'data' => $model]);
+        return response(['message' => 'Success', 'data' => $model])->header('Cache-Control', 'no-store');
     }
 
     /// ================= Store =================
@@ -346,7 +346,8 @@ class VoucherController extends Controller
         $validator = Validator::make($request->all(), [
             'name'            => 'required|string|max:255',
             'description'     => 'nullable|string',
-            'image'           => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
+            // Ubah limit jadi 10MB
+            'image'           => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:10240',
             'type'            => 'nullable|string',
             'valid_until'     => 'nullable|date',
             'tenant_location' => 'nullable|string|max:255',
@@ -404,6 +405,9 @@ class VoucherController extends Controller
 
             $model = Voucher::create($data);
 
+            // pastikan accessor + timestamps fresh (image_url_versioned pakai updated_at)
+            $model->refresh();
+
             $notificationCount = $this->sendVoucherNotifications($model, $explicitUserIds);
 
             DB::commit();
@@ -411,7 +415,7 @@ class VoucherController extends Controller
                 'success' => true,
                 'message' => "Voucher berhasil dibuat dan {$notificationCount} notifikasi terkirim",
                 'data'    => $model
-            ], 201);
+            ], 201)->header('Cache-Control', 'no-store');
         } catch (\Throwable $e) {
             DB::rollBack();
             Log::error('Error creating voucher: ' . $e->getMessage());
@@ -477,7 +481,8 @@ class VoucherController extends Controller
 
         // Only validate image as file if it's actually being uploaded
         if ($request->hasFile('image')) {
-            $validationRules['image'] = 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048';
+            // Ubah limit jadi 10MB
+            $validationRules['image'] = 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:10240';
         } else {
             // Allow image field to be a string (existing URL) or null
             $validationRules['image'] = 'nullable|string';
@@ -554,12 +559,15 @@ class VoucherController extends Controller
 
             $model->fill($data)->save();
 
+            // pastikan accessor + timestamps fresh
+            $model->refresh();
+
             DB::commit();
             return response()->json([
                 'success' => true,
                 'message' => 'Voucher berhasil diupdate',
                 'data' => $model
-            ]);
+            ])->header('Cache-Control', 'no-store');
         } catch (\Throwable $e) {
             DB::rollBack();
             Log::error('Error updating voucher', [
@@ -584,9 +592,9 @@ class VoucherController extends Controller
             }
             $model->delete();
 
-            return response(['message' => 'Success', 'data' => $model]);
+            return response(['message' => 'Success', 'data' => $model])->header('Cache-Control', 'no-store');
         } catch (\Throwable $th) {
-            return response(['message' => 'Error: server side having problem!'], 500);
+            return response(['message' => 'Error: server side having problem!'], 500)->header('Cache-Control', 'no-store');
         }
     }
 
@@ -598,7 +606,7 @@ class VoucherController extends Controller
             $imageUrl = $voucher->image ? asset('storage/' . $voucher->image) : null;
 
             // mulai dari user terverifikasi
-            $builder = User::query()->whereNotNull('verified_at');
+            $builder = User::query()->whereNotNull('email_verified_at');
 
             if ($voucher->target_type === 'user') {
                 // 1) jika ada explicit IDs, tetap DI-SARING lagi ke regular user only

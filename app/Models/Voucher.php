@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 class Voucher extends Model
 {
@@ -39,6 +40,9 @@ class Voucher extends Model
         'target_user_id' => 'integer',
         'validation_type'=> 'string',
     ];
+
+    // Tambahkan ini agar image_url otomatis ikut di JSON response
+    protected $appends = ['image_url', 'image_url_versioned'];
 
     // ================= Relations =================
 
@@ -96,6 +100,29 @@ class Voucher extends Model
             return $this->image;
         }
         return asset('storage/' . $this->image);
+    }
+
+    public function getImageUrlVersionedAttribute(): ?string
+    {
+        $url = $this->image_url;
+        if (!$url) return null;
+
+        // pakai lastModified file (lebih akurat) -> fallback ke ms timestamp
+        $ver = null;
+        try {
+            if ($this->image && Storage::disk('public')->exists($this->image)) {
+                $ver = Storage::disk('public')->lastModified($this->image); // detik dari filesystem
+            }
+        } catch (\Throwable $e) {}
+
+        // Carbon 2: getTimestampMs(); fallback microtime ms
+        $ms = method_exists(optional($this->updated_at), 'getTimestampMs')
+            ? optional($this->updated_at)->getTimestampMs()
+            : (int) round(microtime(true) * 1000);
+
+        $v = $ver ?: $ms;
+
+        return str_contains($url, '?') ? "{$url}&v={$v}" : "{$url}?v={$v}";
     }
 
     public function getTargetDescriptionAttribute(): string

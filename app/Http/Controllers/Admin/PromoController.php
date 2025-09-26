@@ -956,38 +956,38 @@ class PromoController extends Controller
         $itemIdHint = $request->input('item_id');
         $ownerHint  = $request->input('item_owner_id');
 
-        // ==== CEK: Kode sudah pernah divalidasi? (lintas browser/perangkat) ====
-        $existing = PromoValidation::with(['promo'])
-            ->where('code', $code)
-            ->latest('validated_at')
+        // ==== CEK: Kode sudah pernah divalidasi? (scope by owner jika ada) ====
+        // [FIX-VAL-EXISTING-PROMO]
+        $ownerHint = $request->input('item_owner_id'); // boleh null
+        $existing = PromoValidation::query()
+            ->leftJoin('promo_items', 'promo_items.code', '=', 'promo_validations.code')
+            ->select('promo_validations.*', 'promo_items.user_id as owner_id')
+            ->where('promo_validations.code', $code)
+            ->when($ownerHint, fn($q) => $q->where('promo_items.user_id', $ownerHint))
+            ->latest('promo_validations.validated_at')
             ->first();
 
         if ($existing) {
-            // Tenant yang dulu memvalidasi = user_id pada tabel promo_validations
-            $validatedByTenantId = $existing->user_id; // pada desain kita: 'user_id' = validator (tenant)
-            $currentUserId       = $request->user()->id;
-            $existingPromo       = $existing->promo;
-            $existingTenantId    = $existingPromo ? $this->resolveTenantUserIdByPromo($existingPromo) : null;
+            $validatedByTenantId = (int) $existing->user_id;
+            $currentUserId       = (int) $request->user()->id;
 
-            // Kalau sekarang mode tenant (QR di kasir) dan tenant saat ini beda → blokir 403
-            if (($request->input('validator_role') === 'tenant') && $validatedByTenantId && (int)$validatedByTenantId !== (int)$currentUserId) {
+            if (($request->input('validator_role') === 'tenant') && $validatedByTenantId !== $currentUserId) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Kode ini sudah divalidasi oleh tenant lain.',
                     'data'    => [
-                        'validated_by_tenant_id' => (int)$validatedByTenantId,
+                        'validated_by_tenant_id' => $validatedByTenantId,
                         'promo_id'               => $existing->promo_id,
                         'validated_at'           => $existing->validated_at,
                     ],
                 ], 403);
             }
 
-            // Kalau sudah pernah divalidasi (oleh tenant yang sama atau user) → 409 idempotent info
             return response()->json([
                 'success' => false,
                 'message' => 'Kode ini sudah pernah divalidasi.',
                 'data'    => [
-                    'validated_by_tenant_id' => (int)$validatedByTenantId,
+                    'validated_by_tenant_id' => $validatedByTenantId,
                     'promo_id'               => $existing->promo_id,
                     'validated_at'           => $existing->validated_at,
                 ],

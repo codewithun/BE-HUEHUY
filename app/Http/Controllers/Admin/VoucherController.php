@@ -1207,38 +1207,42 @@ class VoucherController extends Controller
         $itemIdHint = $data['item_id']      ?? null;
         $ownerHint  = $data['item_owner_id'] ?? null;
 
-        // ==== CEK: Kode sudah pernah divalidasi? (lintas browser/perangkat) ====
-        $existing = VoucherValidation::with(['voucher'])
-            ->where('code', $code)
-            ->latest('validated_at')
+        // ==== CEK: Kode sudah pernah divalidasi? (scope by owner jika ada) ====
+        // [FIX-VAL-EXISTING-VOUCHER]
+        $ownerHint = $request->input('item_owner_id'); // boleh null
+        $existing = VoucherValidation::query()
+            ->leftJoin('voucher_items', 'voucher_items.code', '=', 'voucher_validations.code')
+            ->select('voucher_validations.*', 'voucher_items.user_id as owner_id')
+            ->where('voucher_validations.code', $code)
+            // Kalau owner diketahui, hanya blokir jika memang milik owner yang sama
+            ->when($ownerHint, fn($q) => $q->where('voucher_items.user_id', $ownerHint))
+            ->latest('voucher_validations.validated_at')
             ->first();
 
+        // Catatan penting:
+        // - Jika $code adalah KODE MASTER (bukan kode item), biasanya tidak punya pasangan di voucher_items,
+        //   maka $existing akan null dan proses lanjut (kita akan buat item baru untuk owner itu).
         if ($existing) {
-            // Tenant yang dulu memvalidasi = user_id pada tabel voucher_validations
-            $validatedByTenantId = $existing->user_id; // pada desain kita: 'user_id' = validator (tenant)
-            $currentUserId       = $request->user()->id;
-            $existingVoucher     = $existing->voucher;
-            $existingTenantId    = $existingVoucher ? $this->resolveTenantUserIdByVoucher($existingVoucher) : null;
+            $validatedByTenantId = (int) $existing->user_id;
+            $currentUserId       = (int) $request->user()->id;
 
-            // QR mode tenant & tenant sekarang beda → 403
-            if (($data['validator_role'] ?? null) === 'tenant' && $validatedByTenantId && (int)$validatedByTenantId !== (int)$currentUserId) {
+            if (($data['validator_role'] ?? null) === 'tenant' && $validatedByTenantId !== $currentUserId) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Kode ini sudah divalidasi oleh tenant lain.',
                     'data'    => [
-                        'validated_by_tenant_id' => (int)$validatedByTenantId,
+                        'validated_by_tenant_id' => $validatedByTenantId,
                         'voucher_id'             => $existing->voucher_id,
                         'validated_at'           => $existing->validated_at,
                     ],
                 ], 403);
             }
 
-            // Sudah divalidasi (oleh tenant sama atau user) → 409
             return response()->json([
                 'success' => false,
                 'message' => 'Kode ini sudah pernah divalidasi.',
                 'data'    => [
-                    'validated_by_tenant_id' => (int)$validatedByTenantId,
+                    'validated_by_tenant_id' => $validatedByTenantId,
                     'voucher_id'             => $existing->voucher_id,
                     'validated_at'           => $existing->validated_at,
                 ],
@@ -1309,7 +1313,7 @@ class VoucherController extends Controller
                 VoucherValidation::create([
                     'voucher_id'   => $item->voucher_id,
                     'user_id'      => $validatorId,              // ← penting: catat validator = tenant (atau user fallback)
-                    'code'         => $code,
+                    'code'         => $item->code,
                     'validated_at' => now(),
                     'notes'        => null,
                 ]);

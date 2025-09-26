@@ -46,22 +46,26 @@ class NotificationController extends Controller
             $sortBy = 'created_at';
         }
 
-        // ====== PAGINATION FLEXIBLE ======
-        $paginateRaw = $request->get('paginate', 25); // default lebih besar dari 10 biar terasa “muncul banyak”
-        $paginateAll = ($paginateRaw === 'all' || (int)$paginateRaw === 0 || $request->boolean('all'));
-        $paginate    = $paginateAll ? 0 : (int) $paginateRaw;
+        // ====== PERBAIKAN: PAGINATION CERDAS DENGAN SOFT LIMIT ======
+        $paginateRaw = $request->get('paginate', 'smart'); // Default 'smart' pagination
+        $paginateAll = ($paginateRaw === 'all' || $request->boolean('all'));
+        $smartMode = ($paginateRaw === 'smart');
+        $paginate = !$paginateAll && !$smartMode ? (int) $paginateRaw : 0;
 
-        if (! $paginateAll) {
-            if ($paginate < 1)   $paginate = 25;
-            if ($paginate > 200) $paginate = 200; // ceiling aman untuk mobile
-        }
+        // Smart pagination: Ambil batch pertama dengan limit wajar
+        $smartLimit = $smartMode ? (int) $request->get('limit', 100) : 0; // Default 100 untuk smart mode
+        if ($smartLimit < 10) $smartLimit = 100;
+        if ($smartLimit > 500) $smartLimit = 500; // Max 500 per request untuk performa
 
-        $tabParam  = $request->get('tab');   // opsional
-        $typeParam = $request->get('type');  // kompat FE lama
-        $tab = $tabParam ?: $typeParam;      // pakai salah satu
+        $tabParam  = $request->get('tab');
+        $typeParam = $request->get('type');
+        $tab = $tabParam ?: $typeParam;
 
         $unreadOnly = (bool) $request->boolean('unread_only', false);
-        $sinceRaw   = $request->get('since'); // string tanggal opsional
+        $sinceRaw   = $request->get('since');
+
+        // Pagination cursor untuk infinite scroll
+        $cursor = $request->get('cursor'); // ID terakhir dari request sebelumnya
 
         $user = Auth::user();
         if (!$user) {
@@ -70,18 +74,14 @@ class NotificationController extends Controller
 
         Log::info('NotifIndex', [
             'user_id' => $user->id,
-            'tab'     => $tab,
-            'sortBy'  => $sortBy,
-            'dir'     => $sortDirection,
-            'paginate'=> $paginateAll ? 'all' : $paginate,
-            'unread'  => $unreadOnly,
-            'since'   => $sinceRaw,
+            'tab' => $tab,
+            'mode' => $paginateAll ? 'all' : ($smartMode ? 'smart' : 'paginate'),
+            'smart_limit' => $smartLimit,
+            'cursor' => $cursor,
         ]);
 
         $query = Notification::query()
-            ->with(['user','target'])
-            ->where('user_id', $user->id)
-            ->select('notifications.*');
+            ->where('user_id', $user->id);
 
         // ====== FILTER TAB / TYPE ======
         $typesFromTab = $this->mapTabTypes($tab);
@@ -104,78 +104,140 @@ class NotificationController extends Controller
             }
         }
 
+        // ====== CURSOR PAGINATION (untuk infinite scroll) ======
+        if ($cursor && $smartMode) {
+            if ($sortBy === 'created_at' && $sortDirection === 'DESC') {
+                $query->where('created_at', '<', $cursor);
+            } elseif ($sortBy === 'id' && $sortDirection === 'DESC') {
+                $query->where('id', '<', $cursor);
+            }
+            // Tambah kondisi lain sesuai kebutuhan
+        }
+
         try {
-            // Ringkasan tipe (tanpa filter tab) & unread count
-            $typesCount = Notification::where('user_id', $user->id)
-                ->selectRaw('type, COUNT(*) as cnt')
-                ->groupBy('type')
-                ->pluck('cnt','type');
+            // ====== COUNT TOTAL & UNREAD (OPTIMIZED) ======
+            $totalCount = $query->count(); // Count dengan filter yang sama
 
             $unreadCount = Notification::where('user_id', $user->id)
                 ->whereNull('read_at')
+                ->when($typesFromTab, fn($q) => $q->whereIn('type', $typesFromTab))
+                ->when(!$typesFromTab && $tab && $tab !== 'all', fn($q) => $q->where('type', $tab))
                 ->count();
 
-            // ====== AMBIL SEMUA ======
-            if ($paginateAll) {
-                $items = $query->orderBy($sortBy, $sortDirection)->get();
+            // ====== SMART MODE: AMBIL BATCH TERBATAS ======
+            if ($smartMode) {
+                $items = $query->orderBy($sortBy, $sortDirection)
+                    ->select([
+                        'id', 'type', 'title', 'message', 'image_url', 
+                        'target_type', 'target_id', 'action_url', 'meta', 
+                        'read_at', 'created_at'
+                    ])
+                    ->limit($smartLimit)
+                    ->get();
+
+                // Tentukan cursor untuk request berikutnya
+                $nextCursor = null;
+                $hasMore = false;
+                
+                if ($items->count() === $smartLimit) {
+                    $lastItem = $items->last();
+                    $nextCursor = $sortBy === 'created_at' ? $lastItem->created_at : $lastItem->id;
+                    
+                    // Cek apakah masih ada data setelah cursor ini
+                    $hasMore = $query->where($sortBy, $sortDirection === 'DESC' ? '<' : '>', $nextCursor)->exists();
+                }
+
+                Log::info('NotifIndexResult (SMART)', [
+                    'user_id' => $user->id,
+                    'returned' => $items->count(),
+                    'total_available' => $totalCount,
+                    'has_more' => $hasMore,
+                    'next_cursor' => $nextCursor,
+                ]);
 
                 return response()->json([
-                    'message'   => ($items->isEmpty() ? 'empty data' : 'success'),
-                    'data'      => $items,
-                    'total_row' => $items->count(),
-                    'meta'      => [
-                        'applied_tab'   => $tab ?? 'all',
+                    'message' => $items->isEmpty() ? 'empty data' : 'success',
+                    'data' => $items,
+                    'total_row' => $totalCount,
+                    'meta' => [
+                        'mode' => 'smart',
+                        'limit' => $smartLimit,
+                        'returned' => $items->count(),
+                        'has_more' => $hasMore,
+                        'next_cursor' => $nextCursor,
+                        'applied_tab' => $tab ?? 'all',
                         'applied_types' => $typesFromTab ?: ($tab && $tab !== 'all' ? [$tab] : null),
-                        'types_cnt'     => $typesCount,
-                        'unread_cnt'    => $unreadCount,
-                        'pagination'    => null,
-                        'sorting'       => ['by'=>$sortBy,'dir'=>$sortDirection],
-                        'filters'       => ['unread_only'=>$unreadOnly,'since'=>$sinceRaw],
+                        'unread_cnt' => $unreadCount,
+                        'sorting' => ['by' => $sortBy, 'dir' => $sortDirection],
+                        'filters' => ['unread_only' => $unreadOnly, 'since' => $sinceRaw],
+                    ],
+                ], 200);
+            }
+
+            // ====== MODE LAMA: ALL atau PAGINATE ======
+            if ($paginateAll) {
+                // WARNING: Hanya untuk debugging atau user dengan notif sedikit
+                if ($totalCount > 1000) {
+                    return response()->json([
+                        'message' => 'Too many notifications. Use smart mode instead.',
+                        'total_count' => $totalCount,
+                        'suggestion' => 'Add ?paginate=smart&limit=100 to your request'
+                    ], 413); // Payload Too Large
+                }
+
+                $items = $query->orderBy($sortBy, $sortDirection)
+                    ->select([
+                        'id', 'type', 'title', 'message', 'image_url', 
+                        'target_type', 'target_id', 'action_url', 'meta', 
+                        'read_at', 'created_at'
+                    ])
+                    ->get();
+
+                return response()->json([
+                    'message' => $items->isEmpty() ? 'empty data' : 'success',
+                    'data' => $items,
+                    'total_row' => $items->count(),
+                    'meta' => [
+                        'mode' => 'all',
+                        'applied_tab' => $tab ?? 'all',
+                        'unread_cnt' => $unreadCount,
                     ],
                 ], 200);
             }
 
             // ====== PAGINATE BIASA ======
-            $paginator = $query->orderBy($sortBy, $sortDirection)->paginate($paginate);
-            $items     = $paginator->items();
+            if ($paginate < 1) $paginate = 50;
+            if ($paginate > 200) $paginate = 200; // Batasi untuk performa
 
-            Log::info('NotifIndexResult', [
-                'user_id' => $user->id,
-                'total'   => $paginator->total(),
-                'types'   => collect($items)->pluck('type')->unique()->values(),
-            ]);
+            $paginator = $query->orderBy($sortBy, $sortDirection)->paginate($paginate);
+            $items = $paginator->items();
 
             return response()->json([
-                'message'   => (count($items) === 0) ? 'empty data' : 'success',
-                'data'      => $items,
+                'message' => count($items) === 0 ? 'empty data' : 'success',
+                'data' => $items,
                 'total_row' => $paginator->total(),
-                'meta'      => [
-                    'applied_tab'   => $tab ?? 'all',
-                    'applied_types' => $typesFromTab ?: ($tab && $tab !== 'all' ? [$tab] : null),
-                    'types_cnt'     => $typesCount,
-                    'unread_cnt'    => $unreadCount,
-                    'pagination'    => [
+                'meta' => [
+                    'mode' => 'paginate',
+                    'pagination' => [
                         'current_page' => $paginator->currentPage(),
-                        'per_page'     => $paginator->perPage(),
-                        'last_page'    => $paginator->lastPage(),
-                        'total'        => $paginator->total(),
-                        'next_page_url'=> $paginator->nextPageUrl(),
-                        'prev_page_url'=> $paginator->previousPageUrl(),
+                        'per_page' => $paginator->perPage(),
+                        'last_page' => $paginator->lastPage(),
+                        'total' => $paginator->total(),
                     ],
-                    'sorting' => ['by'=>$sortBy,'dir'=>$sortDirection],
-                    'filters' => ['unread_only'=>$unreadOnly,'since'=>$sinceRaw],
+                    'applied_tab' => $tab ?? 'all',
+                    'unread_cnt' => $unreadCount,
                 ],
             ], 200);
 
         } catch (\Throwable $e) {
             Log::error('NotificationController@index error', [
                 'user_id' => $user->id,
-                'error'   => $e->getMessage(),
+                'error' => $e->getMessage(),
             ]);
 
             return response()->json([
                 'message' => 'Error loading notifications',
-                'error'   => $e->getMessage(),
+                'error' => $e->getMessage(),
             ], 500);
         }
     }

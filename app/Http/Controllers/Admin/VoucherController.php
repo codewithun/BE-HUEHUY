@@ -867,12 +867,11 @@ class VoucherController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => $notificationCount > 0 
+                'message' => $notificationCount > 0
                     ? "Voucher berhasil diupdate dan {$notificationCount} notifikasi terkirim ke pengguna baru"
                     : "Voucher berhasil diupdate",
                 'data' => $model
             ])->header('Cache-Control', 'no-store, no-cache, must-revalidate');
-
         } catch (\Throwable $e) {
             DB::rollBack();
             Log::error('❌ Error updating voucher', [
@@ -1061,7 +1060,7 @@ class VoucherController extends Controller
             } elseif ($voucher->target_type === 'community' && $voucher->community_id) {
                 // Ambil user dari community
                 $builder = User::query();
-                
+
                 // PERBAIKAN: Cek kolom email_verified_at sebelum menggunakannya
                 if (Schema::hasColumn('users', 'email_verified_at')) {
                     $builder->whereNotNull('email_verified_at');
@@ -1091,7 +1090,7 @@ class VoucherController extends Controller
             } else {
                 // target_type = 'all' - ambil semua regular users
                 $builder = User::query();
-                
+
                 if (Schema::hasColumn('users', 'email_verified_at')) {
                     $builder->whereNotNull('email_verified_at');
                 } else {
@@ -1207,47 +1206,6 @@ class VoucherController extends Controller
         $itemIdHint = $data['item_id']      ?? null;
         $ownerHint  = $data['item_owner_id'] ?? null;
 
-        // ==== CEK: Kode sudah pernah divalidasi? (scope by owner jika ada) ====
-        // [FIX-VAL-EXISTING-VOUCHER]
-        $ownerHint = $request->input('item_owner_id'); // boleh null
-        $existing = VoucherValidation::query()
-            ->leftJoin('voucher_items', 'voucher_items.code', '=', 'voucher_validations.code')
-            ->select('voucher_validations.*', 'voucher_items.user_id as owner_id')
-            ->where('voucher_validations.code', $code)
-            // Kalau owner diketahui, hanya blokir jika memang milik owner yang sama
-            ->when($ownerHint, fn($q) => $q->where('voucher_items.user_id', $ownerHint))
-            ->latest('voucher_validations.validated_at')
-            ->first();
-
-        // Catatan penting:
-        // - Jika $code adalah KODE MASTER (bukan kode item), biasanya tidak punya pasangan di voucher_items,
-        //   maka $existing akan null dan proses lanjut (kita akan buat item baru untuk owner itu).
-        if ($existing) {
-            $validatedByTenantId = (int) $existing->user_id;
-            $currentUserId       = (int) $request->user()->id;
-
-            if (($data['validator_role'] ?? null) === 'tenant' && $validatedByTenantId !== $currentUserId) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Kode ini sudah divalidasi oleh tenant lain.',
-                    'data'    => [
-                        'validated_by_tenant_id' => $validatedByTenantId,
-                        'voucher_id'             => $existing->voucher_id,
-                        'validated_at'           => $existing->validated_at,
-                    ],
-                ], 403);
-            }
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Kode ini sudah pernah divalidasi.',
-                'data'    => [
-                    'validated_by_tenant_id' => $validatedByTenantId,
-                    'voucher_id'             => $existing->voucher_id,
-                    'validated_at'           => $existing->validated_at,
-                ],
-            ], 409);
-        }
 
         // 1) Cari item
         $item = VoucherItem::with(['voucher', 'voucher.community', 'user'])
@@ -1298,6 +1256,43 @@ class VoucherController extends Controller
         } else {
             // Kode unik via user: kreditkan ke tenant pemilik agar muncul di riwayat tenant
             $validatorId = $tenantId ?: $user->id;
+        }
+
+        // ===== Cek existing berbasis KODE ITEM (unik per user) =====
+        $finalCode = (string) $item->code;
+
+        $existing = \App\Models\VoucherValidation::with(['voucher'])
+            ->where('code', $finalCode)
+            ->latest('validated_at')
+            ->first();
+
+        if ($existing) {
+            $validatedByTenantId = (int) $existing->user_id;
+            $currentUserId       = (int) $request->user()->id;
+
+            if (($data['validator_role'] ?? null) === 'tenant'
+                && $validatedByTenantId !== $currentUserId
+            ) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Kode ini sudah divalidasi oleh tenant lain.',
+                    'data'    => [
+                        'validated_by_tenant_id' => $validatedByTenantId,
+                        'voucher_id'             => $existing->voucher_id,
+                        'validated_at'           => $existing->validated_at,
+                    ],
+                ], 403);
+            }
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Kode ini sudah pernah divalidasi.',
+                'data'    => [
+                    'validated_by_tenant_id' => $validatedByTenantId,
+                    'voucher_id'             => $existing->voucher_id,
+                    'validated_at'           => $existing->validated_at,
+                ],
+            ], 409);
         }
 
         DB::transaction(function () use ($item, $validatorId, $code, $request) {

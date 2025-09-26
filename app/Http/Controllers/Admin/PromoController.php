@@ -956,13 +956,39 @@ class PromoController extends Controller
         $itemIdHint = $request->input('item_id');
         $ownerHint  = $request->input('item_owner_id');
 
-        // ==== CEK: Kode sudah pernah divalidasi? (scope by owner jika ada) ====
-        // [FIX-VAL-EXISTING-PROMO]
-        $ownerHint = $request->input('item_owner_id'); // boleh null
-        $existing = PromoValidation::query()
+        // 1) by promo_items.code
+        $item = \App\Models\PromoItem::with(['promo', 'user'])
+            ->where('code', $code)
+            ->first();
+
+        // 2) by item_id
+        if (! $item && $itemIdHint) {
+            $item = \App\Models\PromoItem::with(['promo', 'user'])->find($itemIdHint);
+        }
+
+        // 3) fallback: master promo code + owner
+        if (! $item) {
+            $promo = \App\Models\Promo::whereRaw('LOWER(code) = ?', [mb_strtolower($code)])->first();
+            if ($promo && $ownerHint) {
+                $item = \App\Models\PromoItem::with(['promo', 'user'])
+                    ->where('promo_id', $promo->id)
+                    ->where('user_id', $ownerHint)
+                    ->latest('id')
+                    ->first();
+            }
+        }
+
+        $promo = $item?->promo ?? \App\Models\Promo::whereRaw('LOWER(code) = ?', [mb_strtolower($code)])->first();
+        if (! $promo) {
+            return response()->json(['success' => false, 'message' => 'Promo tidak ditemukan'], 404);
+        }
+
+        // ===== CEK: sudah pernah divalidasi? (gunakan kode final) =====
+        $finalCode = (string) ($item->code ?? $code); // kalau item sudah ketemu, pakai kode item
+        $existing = \App\Models\PromoValidation::query()
             ->leftJoin('promo_items', 'promo_items.code', '=', 'promo_validations.code')
             ->select('promo_validations.*', 'promo_items.user_id as owner_id')
-            ->where('promo_validations.code', $code)
+            ->where('promo_validations.code', $finalCode)
             ->when($ownerHint, fn($q) => $q->where('promo_items.user_id', $ownerHint))
             ->latest('promo_validations.validated_at')
             ->first();
@@ -992,33 +1018,6 @@ class PromoController extends Controller
                     'validated_at'           => $existing->validated_at,
                 ],
             ], 409);
-        }
-
-        // 1) by promo_items.code
-        $item = \App\Models\PromoItem::with(['promo', 'user'])
-            ->where('code', $code)
-            ->first();
-
-        // 2) by item_id
-        if (! $item && $itemIdHint) {
-            $item = \App\Models\PromoItem::with(['promo', 'user'])->find($itemIdHint);
-        }
-
-        // 3) fallback: master promo code + owner
-        if (! $item) {
-            $promo = \App\Models\Promo::whereRaw('LOWER(code) = ?', [mb_strtolower($code)])->first();
-            if ($promo && $ownerHint) {
-                $item = \App\Models\PromoItem::with(['promo', 'user'])
-                    ->where('promo_id', $promo->id)
-                    ->where('user_id', $ownerHint)
-                    ->latest('id')
-                    ->first();
-            }
-        }
-
-        $promo = $item?->promo ?? \App\Models\Promo::whereRaw('LOWER(code) = ?', [mb_strtolower($code)])->first();
-        if (! $promo) {
-            return response()->json(['success' => false, 'message' => 'Promo tidak ditemukan'], 404);
         }
 
         // ========= Tentukan tenant pemilik promo & role validator =========

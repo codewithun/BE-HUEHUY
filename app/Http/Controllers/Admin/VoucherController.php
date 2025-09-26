@@ -1095,7 +1095,7 @@ class VoucherController extends Controller
                     'user_id'      => $validatorId,              // ← penting: catat validator = tenant (atau user fallback)
                     'code'         => $code,
                     'validated_at' => now(),
-                    'notes'        => $request->input('validation_purpose'),
+                    'notes'        => null,
                 ]);
             } catch (\Throwable $e) {
             }

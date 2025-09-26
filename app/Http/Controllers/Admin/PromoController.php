@@ -98,16 +98,8 @@ class PromoController extends Controller
      */
     private function transformPromoImageUrls($promo)
     {
-        if ($promo->image) {
-            if (Storage::disk('public')->exists($promo->image)) {
-                $promo->image_url = asset('storage/' . $promo->image);
-            } else {
-                $promo->image_url = asset('images/default-promo.jpg');
-            }
-        } else {
-            $promo->image_url = asset('images/default-promo.jpg');
-        }
-
+        // Pakai accessor dari model agar konsisten - accessor sudah handle URL generation dengan benar
+        $promo->append(['image_url', 'image_url_versioned']);
         return $promo;
     }
 
@@ -229,9 +221,8 @@ class PromoController extends Controller
                 $items = $query->orderBy($sortby, $sortDirection)->get();
 
                 $transformedItems = $items->map(function ($p) {
-                    $p = $this->transformPromoImageUrls($p);
                     $p->validation_type = $p->validation_type ?? 'auto';
-                    return $p;
+                    return $this->transformPromoImageUrls($p);
                 });
 
                 return response([
@@ -243,9 +234,8 @@ class PromoController extends Controller
 
             $data = $query->orderBy($sortby, $sortDirection)->paginate($paginate);
             $items = collect($data->items())->map(function ($p) {
-                $p = $this->transformPromoImageUrls($p);
                 $p->validation_type = $p->validation_type ?? 'auto';
-                return $p;
+                return $this->transformPromoImageUrls($p);
             })->values();
 
             if ($items->isEmpty()) {
@@ -320,8 +310,8 @@ class PromoController extends Controller
             ], 404);
         }
 
-        $promo = $this->transformPromoImageUrls($promo);
         $promo->validation_type = $promo->validation_type ?? 'auto';
+        $promo = $this->transformPromoImageUrls($promo);
 
         return response([
             'message' => 'Success',
@@ -378,6 +368,7 @@ class PromoController extends Controller
                 'created_at' => $promo->created_at ?? null,
                 'updated_at' => $promo->updated_at ?? null,
                 'image_url' => $promo->image_url,
+                'image_url_versioned' => $promo->image_url_versioned ?? $promo->image_url,
                 'image' => $promo->image,
                 'validation_type' => $promo->validation_type ?? 'auto',
             ];
@@ -446,10 +437,10 @@ class PromoController extends Controller
         if ($request->filled('owner_user_id')) {
             $user = User::find($request->input('owner_user_id'));
             [$uname, $uphone] = $this->extractUserNamePhone($user);
-            if ($uname) {
+            if ($uname && !$request->filled('owner_name')) {
                 $request->merge(['owner_name'    => $uname]);
             }
-            if ($uphone) {
+            if ($uphone && !$request->filled('owner_contact')) {
                 $request->merge(['owner_contact' => $uphone]);
             }
         }
@@ -463,14 +454,14 @@ class PromoController extends Controller
             'promo_distance'  => 'nullable|numeric|min:0',
             'start_date'      => 'nullable|date',
             'end_date'        => 'nullable|date|after_or_equal:start_date',
-            'always_available' => 'in:0,1,true,false',
-            'stock'           => 'nullable|integer|min:0',
+            'always_available' => 'required|in:0,1,true,false',
+            'stock'           => 'required|integer|min:0',
             'promo_type'      => 'required|string|in:offline,online',
             'validation_type' => 'required|string|in:auto,manual',
             'location'        => 'nullable|string',
             'owner_name'      => 'required|string|max:255',
             'owner_contact'   => 'required|string|max:255',
-            'image'           => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
+            'image'           => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:10240',
             'community_id'    => 'required|exists:communities,id',
             'code'            => 'nullable|string|unique:promos,code|required_if:validation_type,manual',
         ], [
@@ -519,9 +510,11 @@ class PromoController extends Controller
 
             if ($request->hasFile('image')) {
                 $data['image'] = $request->file('image')->store('promos', 'public');
+                $data['image_updated_at'] = now(); // versioning trigger
             }
 
             $promo = Promo::create($data);
+            $promo = $this->transformPromoImageUrls($promo);
 
             DB::commit();
             return response()->json([
@@ -565,10 +558,10 @@ class PromoController extends Controller
         if ($request->filled('owner_user_id')) {
             $user = User::find($request->input('owner_user_id'));
             [$uname, $uphone] = $this->extractUserNamePhone($user);
-            if ($uname) {
+            if ($uname && !$request->filled('owner_name')) {
                 $request->merge(['owner_name'    => $uname]);
             }
-            if ($uphone) {
+            if ($uphone && !$request->filled('owner_contact')) {
                 $request->merge(['owner_contact' => $uphone]);
             }
         }
@@ -592,13 +585,8 @@ class PromoController extends Controller
             'owner_contact'   => 'sometimes|required|string|max:255',
             'community_id'    => 'sometimes|required|exists:communities,id',
             'code'            => 'nullable|string|unique:promos,code,' . $id . '|required_if:validation_type,manual',
+            'image'           => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:10240',
         ];
-
-        if ($request->hasFile('image')) {
-            $validationRules['image'] = 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048';
-        } else {
-            $validationRules['image'] = 'nullable|string';
-        }
 
         $validator = Validator::make($request->all(), $validationRules, [
             'validation_type.in' => 'Tipe validasi harus auto atau manual.',
@@ -667,9 +655,23 @@ class PromoController extends Controller
                     Storage::disk('public')->delete($promo->image);
                 }
                 $data['image'] = $request->file('image')->store('promos', 'public');
+                $data['image_updated_at'] = now(); // versioning trigger
+            }
+            // TAMBAHAN: Update cache buster untuk perubahan non-image
+            else if (!$request->hasFile('image')) {
+                $significantFields = ['title', 'description', 'detail', 'stock', 'start_date', 'end_date', 'location', 'owner_name', 'owner_contact'];
+                $hasSignificantChange = collect($significantFields)->some(function ($field) use ($data, $promo) {
+                    return isset($data[$field]) && $data[$field] != $promo->$field;
+                });
+
+                if ($hasSignificantChange) {
+                    $data['image_updated_at'] = now();
+                    Log::info('🔄 Force cache bust for non-image changes');
+                }
             }
 
             $promo->update($data);
+            $promo = $this->transformPromoImageUrls($promo->fresh());
 
             DB::commit();
 
@@ -724,7 +726,6 @@ class PromoController extends Controller
     {
         $promos = Promo::where('community_id', $communityId)->get();
         $promos = $promos->map(function ($promo) {
-            $promo = $this->transformPromoImageUrls($promo);
             $promo->validation_type = $promo->validation_type ?? 'auto';
             return $promo;
         });
@@ -851,7 +852,7 @@ class PromoController extends Controller
                 ], 404);
             }
 
-            $promo = $this->transformPromoImageUrls($promo);
+            // Image URLs are now handled by the model accessors
 
             $responseData = [
                 'id' => $promo->id,
@@ -871,6 +872,7 @@ class PromoController extends Controller
                 'created_at' => $promo->created_at ?? null,
                 'updated_at' => $promo->updated_at ?? null,
                 'image_url' => $promo->image_url,
+                'image_url_versioned' => $promo->image_url_versioned ?? $promo->image_url,
                 'image' => $promo->image,
                 'validation_type' => $promo->validation_type ?? 'auto',
             ];
@@ -1157,7 +1159,7 @@ class PromoController extends Controller
             'data'    => [
                 'promo_item_id' => $item->id,
                 'promo_item'    => $item,
-                'promo'         => $this->transformPromoImageUrls($promo),
+                'promo'         => $promo,
             ],
         ], 200);
     }

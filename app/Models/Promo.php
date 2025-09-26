@@ -4,6 +4,8 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Carbon;
 
 class Promo extends Model
 {
@@ -27,6 +29,7 @@ class Promo extends Model
         'owner_name',
         'owner_contact',
         'image',
+        'image_updated_at', // Add this field
         'status', // opsional, kalau kamu pakai status (active/inactive)
     ];
 
@@ -36,12 +39,14 @@ class Promo extends Model
         'always_available' => 'boolean',
         'stock'            => 'integer',
         'promo_distance'   => 'float',
+        'image_updated_at' => 'datetime',
     ];
 
-    // default value saat new Model() / mass-assignment tanpa kolom ini
     protected $attributes = [
         'validation_type' => 'auto',
     ];
+
+    protected $appends = ['image_url', 'image_url_versioned'];
 
     // ====== Normalisasi getter/setter ======
 
@@ -87,5 +92,57 @@ class Promo extends Model
             $q->where('status', 'active')
               ->orWhereNull('status');
         });
+    }
+
+    // ================= Accessors =================
+    
+    public function getImageUrlAttribute(): ?string
+    {
+        if (!$this->image) return null;
+        
+        // Handle case where image is already a full URL
+        if (filter_var($this->image, FILTER_VALIDATE_URL)) {
+            return $this->image;
+        }
+        
+        /** @var \Illuminate\Filesystem\FilesystemAdapter $disk */
+        $disk = Storage::disk('public');
+        $url = $disk->url(ltrim($this->image, '/'));
+        
+        // Ensure the URL uses the backend host for API responses
+        // Frontend should access images through backend proxy
+        if (request()->is('api/*')) {
+            $parsedUrl = parse_url($url);
+            if ($parsedUrl && isset($parsedUrl['path'])) {
+                // Return relative URL that will be served by Laravel
+                return url($parsedUrl['path']);
+            }
+        }
+        
+        return $url;
+    }
+    
+    public function getImageUrlVersionedAttribute(): ?string
+    {
+        $url = $this->image_url;
+        if (!$url) return null;
+        
+        // PERBAIKAN: Prioritas versioning yang lebih robust
+        $ver = null;
+        
+        // 1) Prioritas tertinggi: image_updated_at (ketika file diganti)
+        if ($this->image_updated_at instanceof Carbon) {
+            $ver = $this->image_updated_at->getTimestamp();
+        } 
+        // 2) Fallback: updated_at (ketika record berubah)
+        else if ($this->updated_at instanceof Carbon) {
+            $ver = $this->updated_at->getTimestamp();
+        }
+        // 3) Fallback terakhir: ID + current time
+        else {
+            $ver = $this->id ? ($this->id * 1000 + (time() % 1000)) : time();
+        }
+        
+        return str_contains($url, '?') ? "{$url}&v={$ver}" : "{$url}?v={$ver}";
     }
 }

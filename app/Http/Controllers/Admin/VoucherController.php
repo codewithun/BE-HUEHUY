@@ -21,6 +21,72 @@ use Illuminate\Support\Collection;
 
 class VoucherController extends Controller
 {
+
+    /** Normalisasi nomor HP: ambil digit, buang 0/62 di depan */
+    private function normalizePhone(?string $raw): ?string
+    {
+        if (!$raw) return null;
+        $d = preg_replace('/\D+/', '', $raw);
+        if ($d === '') return null;
+        $d = preg_replace('/^(?:0|62)/', '', $d);
+        return $d;
+    }
+
+    /** Temukan user (tenant pemilik voucher) dari owner_phone / owner_name */
+    private function resolveTenantUserIdByVoucher(Voucher $voucher): ?int
+    {
+        try {
+            $ownerPhone = $this->normalizePhone($voucher->owner_phone ?? null);
+
+            $allUserCols = \Illuminate\Support\Facades\Schema::getColumnListing('users');
+            $phoneCols = array_values(array_intersect(
+                $allUserCols,
+                ['phone', 'phone_number', 'telp', 'telpon', 'mobile', 'contact', 'whatsapp', 'wa']
+            ));
+
+            // 1) by phone (paling akurat)
+            if ($ownerPhone && !empty($phoneCols)) {
+                $u = \App\Models\User::query()
+                    ->where(function ($q) use ($ownerPhone, $phoneCols) {
+                        foreach ($phoneCols as $col) {
+                            $q->orWhereRaw(
+                                "REGEXP_REPLACE(COALESCE($col,''),'[^0-9]','') REGEXP ?",
+                                ["^(0|62)?$ownerPhone$"]
+                            );
+                        }
+                    })
+                    ->first();
+                if ($u) return $u->id;
+            }
+
+            // 2) by name (fallback)
+            $nameCols = array_values(array_intersect(
+                $allUserCols,
+                ['name', 'full_name', 'username', 'display_name', 'company_name']
+            ));
+            $ownerName = trim((string)($voucher->owner_name ?? ''));
+            if ($ownerName !== '' && !empty($nameCols)) {
+                $u = \App\Models\User::query()
+                    ->where(function ($q) use ($ownerName, $nameCols) {
+                        foreach ($nameCols as $col) {
+                            $q->orWhere($col, $ownerName);
+                        }
+                    })
+                    ->first();
+                if ($u) return $u->id;
+            }
+
+            return null;
+        } catch (\Throwable $e) {
+            Log::error('resolveTenantUserIdByVoucher failed: ' . $e->getMessage(), [
+                'voucher_id'   => $voucher->id ?? null,
+                'owner_name'   => $voucher->owner_name ?? null,
+                'owner_phone'  => $voucher->owner_phone ?? null,
+            ]);
+            return null;
+        }
+    }
+
     // ================= Helpers =================
     private function normalizeUserIds($raw): array
     {
@@ -204,12 +270,12 @@ class VoucherController extends Controller
 
         try {
             $ownerQuery = User::query();
-            
+
             // Hanya gunakan kolom yang pasti ada
             if ($voucher->owner_name) {
-                $ownerQuery->where(function($q) use ($voucher) {
+                $ownerQuery->where(function ($q) use ($voucher) {
                     $q->where('name', 'like', '%' . $voucher->owner_name . '%');
-                    
+
                     // Cek kolom opsional hanya jika ada
                     if (Schema::hasColumn('users', 'full_name')) {
                         $q->orWhere('full_name', 'like', '%' . $voucher->owner_name . '%');
@@ -222,12 +288,12 @@ class VoucherController extends Controller
                     }
                 });
             }
-            
+
             if ($voucher->owner_phone) {
                 $phone = preg_replace('/[^\d+]/', '', $voucher->owner_phone);
-                $ownerQuery->where(function($q) use ($phone) {
+                $ownerQuery->where(function ($q) use ($phone) {
                     $q->where('phone', 'like', '%' . $phone . '%');
-                    
+
                     // Cek kolom opsional hanya jika ada
                     if (Schema::hasColumn('users', 'phone_number')) {
                         $q->orWhere('phone_number', 'like', '%' . $phone . '%');
@@ -240,7 +306,7 @@ class VoucherController extends Controller
                     }
                 });
             }
-            
+
             $owner = $ownerQuery->first();
             if ($owner) {
                 $voucher->setAttribute('owner_user_id', $owner->id);
@@ -271,16 +337,16 @@ class VoucherController extends Controller
                 $s = $request->get('search');
                 $q->where(function ($qq) use ($s) {
                     $qq->where('name', 'like', "%{$s}%")
-                      ->orWhere('code', 'like', "%{$s}%")
-                      ->orWhere('owner_name', 'like', "%{$s}%")
-                      ->orWhere('owner_phone', 'like', "%{$s}%");
+                        ->orWhere('code', 'like', "%{$s}%")
+                        ->orWhere('owner_name', 'like', "%{$s}%")
+                        ->orWhere('owner_phone', 'like', "%{$s}%");
                 });
             })
             ->when($request->filled('owner_like'), function ($q) use ($request) {
                 $s = $request->get('owner_like');
                 $q->where(function ($qq) use ($s) {
                     $qq->where('owner_name', 'like', "%{$s}%")
-                       ->orWhere('owner_phone', 'like', "%{$s}%");
+                        ->orWhere('owner_phone', 'like', "%{$s}%");
                 });
             });
 
@@ -309,7 +375,7 @@ class VoucherController extends Controller
         if ($paginate <= 0 || $request->boolean('all')) {
             $items = $query->orderBy($sortby, $sortDirection)->get();
             $items = $this->hydrateAudience($items);
-            
+
             // TAMBAH: Resolve owner_user_id untuk setiap voucher
             $items = $items->map(function ($item) {
                 $item = $this->addImageVersioning($item);
@@ -335,7 +401,7 @@ class VoucherController extends Controller
 
         $items = collect($page->items());
         $items = $this->hydrateAudience($items);
-        
+
         // TAMBAH: Resolve owner_user_id untuk setiap voucher
         $items = $items->map(function ($item) {
             $item = $this->addImageVersioning($item);
@@ -359,7 +425,7 @@ class VoucherController extends Controller
                     $s = $request->get('search');
                     $q->where(function ($qq) use ($s) {
                         $qq->where('name', 'like', "%{$s}%")
-                           ->orWhere('code', 'like', "%{$s}%");
+                            ->orWhere('code', 'like', "%{$s}%");
                     });
                 });
 
@@ -430,24 +496,24 @@ class VoucherController extends Controller
                 'id' => $model->id,
                 'name' => $model->name,
                 'description' => $model->description,
-                
+
                 // PERBAIKAN: Sertakan semua field image
                 'image' => $model->image,
                 'image_url' => $model->image_url,
                 'image_url_versioned' => $model->image_url_versioned,
-                
+
                 'type' => $model->type,
                 'valid_until' => $model->valid_until,
                 'is_valid' => $model->is_valid ?? true,
                 'status' => $model->status ?? 'active',
                 'target_type' => $model->target_type,
                 'stock' => $model->stock ?? 0,
-                
+
                 // TAMBAH: Info manager tenant untuk kontak
                 'owner_name' => $model->owner_name,
                 'owner_phone' => $model->owner_phone,
                 'tenant_location' => $model->tenant_location,
-                
+
                 // Community info
                 'community' => $model->community ? [
                     'id' => $model->community->id,
@@ -461,7 +527,6 @@ class VoucherController extends Controller
                 'message' => 'Success',
                 'data' => $publicData
             ])->header('Cache-Control', 'no-store');
-
         } catch (\Throwable $e) {
             Log::error('Error in showPublic: ' . $e->getMessage());
             return response()->json([
@@ -522,7 +587,9 @@ class VoucherController extends Controller
             'validation_type' => ['nullable', Rule::in(['auto', 'manual'])],
             'code'            => [
                 Rule::requiredIf(fn() => ($request->input('validation_type') ?: 'auto') === 'manual'),
-                'string','max:255', Rule::unique('vouchers', 'code')
+                'string',
+                'max:255',
+                Rule::unique('vouchers', 'code')
             ],
             'target_type'     => ['required', Rule::in(['all', 'user', 'community'])],
             'target_user_id'  => 'nullable|integer|exists:users,id',
@@ -588,11 +655,11 @@ class VoucherController extends Controller
             $notificationCount = $this->sendVoucherNotifications($model, $explicitUserIds);
 
             DB::commit();
-            
+
             // TAMBAH: refresh dengan versioning  
             $model->refresh();
             $model = $this->addImageVersioning($model);
-            
+
             return response()->json([
                 'success' => true,
                 'message' => "Voucher berhasil dibuat dan {$notificationCount} notifikasi terkirim",
@@ -729,10 +796,10 @@ class VoucherController extends Controller
             // TAMBAHAN: Update cache buster untuk perubahan non-image
             else if (!$request->hasFile('image')) {
                 $significantFields = ['name', 'description', 'stock', 'valid_until', 'target_type'];
-                $hasSignificantChange = collect($significantFields)->some(function($field) use ($data, $model) {
+                $hasSignificantChange = collect($significantFields)->some(function ($field) use ($data, $model) {
                     return isset($data[$field]) && $data[$field] != $model->$field;
                 });
-                
+
                 if ($hasSignificantChange) {
                     $data['image_updated_at'] = now();
                     Log::info('🔄 Force cache bust for non-image changes');
@@ -773,34 +840,33 @@ class VoucherController extends Controller
             $model->refresh();
 
             DB::commit();
-            
+
             // PERBAIKAN: Pastikan cache busting response
             $model = $this->addImageVersioning($model);
-            
+
             Log::info('✅ Voucher updated successfully:', [
                 'id' => $model->id,
                 'image_path' => $model->image,
                 'image_updated_at' => $model->image_updated_at,
             ]);
-            
+
             return response()->json([
                 'success' => true,
                 'message' => 'Voucher berhasil diupdate',
                 'data' => $model
             ])->header('Cache-Control', 'no-store, no-cache, must-revalidate');
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            Log::error('❌ Error updating voucher', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
 
-    } catch (\Throwable $e) {
-        DB::rollBack();
-        Log::error('❌ Error updating voucher', [
-            'error' => $e->getMessage(),
-            'trace' => $e->getTraceAsString()
-        ]);
-
-        return response()->json([
-            'success' => false,
-            'message' => 'Gagal mengupdate voucher: ' . $e->getMessage()
-        ], 500);
-    }
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengupdate voucher: ' . $e->getMessage()
+            ], 500);
+        }
     }
 
     // ================= Destroy =================
@@ -829,7 +895,7 @@ class VoucherController extends Controller
             $imageUrl = $voucher->image_url_versioned ?: $voucher->image_url;
 
             $builder = User::query();
-            
+
             // PERBAIKAN: Cek kolom email_verified_at sebelum menggunakannya
             if (Schema::hasColumn('users', 'email_verified_at')) {
                 $builder->whereNotNull('email_verified_at');
@@ -872,7 +938,7 @@ class VoucherController extends Controller
                 if (method_exists(User::class, 'communityMemberships')) {
                     $builder->whereHas('communityMemberships', function ($q) use ($voucher) {
                         $q->where('community_id', $voucher->community_id);
-                        
+
                         // Cek kolom status jika ada
                         if (Schema::hasColumn('community_memberships', 'status')) {
                             $q->where('status', 'active');
@@ -881,7 +947,7 @@ class VoucherController extends Controller
                 } else {
                     Log::warning('Community memberships relation not found, targeting all users instead');
                 }
-                
+
                 $builder = $this->applyRegularUserFilter($builder);
             } else {
                 $builder = $this->applyRegularUserFilter($builder);
@@ -944,78 +1010,95 @@ class VoucherController extends Controller
     public function validateCode(Request $request)
     {
         $user = $request->user();
-        if (! $user) {
+        if (!$user) {
             return response()->json(['success' => false, 'message' => 'Unauthenticated'], 401);
         }
 
         $data = $request->validate([
-            'code'               => 'required|string',
+            'code'                 => 'required|string',
             'is_tenant_validation' => 'sometimes|boolean',
-            'validator_role'     => 'sometimes|in:tenant',
-            'item_id'            => 'sometimes|integer',
-            'item_owner_id'      => 'sometimes|integer',
-            'expected_type'      => 'sometimes|in:voucher',
-            'validation_purpose' => 'sometimes|string',
-            'qr_timestamp'       => 'sometimes',
-        ], [
-            'code.required' => 'Kode voucher wajib diisi.',
+            'validator_role'       => 'sometimes|in:tenant', // ← QR mode tenant
+            'item_id'              => 'sometimes|integer',
+            'item_owner_id'        => 'sometimes|integer',
+            'expected_type'        => 'sometimes|in:voucher',
+            'validation_purpose'   => 'sometimes|string',
+            'qr_timestamp'         => 'sometimes',
         ]);
 
         $code       = trim($data['code']);
         $itemIdHint = $data['item_id']      ?? null;
         $ownerHint  = $data['item_owner_id'] ?? null;
 
-        $item = \App\Models\VoucherItem::with(['voucher', 'voucher.community', 'user'])
-            ->where('code', $code)
-            ->first();
+        // 1) Cari item
+        $item = VoucherItem::with(['voucher', 'voucher.community', 'user'])
+            ->where('code', $code)->first();
 
-        if (! $item && $itemIdHint) {
-            $item = \App\Models\VoucherItem::with(['voucher', 'voucher.community', 'user'])->find($itemIdHint);
+        if (!$item && $itemIdHint) {
+            $item = VoucherItem::with(['voucher', 'voucher.community', 'user'])->find($itemIdHint);
         }
 
-        if (! $item) {
-            $voucher = \App\Models\Voucher::where('code', $code)->first();
+        if (!$item) {
+            $voucher = Voucher::where('code', $code)->first();
             if ($voucher && $ownerHint) {
-                $item = \App\Models\VoucherItem::with(['voucher', 'voucher.community', 'user'])
+                $item = VoucherItem::with(['voucher', 'voucher.community', 'user'])
                     ->where('voucher_id', $voucher->id)
                     ->where('user_id', $ownerHint)
-                    ->latest('id')
-                    ->first();
+                    ->latest('id')->first();
             }
         }
 
-        $inputCode  = trim((string) ($data['code'] ?? $code));
-        $actualCode = (string) $item->code;
-
-        if (!hash_equals($actualCode, $inputCode)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Kode unik tidak valid.'
-            ], 422);
+        if (!$item) {
+            return response()->json(['success' => false, 'message' => 'Voucher item tidak ditemukan'], 404);
         }
 
+        // verifikasi kode persis
+        if (!hash_equals((string)$item->code, (string)$code)) {
+            return response()->json(['success' => false, 'message' => 'Kode unik tidak valid.'], 422);
+        }
+
+        // cek kadaluarsa
         if (!empty($item->voucher?->valid_until) && now()->greaterThan($item->voucher->valid_until)) {
             return response()->json(['success' => false, 'message' => 'Voucher kedaluwarsa'], 422);
         }
 
-        \Illuminate\Support\Facades\DB::transaction(function () use ($item, $user, $code, $request) {
-            if (\Illuminate\Support\Facades\Schema::hasColumn('voucher_items', 'used_at')) {
+        $voucher = $item->voucher;
+        // ===== Tentukan validator =====
+        $tenantId = $this->resolveTenantUserIdByVoucher($voucher);
+        $validatorRole = $data['validator_role'] ?? null;
+
+        if ($validatorRole === 'tenant') {
+            // QR mode: wajib tenant pemilik
+            if (!$tenantId || $user->id !== $tenantId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'QR ini hanya dapat divalidasi oleh tenant pemilik voucher.'
+                ], 403);
+            }
+            $validatorId = $user->id; // tenant
+        } else {
+            // Kode unik via user: kreditkan ke tenant pemilik agar muncul di riwayat tenant
+            $validatorId = $tenantId ?: $user->id;
+        }
+
+        DB::transaction(function () use ($item, $validatorId, $code, $request) {
+            if (Schema::hasColumn('voucher_items', 'used_at')) {
                 $item->used_at = now();
             }
-            if (\Illuminate\Support\Facades\Schema::hasColumn('voucher_items', 'status')) {
+            if (Schema::hasColumn('voucher_items', 'status')) {
                 $item->status = 'used';
             }
             $item->save();
 
             try {
-                \App\Models\VoucherValidation::create([
+                VoucherValidation::create([
                     'voucher_id'   => $item->voucher_id,
-                    'user_id'      => $user->id,
+                    'user_id'      => $validatorId,              // ← penting: catat validator = tenant (atau user fallback)
                     'code'         => $code,
                     'validated_at' => now(),
                     'notes'        => $request->input('validation_purpose'),
                 ]);
-            } catch (\Throwable $e) {}
+            } catch (\Throwable $e) {
+            }
         });
 
         $item->refresh();
@@ -1036,20 +1119,49 @@ class VoucherController extends Controller
         Log::info('Fetching history for voucher ID: ' . $voucherId);
 
         try {
-            $voucher = Voucher::with(['validations.user'])->find($voucherId);
-
+            $voucher = Voucher::find($voucherId);
             if (!$voucher) {
                 return response()->json(['success' => false, 'message' => 'Voucher tidak ditemukan'], 404);
             }
 
-            $validations = $voucher->validations()
-                ->with(['user', 'voucher'])
-                ->orderBy('validated_at', 'desc')
+            $rows = VoucherValidation::query()
+                ->with(['voucher', 'user']) // user = validator (tenant)
+                ->leftJoin('voucher_items', 'voucher_items.code', '=', 'voucher_validations.code')
+                ->select('voucher_validations.*', 'voucher_items.user_id as owner_id')
+                ->where('voucher_validations.voucher_id', $voucherId)
+                ->orderBy('voucher_validations.validated_at', 'desc')
                 ->get();
 
-            return response()->json(['success' => true, 'data' => $validations]);
+            $ownerIds = $rows->pluck('owner_id')->filter()->unique()->values();
+            $owners = $ownerIds->isNotEmpty()
+                ? User::whereIn('id', $ownerIds)->get(['id', 'name'])->keyBy('id')
+                : collect();
+
+            $data = $rows->map(function ($r) use ($owners) {
+                $owner = null;
+                if ($r->owner_id && isset($owners[$r->owner_id])) {
+                    $owner = ['id' => $r->owner_id, 'name' => $owners[$r->owner_id]->name];
+                }
+                $voucher = $r->voucher;
+                if ($voucher) {
+                    $voucher->title = $voucher->title ?? $voucher->name ?? 'Voucher';
+                }
+
+                return [
+                    'id'           => $r->id,
+                    'code'         => $r->code,
+                    'validated_at' => $r->validated_at,
+                    'notes'        => $r->notes,
+                    'voucher'      => $voucher,
+                    'user'         => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null, // validator (tenant)
+                    'owner'        => $owner, // pemilik item (user)
+                    'itemType'     => 'voucher',
+                ];
+            });
+
+            return response()->json(['success' => true, 'data' => $data]);
         } catch (\Throwable $e) {
-            Log::error('Error in history method: ' . $e->getMessage());
+            Log::error('Error in history (voucher): ' . $e->getMessage());
             return response()->json(['success' => false, 'message' => 'Gagal mengambil riwayat validasi: ' . $e->getMessage()], 500);
         }
     }
@@ -1079,31 +1191,45 @@ class VoucherController extends Controller
     {
         try {
             $userId = $request->user()?->id ?? auth()->id();
-
             if (!$userId) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'User tidak terautentikasi'
-                ], 401);
+                return response()->json(['success' => false, 'message' => 'User tidak terautentikasi'], 401);
             }
 
-            $rows = \App\Models\VoucherValidation::with(['voucher', 'user'])
-                ->where('user_id', $userId)
-                ->orderBy('validated_at', 'desc')
+            $rows = VoucherValidation::query()
+                ->with(['voucher', 'user']) // 'user' = validator (tenant)
+                ->leftJoin('voucher_items', 'voucher_items.code', '=', 'voucher_validations.code')
+                ->select('voucher_validations.*', 'voucher_items.user_id as owner_id')
+                ->where(function ($q) use ($userId) {
+                    $q->where('voucher_items.user_id', $userId)       // user sbg OWNER (pemilik item)
+                        ->orWhere('voucher_validations.user_id', $userId); // user sbg VALIDATOR (tenant)
+                })
+                ->orderBy('voucher_validations.validated_at', 'desc')
                 ->get();
 
-            $data = $rows->map(function ($r) {
+            $ownerIds = $rows->pluck('owner_id')->filter()->unique()->values();
+            $owners = $ownerIds->isNotEmpty()
+                ? User::whereIn('id', $ownerIds)->get(['id', 'name'])->keyBy('id')
+                : collect();
+
+            $data = $rows->map(function ($r) use ($owners) {
                 $voucher = $r->voucher;
                 if ($voucher) {
                     $voucher->title = $voucher->title ?? $voucher->name ?? 'Voucher';
                 }
+
+                $owner = null;
+                if ($r->owner_id && isset($owners[$r->owner_id])) {
+                    $owner = ['id' => $r->owner_id, 'name' => $owners[$r->owner_id]->name];
+                }
+
                 return [
                     'id'           => $r->id,
                     'code'         => $r->code,
                     'validated_at' => $r->validated_at,
                     'notes'        => $r->notes,
                     'voucher'      => $voucher,
-                    'user'         => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null,
+                    'user'         => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null, // validator (tenant)
+                    'owner'        => $owner,
                     'itemType'     => 'voucher',
                 ];
             });
@@ -1111,10 +1237,7 @@ class VoucherController extends Controller
             return response()->json(['success' => true, 'data' => $data]);
         } catch (\Throwable $e) {
             Log::error("Error in userValidationHistory (voucher): " . $e->getMessage());
-            return response()->json([
-                'success' => false,
-                'message' => 'Gagal mengambil riwayat validasi: ' . $e->getMessage()
-            ], 500);
+            return response()->json(['success' => false, 'message' => 'Gagal mengambil riwayat validasi: ' . $e->getMessage()], 500);
         }
     }
 }

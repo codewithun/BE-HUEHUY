@@ -598,7 +598,6 @@ class VoucherController extends Controller
             'community_id'    => 'nullable|required_if:target_type,community|exists:communities,id',
             'owner_name'      => 'nullable|string|max:255',
             'owner_phone'     => 'nullable|string|max:32',
-            'owner_user_id'   => 'nullable|integer|exists:users,id', // <— TAMBAH
         ], [], [
             'target_user_id'  => 'user',
             'target_user_ids' => 'daftar user',
@@ -619,11 +618,13 @@ class VoucherController extends Controller
                 $owner = User::find($ownerUserId);
                 if ($owner) {
                     [$nm, $ph] = $this->extractUserNamePhone($owner);
-                    if (empty($data['owner_name']) && $nm)   $data['owner_name']  = $nm;
-                    if (empty($data['owner_phone']) && $ph)  $data['owner_phone'] = $ph;
+                    // PERBAIKAN: Selalu update nama dan phone dari user terpilih
+                    if ($nm) $data['owner_name'] = $nm;
+                    if ($ph) $data['owner_phone'] = $ph;
                 }
             }
-            unset($data['owner_user_id']); // bukan kolom
+            // HAPUS kolom owner_user_id karena tidak ada di database
+            unset($data['owner_user_id']);
 
             $explicitUserIds = $request->input('target_user_ids', []);
             if (($data['target_type'] ?? 'all') !== 'user') {
@@ -736,7 +737,6 @@ class VoucherController extends Controller
             'community_id'    => 'nullable|required_if:target_type,community|exists:communities,id',
             'owner_name'      => 'nullable|string|max:255',
             'owner_phone'     => 'nullable|string|max:32',
-            'owner_user_id'   => 'nullable|integer|exists:users,id', // <— TAMBAH
         ];
 
         if ($request->hasFile('image')) {
@@ -806,17 +806,27 @@ class VoucherController extends Controller
                 }
             }
 
-            // Map owner_user_id -> owner_name/owner_phone jika belum diisi
+            // Map owner_user_id -> owner_name/owner_phone jika belum diisi  
             $ownerUserId = $request->input('owner_user_id');
             if ($ownerUserId) {
                 $owner = User::find($ownerUserId);
                 if ($owner) {
                     [$nm, $ph] = $this->extractUserNamePhone($owner);
-                    if (empty($data['owner_name']) && $nm)   $data['owner_name']  = $nm;
-                    if (empty($data['owner_phone']) && $ph)  $data['owner_phone'] = $ph;
+                    // PERBAIKAN: Selalu update nama dan phone dari user terpilih
+                    if ($nm) $data['owner_name'] = $nm;
+                    if ($ph) $data['owner_phone'] = $ph;
+                    
+                    Log::info('✅ Manager tenant updated:', [
+                        'owner_user_id' => $ownerUserId,
+                        'owner_name' => $nm,
+                        'owner_phone' => $ph
+                    ]);
+                } else {
+                    Log::warning('⚠️ Manager tenant not found:', ['owner_user_id' => $ownerUserId]);
                 }
             }
-            unset($data['owner_user_id']); // bukan kolom
+            // HAPUS kolom owner_user_id karena tidak ada di database
+            unset($data['owner_user_id']);
 
             if ($data['validation_type'] === 'manual') {
                 $finalCode = $data['code'] ?? $model->code;

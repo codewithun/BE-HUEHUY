@@ -815,7 +815,7 @@ class VoucherController extends Controller
                     // PERBAIKAN: Selalu update nama dan phone dari user terpilih
                     if ($nm) $data['owner_name'] = $nm;
                     if ($ph) $data['owner_phone'] = $ph;
-                    
+
                     Log::info('✅ Manager tenant updated:', [
                         'owner_user_id' => $ownerUserId,
                         'owner_name' => $nm,
@@ -1038,6 +1038,44 @@ class VoucherController extends Controller
         $code       = trim($data['code']);
         $itemIdHint = $data['item_id']      ?? null;
         $ownerHint  = $data['item_owner_id'] ?? null;
+
+        // ==== CEK: Kode sudah pernah divalidasi? (lintas browser/perangkat) ====
+        $existing = VoucherValidation::with(['voucher'])
+            ->where('code', $code)
+            ->latest('validated_at')
+            ->first();
+
+        if ($existing) {
+            // Tenant yang dulu memvalidasi = user_id pada tabel voucher_validations
+            $validatedByTenantId = $existing->user_id; // pada desain kita: 'user_id' = validator (tenant)
+            $currentUserId       = $request->user()->id;
+            $existingVoucher     = $existing->voucher;
+            $existingTenantId    = $existingVoucher ? $this->resolveTenantUserIdByVoucher($existingVoucher) : null;
+
+            // QR mode tenant & tenant sekarang beda → 403
+            if (($data['validator_role'] ?? null) === 'tenant' && $validatedByTenantId && (int)$validatedByTenantId !== (int)$currentUserId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Kode ini sudah divalidasi oleh tenant lain.',
+                    'data'    => [
+                        'validated_by_tenant_id' => (int)$validatedByTenantId,
+                        'voucher_id'             => $existing->voucher_id,
+                        'validated_at'           => $existing->validated_at,
+                    ],
+                ], 403);
+            }
+
+            // Sudah divalidasi (oleh tenant sama atau user) → 409
+            return response()->json([
+                'success' => false,
+                'message' => 'Kode ini sudah pernah divalidasi.',
+                'data'    => [
+                    'validated_by_tenant_id' => (int)$validatedByTenantId,
+                    'voucher_id'             => $existing->voucher_id,
+                    'validated_at'           => $existing->validated_at,
+                ],
+            ], 409);
+        }
 
         // 1) Cari item
         $item = VoucherItem::with(['voucher', 'voucher.community', 'user'])

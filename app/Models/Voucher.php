@@ -35,6 +35,11 @@ class Voucher extends Model
 
         // Versi gambar
         'image_updated_at',
+
+        // Data pemilik (langsung di tabel vouchers)
+        'owner_name',
+        'owner_phone',
+        // 'owner_email', // aktifkan kalau kamu sudah bikin kolom ini di migration
     ];
 
     protected $casts = [
@@ -277,6 +282,53 @@ class Voucher extends Model
                 $this->attributes['image_updated_at'] = now();
             }
         }
+    }
+
+    // ================= Owner Mutators =================
+    public function setOwnerNameAttribute($value): void
+    {
+        $this->attributes['owner_name'] = is_string($value)
+            ? preg_replace('/\s+/u', ' ', trim($value))
+            : $value;
+    }
+
+    public function setOwnerPhoneAttribute($value): void
+    {
+        if ($value === null) {
+            $this->attributes['owner_phone'] = null;
+            return;
+        }
+        $s = preg_replace('/[^\d+]/', '', (string) $value); // keep digits & leading + 
+        // optional: pastikan leading +62 untuk nomor ID
+        if (preg_match('/^0\d+$/', $s)) {
+            $s = preg_replace('/^0/', '+62', $s);
+        }
+        $this->attributes['owner_phone'] = $s;
+    }
+
+    // public function setOwnerEmailAttribute($value): void
+    // {
+    //     $this->attributes['owner_email'] = is_string($value) ? trim(strtolower($value)) : $value;
+    // }
+
+    // ================= Owner Scopes =================
+    public function scopeOwnerLike($query, ?string $keyword)
+    {
+        if (!$keyword) return $query;
+        return $query->where(function ($q) use ($keyword) {
+            $q->where('owner_name', 'like', "%{$keyword}%")
+              ->orWhere('owner_phone', 'like', "%{$keyword}%");
+              // ->orWhere('owner_email', 'like', "%{$keyword}%"); // jika ada kolom email
+        });
+    }
+
+    // ================= Owner Accessor =================
+    public function getOwnerDisplayAttribute(): ?string
+    {
+        if (!$this->owner_name && !$this->owner_phone) return null;
+        $name = $this->owner_name ?: 'Pemilik';
+        $phone = $this->owner_phone ? " · {$this->owner_phone}" : '';
+        return $name . $phone;
     }
 
     // ================= Events =================

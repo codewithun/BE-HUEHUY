@@ -37,6 +37,46 @@ class VoucherController extends Controller
         return $code;
     }
 
+    // Helper ambil nilai pertama yang tidak kosong
+    private function pick(...$candidates)
+    {
+        foreach ($candidates as $v) {
+            if (isset($v) && trim((string)$v) !== '') return $v;
+        }
+        return null;
+    }
+
+    // Ambil nama & telepon dari berbagai kemungkinan kolom user
+    private function extractUserNamePhone(?User $user): array
+    {
+        if (!$user) return [null, null];
+
+        // Cek kolom yang benar-benar ada di tabel users
+        $name = null;
+        if (isset($user->name)) $name = $user->name;
+        else if (Schema::hasColumn('users', 'full_name') && isset($user->full_name)) $name = $user->full_name;
+        else if (Schema::hasColumn('users', 'username') && isset($user->username)) $name = $user->username;
+        else if (Schema::hasColumn('users', 'display_name') && isset($user->display_name)) $name = $user->display_name;
+        else if (isset($user->email)) $name = $user->email;
+
+        $phone = null;
+        if (isset($user->phone)) $phone = $user->phone;
+        else if (Schema::hasColumn('users', 'phone_number') && isset($user->phone_number)) $phone = $user->phone_number;
+        else if (Schema::hasColumn('users', 'mobile') && isset($user->mobile)) $phone = $user->mobile;
+        else if (Schema::hasColumn('users', 'telp') && isset($user->telp)) $phone = $user->telp;
+
+        // Normalisasi nomor Indonesia
+        if (is_string($phone)) {
+            $digits = preg_replace('/[^\d+]/', '', $phone);
+            if (preg_match('/^0\d+$/', $digits)) {
+                $digits = preg_replace('/^0/', '+62', $digits);
+            }
+            $phone = $digits;
+        }
+
+        return [$name, $phone];
+    }
+
     private function applyRegularUserFilter(\Illuminate\Database\Eloquent\Builder $builder): \Illuminate\Database\Eloquent\Builder
     {
         $deny = ['admin', 'superadmin', 'manager', 'tenant', 'tenant_manager', 'manager_tenant', 'staff', 'owner', 'operator', 'moderator'];
@@ -131,16 +171,89 @@ class VoucherController extends Controller
     // ================= Image Versioning Helper =================
     private function addImageVersioning($voucher)
     {
+        // Pakai accessor dari model agar konsisten
+        if (property_exists($voucher, 'image_url') || method_exists($voucher, 'getImageUrlAttribute')) {
+            if ($voucher->image_url_versioned ?? null) {
+                $voucher->setAttribute('image_url_versioned', $voucher->image_url_versioned);
+            }
+            if ($voucher->image_url ?? null) {
+                $voucher->setAttribute('image_url', $voucher->image_url);
+            }
+            return $voucher;
+        }
+
         if ($voucher->image) {
-            // Buat versioned URL dengan timestamp
             $version = $voucher->image_updated_at ?? $voucher->updated_at ?? now();
             $versionParam = '?k=' . strtotime($version);
-            
-            // Set attribut untuk frontend
-            $voucher->setAttribute('image_url_versioned', 'storage/' . $voucher->image . $versionParam);
-            $voucher->setAttribute('image_url', 'storage/' . $voucher->image);
+            $voucher->setAttribute('image_url_versioned', 'storage/' . ltrim($voucher->image, '/') . $versionParam);
+            $voucher->setAttribute('image_url', 'storage/' . ltrim($voucher->image, '/'));
         }
-        
+        return $voucher;
+    }
+
+    // PERBAIKAN method helper - gunakan kolom yang benar-benar ada
+    private function resolveOwnerUserId($voucher)
+    {
+        if (isset($voucher->owner_user_id) && $voucher->owner_user_id) {
+            return $voucher;
+        }
+
+        if (!($voucher->owner_name || $voucher->owner_phone)) {
+            return $voucher;
+        }
+
+        try {
+            $ownerQuery = User::query();
+            
+            // Hanya gunakan kolom yang pasti ada
+            if ($voucher->owner_name) {
+                $ownerQuery->where(function($q) use ($voucher) {
+                    $q->where('name', 'like', '%' . $voucher->owner_name . '%');
+                    
+                    // Cek kolom opsional hanya jika ada
+                    if (Schema::hasColumn('users', 'full_name')) {
+                        $q->orWhere('full_name', 'like', '%' . $voucher->owner_name . '%');
+                    }
+                    if (Schema::hasColumn('users', 'username')) {
+                        $q->orWhere('username', 'like', '%' . $voucher->owner_name . '%');
+                    }
+                    if (Schema::hasColumn('users', 'display_name')) {
+                        $q->orWhere('display_name', 'like', '%' . $voucher->owner_name . '%');
+                    }
+                });
+            }
+            
+            if ($voucher->owner_phone) {
+                $phone = preg_replace('/[^\d+]/', '', $voucher->owner_phone);
+                $ownerQuery->where(function($q) use ($phone) {
+                    $q->where('phone', 'like', '%' . $phone . '%');
+                    
+                    // Cek kolom opsional hanya jika ada
+                    if (Schema::hasColumn('users', 'phone_number')) {
+                        $q->orWhere('phone_number', 'like', '%' . $phone . '%');
+                    }
+                    if (Schema::hasColumn('users', 'mobile')) {
+                        $q->orWhere('mobile', 'like', '%' . $phone . '%');
+                    }
+                    if (Schema::hasColumn('users', 'telp')) {
+                        $q->orWhere('telp', 'like', '%' . $phone . '%');
+                    }
+                });
+            }
+            
+            $owner = $ownerQuery->first();
+            if ($owner) {
+                $voucher->setAttribute('owner_user_id', $owner->id);
+            }
+        } catch (\Throwable $e) {
+            // Log error tapi jangan break aplikasi
+            Log::warning('Error resolving owner_user_id: ' . $e->getMessage(), [
+                'voucher_id' => $voucher->id ?? 'unknown',
+                'owner_name' => $voucher->owner_name ?? null,
+                'owner_phone' => $voucher->owner_phone ?? null,
+            ]);
+        }
+
         return $voucher;
     }
 
@@ -158,7 +271,16 @@ class VoucherController extends Controller
                 $s = $request->get('search');
                 $q->where(function ($qq) use ($s) {
                     $qq->where('name', 'like', "%{$s}%")
-                        ->orWhere('code', 'like', "%{$s}%");
+                      ->orWhere('code', 'like', "%{$s}%")
+                      ->orWhere('owner_name', 'like', "%{$s}%")
+                      ->orWhere('owner_phone', 'like', "%{$s}%");
+                });
+            })
+            ->when($request->filled('owner_like'), function ($q) use ($request) {
+                $s = $request->get('owner_like');
+                $q->where(function ($qq) use ($s) {
+                    $qq->where('owner_name', 'like', "%{$s}%")
+                       ->orWhere('owner_phone', 'like', "%{$s}%");
                 });
             });
 
@@ -176,6 +298,8 @@ class VoucherController extends Controller
                     $query->where('target_type', $value);
                 } elseif ($column === 'target_user_id') {
                     $query->where('target_user_id', $value);
+                } elseif (in_array($column, ['owner_name', 'owner_phone'])) {
+                    $query->where($column, 'like', '%' . $value . '%');
                 } else {
                     $query->where($column, 'like', '%' . $value . '%');
                 }
@@ -186,12 +310,14 @@ class VoucherController extends Controller
             $items = $query->orderBy($sortby, $sortDirection)->get();
             $items = $this->hydrateAudience($items);
             
-            // TAMBAH: ensure image versioning fields ada di response
+            // TAMBAH: Resolve owner_user_id untuk setiap voucher
             $items = $items->map(function ($item) {
-                return $this->addImageVersioning($item);
+                $item = $this->addImageVersioning($item);
+                $item = $this->resolveOwnerUserId($item);
+                return $item;
             });
 
-            return response([
+            return response()->json([
                 'message'   => 'success',
                 'data'      => $items->map->toArray()->values(),
                 'total_row' => $items->count(),
@@ -210,9 +336,11 @@ class VoucherController extends Controller
         $items = collect($page->items());
         $items = $this->hydrateAudience($items);
         
-        // TAMBAH: ensure image versioning fields ada di response
+        // TAMBAH: Resolve owner_user_id untuk setiap voucher
         $items = $items->map(function ($item) {
-            return $this->addImageVersioning($item);
+            $item = $this->addImageVersioning($item);
+            $item = $this->resolveOwnerUserId($item);
+            return $item;
         });
 
         return response([
@@ -272,7 +400,75 @@ class VoucherController extends Controller
             return response(['messaege' => 'Data not found'], 404)->header('Cache-Control', 'no-store');
         }
 
+        // PERBAIKAN: Gunakan method yang sudah aman
+        $model = $this->resolveOwnerUserId($model);
+
         return response(['message' => 'Success', 'data' => $model])->header('Cache-Control', 'no-store');
+    }
+
+    // TAMBAH: Method showPublic yang hilang
+    public function showPublic(string $id)
+    {
+        try {
+            $model = Voucher::with(['community'])
+                ->where('id', $id)
+                ->first();
+
+            if (!$model) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Voucher tidak ditemukan'
+                ], 404);
+            }
+
+            // PERBAIKAN: Pastikan image versioning dan owner info tersedia
+            $model = $this->addImageVersioning($model);
+            $model = $this->resolveOwnerUserId($model);
+
+            // Data publik yang aman dengan image yang lengkap
+            $publicData = [
+                'id' => $model->id,
+                'name' => $model->name,
+                'description' => $model->description,
+                
+                // PERBAIKAN: Sertakan semua field image
+                'image' => $model->image,
+                'image_url' => $model->image_url,
+                'image_url_versioned' => $model->image_url_versioned,
+                
+                'type' => $model->type,
+                'valid_until' => $model->valid_until,
+                'is_valid' => $model->is_valid ?? true,
+                'status' => $model->status ?? 'active',
+                'target_type' => $model->target_type,
+                'stock' => $model->stock ?? 0,
+                
+                // TAMBAH: Info manager tenant untuk kontak
+                'owner_name' => $model->owner_name,
+                'owner_phone' => $model->owner_phone,
+                'tenant_location' => $model->tenant_location,
+                
+                // Community info
+                'community' => $model->community ? [
+                    'id' => $model->community->id,
+                    'name' => $model->community->name,
+                    'description' => $model->community->description ?? null,
+                ] : null,
+            ];
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Success',
+                'data' => $publicData
+            ])->header('Cache-Control', 'no-store');
+
+        } catch (\Throwable $e) {
+            Log::error('Error in showPublic: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengambil data voucher'
+            ], 500);
+        }
     }
 
     /// ================= Store =================
@@ -333,6 +529,9 @@ class VoucherController extends Controller
             'target_user_ids' => ['exclude_unless:target_type,user', 'required_if:target_type,user', 'array', 'min:1'],
             'target_user_ids.*' => 'integer|exists:users,id',
             'community_id'    => 'nullable|required_if:target_type,community|exists:communities,id',
+            'owner_name'      => 'nullable|string|max:255',
+            'owner_phone'     => 'nullable|string|max:32',
+            'owner_user_id'   => 'nullable|integer|exists:users,id', // <— TAMBAH
         ], [], [
             'target_user_id'  => 'user',
             'target_user_ids' => 'daftar user',
@@ -346,6 +545,18 @@ class VoucherController extends Controller
             DB::beginTransaction();
 
             $data = $validator->validated();
+
+            // Map owner_user_id -> owner_name/owner_phone jika belum diisi
+            $ownerUserId = $request->input('owner_user_id');
+            if ($ownerUserId) {
+                $owner = User::find($ownerUserId);
+                if ($owner) {
+                    [$nm, $ph] = $this->extractUserNamePhone($owner);
+                    if (empty($data['owner_name']) && $nm)   $data['owner_name']  = $nm;
+                    if (empty($data['owner_phone']) && $ph)  $data['owner_phone'] = $ph;
+                }
+            }
+            unset($data['owner_user_id']); // bukan kolom
 
             $explicitUserIds = $request->input('target_user_ids', []);
             if (($data['target_type'] ?? 'all') !== 'user') {
@@ -456,6 +667,9 @@ class VoucherController extends Controller
             'target_user_ids' => ['exclude_unless:target_type,user', 'required_if:target_type,user', 'array', 'min:1'],
             'target_user_ids.*' => 'integer|exists:users,id',
             'community_id'    => 'nullable|required_if:target_type,community|exists:communities,id',
+            'owner_name'      => 'nullable|string|max:255',
+            'owner_phone'     => 'nullable|string|max:32',
+            'owner_user_id'   => 'nullable|integer|exists:users,id', // <— TAMBAH
         ];
 
         if ($request->hasFile('image')) {
@@ -524,6 +738,18 @@ class VoucherController extends Controller
                     Log::info('🔄 Force cache bust for non-image changes');
                 }
             }
+
+            // Map owner_user_id -> owner_name/owner_phone jika belum diisi
+            $ownerUserId = $request->input('owner_user_id');
+            if ($ownerUserId) {
+                $owner = User::find($ownerUserId);
+                if ($owner) {
+                    [$nm, $ph] = $this->extractUserNamePhone($owner);
+                    if (empty($data['owner_name']) && $nm)   $data['owner_name']  = $nm;
+                    if (empty($data['owner_phone']) && $ph)  $data['owner_phone'] = $ph;
+                }
+            }
+            unset($data['owner_user_id']); // bukan kolom
 
             if ($data['validation_type'] === 'manual') {
                 $finalCode = $data['code'] ?? $model->code;
@@ -602,7 +828,24 @@ class VoucherController extends Controller
             // Gunakan versi yang sudah dibust
             $imageUrl = $voucher->image_url_versioned ?: $voucher->image_url;
 
-            $builder = User::query()->whereNotNull('email_verified_at');
+            $builder = User::query();
+            
+            // PERBAIKAN: Cek kolom email_verified_at sebelum menggunakannya
+            if (Schema::hasColumn('users', 'email_verified_at')) {
+                $builder->whereNotNull('email_verified_at');
+            } else {
+                // Fallback: cek kolom alternatif atau skip verification check
+                if (Schema::hasColumn('users', 'email_verified')) {
+                    $builder->where('email_verified', true);
+                } else if (Schema::hasColumn('users', 'is_verified')) {
+                    $builder->where('is_verified', true);
+                } else if (Schema::hasColumn('users', 'status')) {
+                    $builder->where('status', 'active');
+                } else {
+                    // Skip verification check jika tidak ada kolom yang cocok
+                    Log::info('No email verification column found, skipping verification check');
+                }
+            }
 
             if ($voucher->target_type === 'user') {
                 if (!empty($explicitUserIds)) {
@@ -625,9 +868,20 @@ class VoucherController extends Controller
 
                 $builder = $this->applyRegularUserFilter($builder);
             } elseif ($voucher->target_type === 'community' && $voucher->community_id) {
-                $builder->whereHas('communityMemberships', function ($q) use ($voucher) {
-                    $q->where('community_id', $voucher->community_id)->where('status', 'active');
-                });
+                // PERBAIKAN: Cek apakah ada relasi community membership
+                if (method_exists(User::class, 'communityMemberships')) {
+                    $builder->whereHas('communityMemberships', function ($q) use ($voucher) {
+                        $q->where('community_id', $voucher->community_id);
+                        
+                        // Cek kolom status jika ada
+                        if (Schema::hasColumn('community_memberships', 'status')) {
+                            $q->where('status', 'active');
+                        }
+                    });
+                } else {
+                    Log::warning('Community memberships relation not found, targeting all users instead');
+                }
+                
                 $builder = $this->applyRegularUserFilter($builder);
             } else {
                 $builder = $this->applyRegularUserFilter($builder);
@@ -645,7 +899,7 @@ class VoucherController extends Controller
                         'image_url'   => $imageUrl,
                         'target_type' => 'voucher',
                         'target_id'   => $voucher->id,
-                        'action_url'  => "/vouchers/{$voucher->id}", // <- FIX: interpolasi benar
+                        'action_url'  => "/vouchers/{$voucher->id}",
                         'meta'        => json_encode([
                             'voucher_code' => $voucher->code,
                             'valid_until'  => $voucher->valid_until,
@@ -658,10 +912,14 @@ class VoucherController extends Controller
                 }
 
                 if (!empty($batch)) {
-                    foreach (array_chunk($batch, 100) as $chunk) {
-                        \App\Models\Notification::insert($chunk);
+                    try {
+                        foreach (array_chunk($batch, 100) as $chunk) {
+                            \App\Models\Notification::insert($chunk);
+                        }
+                        $sent += count($batch);
+                    } catch (\Throwable $e) {
+                        Log::error('Failed to insert notification batch: ' . $e->getMessage());
                     }
-                    $sent += count($batch);
                 }
             });
 
@@ -769,7 +1027,7 @@ class VoucherController extends Controller
                 'voucher_item_id' => $item->id,
                 'voucher_item'    => $item,
                 'voucher'         => $item->voucher,
-            ],
+            ]
         ], 200);
     }
 

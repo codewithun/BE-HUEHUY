@@ -769,6 +769,9 @@ class VoucherController extends Controller
             $model = Voucher::findOrFail($id);
             $data  = $validator->validated();
 
+            // Initialize explicitUserIds from the request if available
+            $explicitUserIds = $request->input('target_user_ids', []);
+
             // Log before processing
             Log::info('📝 Processing image field:', [
                 'has_data_image' => isset($data['image']),
@@ -849,6 +852,9 @@ class VoucherController extends Controller
             $model->fill($data)->save();
             $model->refresh();
 
+            // TAMBAH: Kirim notifikasi hanya ke user baru (yang belum pernah dapat notifikasi voucher ini)
+            $notificationCount = $this->sendVoucherNotificationsToNewUsers($model, $explicitUserIds);
+
             DB::commit();
 
             // PERBAIKAN: Pastikan cache busting response
@@ -856,15 +862,17 @@ class VoucherController extends Controller
 
             Log::info('✅ Voucher updated successfully:', [
                 'id' => $model->id,
-                'image_path' => $model->image,
-                'image_updated_at' => $model->image_updated_at,
+                'new_notifications_sent' => $notificationCount,
             ]);
 
             return response()->json([
                 'success' => true,
-                'message' => 'Voucher berhasil diupdate',
+                'message' => $notificationCount > 0 
+                    ? "Voucher berhasil diupdate dan {$notificationCount} notifikasi terkirim ke pengguna baru"
+                    : "Voucher berhasil diupdate",
                 'data' => $model
             ])->header('Cache-Control', 'no-store, no-cache, must-revalidate');
+
         } catch (\Throwable $e) {
             DB::rollBack();
             Log::error('❌ Error updating voucher', [
@@ -980,7 +988,8 @@ class VoucherController extends Controller
                             'voucher_code' => $voucher->code,
                             'valid_until'  => $voucher->valid_until,
                             'community_id' => $voucher->community_id,
-                            'target_type'  => $voucher->target_type
+                            'target_type'  => $voucher->target_type,
+                            'is_new_voucher' => true
                         ]),
                         'created_at'  => $now,
                         'updated_at'  => $now,
@@ -990,7 +999,7 @@ class VoucherController extends Controller
                 if (!empty($batch)) {
                     try {
                         foreach (array_chunk($batch, 100) as $chunk) {
-                            \App\Models\Notification::insert($chunk);
+                            Notification::insert($chunk);
                         }
                         $sent += count($batch);
                     } catch (\Throwable $e) {
@@ -999,7 +1008,7 @@ class VoucherController extends Controller
                 }
             });
 
-            Log::info("Voucher notifications sent", [
+            Log::info("Voucher notifications sent (CREATE)", [
                 'voucher_id' => $voucher->id,
                 'voucher_name' => $voucher->name,
                 'target_type' => $voucher->target_type,
@@ -1009,6 +1018,165 @@ class VoucherController extends Controller
             return $sent;
         } catch (\Throwable $e) {
             Log::error('Error sending voucher notifications: ' . $e->getMessage(), [
+                'voucher_id' => $voucher->id,
+                'error' => $e->getMessage()
+            ]);
+            return 0;
+        }
+    }
+
+    // TAMBAH method baru khusus untuk update (hanya kirim ke user baru)
+    private function sendVoucherNotificationsToNewUsers(Voucher $voucher, array $explicitUserIds = [])
+    {
+        try {
+            $now = now();
+
+            // Gunakan versi yang sudah dibust
+            $imageUrl = $voucher->image_url_versioned ?: $voucher->image_url;
+
+            // STEP 1: Ambil user yang sudah pernah dapat notifikasi voucher ini
+            $existingRecipients = Notification::where('type', 'voucher')
+                ->where('target_id', $voucher->id)
+                ->pluck('user_id')
+                ->unique()
+                ->toArray();
+
+            Log::info('📨 Existing notification recipients:', [
+                'voucher_id' => $voucher->id,
+                'existing_count' => count($existingRecipients),
+                'existing_users' => $existingRecipients
+            ]);
+
+            // STEP 2: Tentukan target user berdasarkan voucher type
+            $targetUserIds = [];
+
+            if ($voucher->target_type === 'user') {
+                if (!empty($explicitUserIds)) {
+                    $safeIds = $this->filterRegularUserIds($explicitUserIds);
+                    $targetUserIds = $safeIds;
+                } elseif ($voucher->target_user_id) {
+                    $safeIds = $this->filterRegularUserIds([$voucher->target_user_id]);
+                    $targetUserIds = $safeIds;
+                }
+            } elseif ($voucher->target_type === 'community' && $voucher->community_id) {
+                // Ambil user dari community
+                $builder = User::query();
+                
+                // PERBAIKAN: Cek kolom email_verified_at sebelum menggunakannya
+                if (Schema::hasColumn('users', 'email_verified_at')) {
+                    $builder->whereNotNull('email_verified_at');
+                } else {
+                    // Fallback verification check
+                    if (Schema::hasColumn('users', 'email_verified')) {
+                        $builder->where('email_verified', true);
+                    } else if (Schema::hasColumn('users', 'is_verified')) {
+                        $builder->where('is_verified', true);
+                    } else if (Schema::hasColumn('users', 'status')) {
+                        $builder->where('status', 'active');
+                    }
+                }
+
+                // PERBAIKAN: Cek apakah ada relasi community membership
+                if (method_exists(User::class, 'communityMemberships')) {
+                    $builder->whereHas('communityMemberships', function ($q) use ($voucher) {
+                        $q->where('community_id', $voucher->community_id);
+                        if (Schema::hasColumn('community_memberships', 'status')) {
+                            $q->where('status', 'active');
+                        }
+                    });
+                }
+
+                $builder = $this->applyRegularUserFilter($builder);
+                $targetUserIds = $builder->pluck('id')->toArray();
+            } else {
+                // target_type = 'all' - ambil semua regular users
+                $builder = User::query();
+                
+                if (Schema::hasColumn('users', 'email_verified_at')) {
+                    $builder->whereNotNull('email_verified_at');
+                } else {
+                    if (Schema::hasColumn('users', 'email_verified')) {
+                        $builder->where('email_verified', true);
+                    } else if (Schema::hasColumn('users', 'is_verified')) {
+                        $builder->where('is_verified', true);
+                    } else if (Schema::hasColumn('users', 'status')) {
+                        $builder->where('status', 'active');
+                    }
+                }
+
+                $builder = $this->applyRegularUserFilter($builder);
+                $targetUserIds = $builder->pluck('id')->toArray();
+            }
+
+            // STEP 3: Filter hanya user baru (yang belum pernah dapat notifikasi)
+            $newUserIds = array_diff($targetUserIds, $existingRecipients);
+
+            if (empty($newUserIds)) {
+                Log::info('📨 No new users to notify for voucher update', [
+                    'voucher_id' => $voucher->id,
+                    'total_targets' => count($targetUserIds),
+                    'existing_recipients' => count($existingRecipients)
+                ]);
+                return 0;
+            }
+
+            Log::info('📨 Sending notifications to NEW users only:', [
+                'voucher_id' => $voucher->id,
+                'total_targets' => count($targetUserIds),
+                'existing_recipients' => count($existingRecipients),
+                'new_users' => count($newUserIds),
+                'new_user_ids' => array_values($newUserIds)
+            ]);
+
+            // STEP 4: Kirim notifikasi ke user baru
+            $sent = 0;
+            $newUsers = User::whereIn('id', $newUserIds)->select('id', 'name')->get();
+
+            $batch = [];
+            foreach ($newUsers as $user) {
+                $batch[] = [
+                    'user_id'     => $user->id,
+                    'type'        => 'voucher',
+                    'title'       => 'Voucher Baru Tersedia!',
+                    'message'     => "Voucher '{$voucher->name}' tersedia untuk Anda.",
+                    'image_url'   => $imageUrl,
+                    'target_type' => 'voucher',
+                    'target_id'   => $voucher->id,
+                    'action_url'  => "/vouchers/{$voucher->id}",
+                    'meta'        => json_encode([
+                        'voucher_code' => $voucher->code,
+                        'valid_until'  => $voucher->valid_until,
+                        'community_id' => $voucher->community_id,
+                        'target_type'  => $voucher->target_type,
+                        'is_new_recipient' => true
+                    ]),
+                    'created_at'  => $now,
+                    'updated_at'  => $now,
+                ];
+            }
+
+            if (!empty($batch)) {
+                try {
+                    foreach (array_chunk($batch, 100) as $chunk) {
+                        Notification::insert($chunk);
+                    }
+                    $sent = count($batch);
+                } catch (\Throwable $e) {
+                    Log::error('Failed to insert notification batch: ' . $e->getMessage());
+                }
+            }
+
+            Log::info("Voucher update notifications sent (NEW users only)", [
+                'voucher_id' => $voucher->id,
+                'voucher_name' => $voucher->name,
+                'target_type' => $voucher->target_type,
+                'new_notifications_sent' => $sent,
+                'skipped_existing' => count($existingRecipients)
+            ]);
+
+            return $sent;
+        } catch (\Throwable $e) {
+            Log::error('Error sending voucher notifications to new users: ' . $e->getMessage(), [
                 'voucher_id' => $voucher->id,
                 'error' => $e->getMessage()
             ]);

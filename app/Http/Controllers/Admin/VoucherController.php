@@ -1258,6 +1258,42 @@ class VoucherController extends Controller
             $validatorId = $tenantId ?: $user->id;
         }
 
+        // ===== Item-level already used check (IDEMPOTENT) =====
+        if (
+            (!empty($item->used_at)) ||
+            (Schema::hasColumn('voucher_items', 'status') && $item->status === 'used')
+        ) {
+            $last = \App\Models\VoucherValidation::where('code', $item->code)
+                ->orderByDesc('validated_at')
+                ->first();
+
+            // Jika strict tenant-mode & tenant beda → tetap 403
+            if (($data['validator_role'] ?? null) === 'tenant'
+                && $last && (int)$last->user_id !== (int)$user->id
+            ) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Kode ini sudah divalidasi oleh tenant lain.',
+                    'data'    => [
+                        'validated_by_tenant_id' => (int)$last->user_id,
+                        'voucher_id'             => $last->voucher_id ?? $item->voucher_id,
+                        'validated_at'           => $last->validated_at ?? $item->used_at,
+                    ],
+                ], 403);
+            }
+
+            // Idempotent: 200 OK
+            return response()->json([
+                'success' => true,
+                'message' => 'Voucher sudah divalidasi sebelumnya',
+                'data'    => [
+                    'voucher_item_id' => $item->id,
+                    'voucher_item'    => $item,
+                    'voucher'         => $item->voucher,
+                ],
+            ], 200);
+        }
+
         // ===== Cek existing berbasis KODE ITEM (unik per user) =====
         $finalCode = (string) $item->code;
 
@@ -1270,6 +1306,7 @@ class VoucherController extends Controller
             $validatedByTenantId = (int) $existing->user_id;
             $currentUserId       = (int) $request->user()->id;
 
+            // Tenant strict-mode: kalau QR divalidasi tenant lain → 403
             if (($data['validator_role'] ?? null) === 'tenant'
                 && $validatedByTenantId !== $currentUserId
             ) {
@@ -1284,15 +1321,16 @@ class VoucherController extends Controller
                 ], 403);
             }
 
+            // Idempotent: 200 OK
             return response()->json([
-                'success' => false,
-                'message' => 'Kode ini sudah pernah divalidasi.',
+                'success' => true,
+                'message' => 'Voucher sudah divalidasi sebelumnya',
                 'data'    => [
-                    'validated_by_tenant_id' => $validatedByTenantId,
-                    'voucher_id'             => $existing->voucher_id,
-                    'validated_at'           => $existing->validated_at,
+                    'voucher_item_id' => $item->id ?? null,
+                    'voucher_item'    => $item ?? \App\Models\VoucherItem::where('code', $finalCode)->first(),
+                    'voucher'         => ($item?->voucher) ?? ($existing->voucher ?? null),
                 ],
-            ], 409);
+            ], 200);
         }
 
         DB::transaction(function () use ($item, $validatorId, $code, $request) {

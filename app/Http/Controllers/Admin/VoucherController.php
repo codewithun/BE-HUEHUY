@@ -18,6 +18,7 @@ use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Collection;
+use Illuminate\Database\QueryException;
 
 class VoucherController extends Controller
 {
@@ -1333,38 +1334,98 @@ class VoucherController extends Controller
             ], 200);
         }
 
-        DB::transaction(function () use ($item, $validatorId, $code, $request) {
-            if (Schema::hasColumn('voucher_items', 'used_at')) {
-                $item->used_at = now();
-            }
-            if (Schema::hasColumn('voucher_items', 'status')) {
-                $item->status = 'used';
-            }
-            $item->save();
+        DB::beginTransaction();
+        try {
+            // 🔒 Ambil ulang item dengan lock untuk hindari balapan
+            $locked = VoucherItem::with(['voucher'])
+                ->where('id', $item->id)
+                ->lockForUpdate()
+                ->first();
 
+            if (!$locked) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'Voucher item tidak ditemukan'], 404);
+            }
+
+            // Cek ulang setelah lock (idempotent)
+            if (!empty($locked->used_at) || (Schema::hasColumn('voucher_items', 'status') && $locked->status === 'used')) {
+                DB::commit();
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Voucher sudah divalidasi sebelumnya',
+                    'data'    => [
+                        'voucher_item_id' => $locked->id,
+                        'voucher_item'    => $locked,
+                        'voucher'         => $locked->voucher,
+                    ],
+                ], 200);
+            }
+
+            // ✅ Update atomik: hanya update jika belum dipakai
+            $updates = ['used_at' => now()];
+            if (Schema::hasColumn('voucher_items', 'status')) $updates['status'] = 'used';
+
+            $affected = VoucherItem::where('id', $locked->id)
+                ->whereNull('used_at')
+                ->update($updates);
+
+            // Kalau 0 baris berubah → sudah dipakai oleh proses lain → idempotent 200
+            if ($affected === 0) {
+                DB::commit();
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Voucher sudah divalidasi sebelumnya',
+                    'data'    => [
+                        'voucher_item_id' => $locked->id,
+                        'voucher_item'    => $locked->fresh(),
+                        'voucher'         => $locked->voucher,
+                    ],
+                ], 200);
+            }
+
+            // 🧾 Catat riwayat. Gunakan upsert/idempotent write
+            // Disarankan ada unique index di voucher_validations(code) kalau 1 code = 1 validasi.
             try {
-                VoucherValidation::create([
-                    'voucher_id'   => $item->voucher_id,
-                    'user_id'      => $validatorId,              // ← penting: catat validator = tenant (atau user fallback)
-                    'code'         => $item->code,
-                    'validated_at' => now(),
-                    'notes'        => null,
-                ]);
-            } catch (\Throwable $e) {
+                VoucherValidation::updateOrCreate(
+                    ['code' => $locked->code],
+                    [
+                        'voucher_id'   => $locked->voucher_id,
+                        'user_id'      => $validatorId,
+                        'validated_at' => now(),
+                        'notes'        => null,
+                    ]
+                );
+            } catch (QueryException $e) {
+                // Jika racing dan kena duplicate key → tetap treated as idempotent
+                DB::commit();
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Voucher sudah divalidasi sebelumnya',
+                    'data'    => [
+                        'voucher_item_id' => $locked->id,
+                        'voucher_item'    => $locked->fresh(),
+                        'voucher'         => $locked->voucher,
+                    ],
+                ], 200);
             }
-        });
 
-        $item->refresh();
+            DB::commit();
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Validasi berhasil',
-            'data'    => [
-                'voucher_item_id' => $item->id,
-                'voucher_item'    => $item,
-                'voucher'         => $item->voucher,
-            ]
-        ], 200);
+            $locked->refresh();
+            return response()->json([
+                'success' => true,
+                'message' => 'Validasi berhasil',
+                'data'    => [
+                    'voucher_item_id' => $locked->id,
+                    'voucher_item'    => $locked,
+                    'voucher'         => $locked->voucher,
+                ]
+            ], 200);
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            Log::error('validateCode txn error: ' . $e->getMessage(), ['code' => $item->code]);
+            return response()->json(['success' => false, 'message' => 'Gagal memproses validasi'], 500);
+        }
     }
 
     public function history($voucherId)

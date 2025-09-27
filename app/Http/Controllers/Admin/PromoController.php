@@ -581,12 +581,16 @@ class PromoController extends Controller
             'promo_type'      => 'sometimes|required|string|in:offline,online',
             'validation_type' => 'nullable|string|in:auto,manual',
             'location'        => 'nullable|string',
-            'owner_name'      => 'sometimes|required|string|max:255',
-            'owner_contact'   => 'sometimes|required|string|max:255',
-            'community_id'    => 'sometimes|required|exists:communities,id',
+            'owner_name'      => 'sometimes|string|max:255',
+            'owner_contact'   => 'sometimes|string|max:255',
+            'community_id'    => 'sometimes|nullable|exists:communities,id',
             'code'            => 'nullable|string|unique:promos,code,' . $id . '|required_if:validation_type,manual',
-            'image'           => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:10240',
+            'image'           => 'sometimes|file|image|mimes:jpeg,png,jpg,gif,svg,webp|max:10240',
         ];
+
+        if (!$request->hasFile('image')) {
+            $request->request->remove('image');
+        }
 
         $validator = Validator::make($request->all(), $validationRules, [
             'validation_type.in' => 'Tipe validasi harus auto atau manual.',

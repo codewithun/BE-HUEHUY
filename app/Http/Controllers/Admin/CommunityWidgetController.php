@@ -11,11 +11,14 @@ use Illuminate\Support\Facades\Validator;
 
 class CommunityWidgetController extends Controller
 {
-    // List all categories for a community, include promos
+    // List all categories for a community, include promos (URUTKAN berdasarkan attached_at)
     public function index($communityId)
     {
         $categories = CommunityCategory::where('community_id', $communityId)
-            ->with(['promos'])
+            ->with(['promos' => function ($q) {
+                $q->orderByDesc('attached_at')
+                  ->orderByDesc('id'); // fallback jika attached_at sama
+            }])
             ->get();
 
         return response()->json([
@@ -80,19 +83,20 @@ class CommunityWidgetController extends Controller
             $attachedPromos = [];
             $createdPromos = [];
 
-            // Attach existing promos
+            // ATTACH existing promos → SET attached_at = now()
             $attachPromoIds = $request->input('attach_promo_ids', []);
             if (!empty($attachPromoIds)) {
                 $promosToAttach = Promo::whereIn('id', $attachPromoIds)->get();
                 foreach ($promosToAttach as $p) {
                     $p->community_id = $communityId;
                     $p->category_id = $category->id;
+                    $p->attached_at = now(); // ← KUNCI: Set waktu attach
                     $p->save();
                     $attachedPromos[] = $p;
                 }
             }
 
-            // Create new promos if provided
+            // CREATE new promos → SET attached_at = now()
             $promos = $request->input('promos', []);
             if (!empty($promos) && is_array($promos)) {
                 foreach ($promos as $p) {
@@ -112,6 +116,7 @@ class CommunityWidgetController extends Controller
                         'owner_name' => $p['owner_name'] ?? null,
                         'owner_contact' => $p['owner_contact'] ?? null,
                         'image' => $p['image'] ?? null,
+                        'attached_at' => now(), // ← KUNCI: Set waktu attach untuk promo baru
                     ];
                     $createdPromos[] = Promo::create($promoData);
                 }
@@ -130,6 +135,10 @@ class CommunityWidgetController extends Controller
                     foreach ($vouchersToAttach as $v) {
                         if (isset($v->community_id)) $v->community_id = $communityId;
                         if (isset($v->category_id)) $v->category_id = $category->id;
+                        // TAMBAH: Set attached_at untuk voucher jika kolom ada
+                        if (method_exists($v, 'getAttribute') && $v->getConnection()->getSchemaBuilder()->hasColumn($v->getTable(), 'attached_at')) {
+                            $v->attached_at = now();
+                        }
                         $v->save();
                         $attachedVouchers[] = $v;
                     }
@@ -142,6 +151,13 @@ class CommunityWidgetController extends Controller
                             'community_id' => $communityId,
                             'category_id' => $category->id,
                         ]);
+                        
+                        // TAMBAH: Set attached_at untuk voucher baru jika kolom ada
+                        $tempVoucher = new $voucherClass();
+                        if ($tempVoucher->getConnection()->getSchemaBuilder()->hasColumn($tempVoucher->getTable(), 'attached_at')) {
+                            $voucherData['attached_at'] = now();
+                        }
+                        
                         $createdVouchers[] = $voucherClass::create($voucherData);
                     }
                 }
@@ -188,6 +204,7 @@ class CommunityWidgetController extends Controller
             }
             $promo->community_id = $communityId;
             $promo->category_id = $categoryId;
+            $promo->attached_at = now(); // ← KUNCI: Set waktu attach
             $promo->save();
 
             return response()->json(['success' => true, 'data' => $promo]);
@@ -204,15 +221,27 @@ class CommunityWidgetController extends Controller
         }
         if (isset($voucher->community_id)) $voucher->community_id = $communityId;
         if (isset($voucher->category_id)) $voucher->category_id = $categoryId;
+        
+        // TAMBAH: Set attached_at untuk voucher jika kolom ada
+        if (method_exists($voucher, 'getAttribute') && $voucher->getConnection()->getSchemaBuilder()->hasColumn($voucher->getTable(), 'attached_at')) {
+            $voucher->attached_at = now();
+        }
+        
         $voucher->save();
 
         return response()->json(['success' => true, 'data' => $voucher]);
     }
 
-    // Show a single category with promos
+    // Show a single category with promos (URUTKAN berdasarkan attached_at)
     public function showCategory($communityId, $id)
     {
-        $category = CommunityCategory::where('community_id', $communityId)->with('promos')->findOrFail($id);
+        $category = CommunityCategory::where('community_id', $communityId)
+            ->with(['promos' => function ($q) {
+                $q->orderByDesc('attached_at')
+                  ->orderByDesc('id'); // fallback jika attached_at sama
+            }])
+            ->findOrFail($id);
+            
         return response()->json(['success' => true, 'data' => $category]);
     }
 

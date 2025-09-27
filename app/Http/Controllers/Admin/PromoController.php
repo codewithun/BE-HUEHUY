@@ -705,18 +705,34 @@ class PromoController extends Controller
         }
 
         try {
+            DB::beginTransaction();
+
+            // Hapus semua promo items terkait
+            PromoItem::where('promo_id', $id)->delete();
+
+            // Hapus semua riwayat validasi promo terkait
+            PromoValidation::where('promo_id', $id)->delete();
+
+            // Hapus file gambar jika ada
             if (!empty($promo->image)) {
                 Storage::disk('public')->delete($promo->image);
             }
+
+            // Hapus promo
             $promo->delete();
+
+            DB::commit();
+
             return response()->json([
                 'success' => true,
-                'message' => 'Promo berhasil dihapus'
+                'message' => 'Promo beserta data terkait berhasil dihapus'
             ]);
         } catch (\Exception $e) {
+            DB::rollback();
+            Log::error('Error deleting promo with cascade: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Gagal menghapus promo'
+                'message' => 'Gagal menghapus promo: ' . $e->getMessage()
             ], 500);
         }
     }

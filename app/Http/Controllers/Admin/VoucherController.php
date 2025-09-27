@@ -891,15 +891,31 @@ class VoucherController extends Controller
     public function destroy(string $id)
     {
         try {
+            DB::beginTransaction();
+
             $model = Voucher::findOrFail($id);
+
+            // Hapus semua voucher items terkait
+            VoucherItem::where('voucher_id', $id)->delete();
+
+            // Hapus semua riwayat validasi voucher terkait
+            VoucherValidation::where('voucher_id', $id)->delete();
+
+            // Hapus file gambar jika ada
             if ($model->image && Storage::disk('public')->exists($model->image)) {
                 Storage::disk('public')->delete($model->image);
             }
+
+            // Hapus voucher
             $model->delete();
 
-            return response(['message' => 'Success', 'data' => $model])->header('Cache-Control', 'no-store');
+            DB::commit();
+
+            return response(['message' => 'Voucher beserta data terkait berhasil dihapus', 'data' => $model])->header('Cache-Control', 'no-store');
         } catch (\Throwable $th) {
-            return response(['message' => 'Error: server side having problem!'], 500)->header('Cache-Control', 'no-store');
+            DB::rollback();
+            Log::error('Error deleting voucher with cascade: ' . $th->getMessage());
+            return response(['message' => 'Error: gagal menghapus voucher - ' . $th->getMessage()], 500)->header('Cache-Control', 'no-store');
         }
     }
 

@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Community;
 use App\Models\CommunityMembership;
 use App\Models\User;
+use App\Models\Promo; // TAMBAH: Import model Promo
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
@@ -13,6 +14,57 @@ use Illuminate\Support\Facades\DB;
 
 class CommunityController extends Controller
 {
+    /**
+     * TAMBAH: Method helper untuk hitung promo aktif per komunitas
+     */
+    private function getActivePromosCount($communityId)
+    {
+        if (!$communityId) return 0;
+        
+        return Promo::where('community_id', $communityId)
+            ->where(function ($q) {
+                // Promo yang always_available = true
+                $q->where('always_available', true)
+                // ATAU promo yang masih dalam periode aktif
+                ->orWhere(function ($qq) {
+                    $now = now();
+                    $qq->where('always_available', '!=', true)
+                       ->where(function ($qqq) use ($now) {
+                           // Start date <= now <= end date
+                           $qqq->where(function ($qqqq) use ($now) {
+                               $qqqq->whereNotNull('start_date')
+                                    ->whereNotNull('end_date')
+                                    ->where('start_date', '<=', $now)
+                                    ->where('end_date', '>=', $now);
+                           })
+                           // Atau hanya ada start_date dan sudah dimulai
+                           ->orWhere(function ($qqqq) use ($now) {
+                               $qqqq->whereNotNull('start_date')
+                                    ->whereNull('end_date')
+                                    ->where('start_date', '<=', $now);
+                           })
+                           // Atau hanya ada end_date dan belum berakhir
+                           ->orWhere(function ($qqqq) use ($now) {
+                               $qqqq->whereNull('start_date')
+                                    ->whereNotNull('end_date')
+                                    ->where('end_date', '>=', $now);
+                           })
+                           // Atau tidak ada tanggal sama sekali
+                           ->orWhere(function ($qqqq) {
+                               $qqqq->whereNull('start_date')
+                                    ->whereNull('end_date');
+                           });
+                       });
+                });
+            })
+            // Tambahan filter: promo yang masih ada stok (jika ada kolom stock)
+            ->where(function ($q) {
+                $q->whereNull('stock')
+                  ->orWhere('stock', '>', 0);
+            })
+            ->count();
+    }
+
     /**
      * Helper: bentuk payload untuk FE (prefill + readable)
      */
@@ -38,6 +90,9 @@ class CommunityController extends Controller
                 ->exists();
         }
 
+        // TAMBAH: Hitung activePromos untuk komunitas ini
+        $activePromos = $this->getActivePromosCount($community->id);
+
         return [
             'id'            => $community->id,
             'name'          => $community->name,
@@ -46,8 +101,10 @@ class CommunityController extends Controller
             'category'      => $community->category ?? null,
             'privacy'       => $community->privacy ?? null,
             'is_verified'   => (bool) ($community->is_verified ?? false),
+            'isVerified'    => (bool) ($community->is_verified ?? false), // TAMBAH: alias untuk compatibility
             'members'       => $members,
             'isJoined'      => (bool) $isJoined,
+            'activePromos'  => $activePromos, // TAMBAH: field activePromos
 
             // === penting untuk FE ===
             'admin_contact_ids' => $community->adminContacts->pluck('id')->values(),
@@ -114,7 +171,7 @@ class CommunityController extends Controller
 
     /**
      * GET /api/communities/with-membership (auth required)
-     * Return communities with fields: members (count) & isJoined (bool)
+     * Return communities with fields: members (count) & isJoined (bool) & activePromos (count)
      */
     public function withMembership(Request $request)
     {
@@ -334,7 +391,6 @@ class CommunityController extends Controller
 
     /**
      * GET /api/communities/{id}/members
-     * Versi publik/fallback (aktif saja)
      */
     public function publicMembers(Request $request, $id)
     {
@@ -378,7 +434,6 @@ class CommunityController extends Controller
                 'category'            => 'nullable|string|max:100',
                 'privacy'             => 'nullable|in:public,private',
                 'is_verified'         => 'nullable|boolean',
-                // === Tambahan: kontak admin ===
                 'admin_contact_ids'   => 'nullable|array',
                 'admin_contact_ids.*' => 'integer|exists:users,id',
             ]);
@@ -397,7 +452,6 @@ class CommunityController extends Controller
             if ($request->hasFile('logo')) {
                 $validated['logo'] = $request->file('logo')->store('communities', 'public');
             } elseif (is_string($request->input('logo')) && $request->input('logo') !== '') {
-                // dukung string path (opsional)
                 $validated['logo'] = $request->input('logo');
             }
 
@@ -457,11 +511,10 @@ class CommunityController extends Controller
             $validator = Validator::make($request->all(), [
                 'name'                => 'required|string|max:255',
                 'description'         => 'nullable|string',
-                'logo'                => 'nullable', // file image ATAU string path
+                'logo'                => 'nullable',
                 'category'            => 'nullable|string|max:100',
                 'privacy'             => 'nullable|in:public,private',
                 'is_verified'         => 'nullable|boolean',
-                // === Tambahan: kontak admin ===
                 'admin_contact_ids'   => 'nullable|array',
                 'admin_contact_ids.*' => 'integer|exists:users,id',
             ]);
@@ -488,7 +541,6 @@ class CommunityController extends Controller
             } elseif (is_string($request->input('logo'))) {
                 $validated['logo'] = $request->input('logo');
             } else {
-                // jika tidak mengirim field 'logo', biarkan apa adanya
                 unset($validated['logo']);
             }
 
@@ -525,7 +577,6 @@ class CommunityController extends Controller
         try {
             $community = Community::findOrFail($id);
 
-            // bersihkan logo (opsional)
             if ($community->logo && Storage::disk('public')->exists($community->logo)) {
                 Storage::disk('public')->delete($community->logo);
             }

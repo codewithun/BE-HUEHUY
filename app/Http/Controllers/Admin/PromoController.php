@@ -974,7 +974,7 @@ class PromoController extends Controller
         $itemIdHint = $request->input('item_id');
         $ownerHint  = $request->input('item_owner_id');
 
-        // 1) by promo_items.code
+        // 1) by promo_items.code (CASE SENSITIVE)
         $item = \App\Models\PromoItem::with(['promo', 'user'])
             ->where('code', $code)
             ->first();
@@ -984,9 +984,9 @@ class PromoController extends Controller
             $item = \App\Models\PromoItem::with(['promo', 'user'])->find($itemIdHint);
         }
 
-        // 3) fallback: master promo code + owner
+        // 3) fallback: master promo code + owner (CASE SENSITIVE)
         if (! $item) {
-            $promo = \App\Models\Promo::whereRaw('LOWER(code) = ?', [mb_strtolower($code)])->first();
+            $promo = \App\Models\Promo::where('code', $code)->first(); // Case sensitive comparison
             if ($promo && $ownerHint) {
                 $item = \App\Models\PromoItem::with(['promo', 'user'])
                     ->where('promo_id', $promo->id)
@@ -996,9 +996,19 @@ class PromoController extends Controller
             }
         }
 
-        $promo = $item?->promo ?? \App\Models\Promo::whereRaw('LOWER(code) = ?', [mb_strtolower($code)])->first();
+        $promo = $item?->promo ?? \App\Models\Promo::where('code', $code)->first(); // Case sensitive comparison
         if (! $promo) {
             return response()->json(['success' => false, 'message' => 'Promo tidak ditemukan'], 404);
+        }
+
+        // ====== Verifikasi kode persis (case-sensitive) ======
+        if ($item && !hash_equals((string)$item->code, (string)$code)) {
+            return response()->json(['success' => false, 'message' => 'Kode unik tidak valid.'], 422);
+        }
+
+        // ====== Verifikasi master promo code juga (case-sensitive) ======
+        if (!$item && $promo && !hash_equals((string)$promo->code, (string)$code)) {
+            return response()->json(['success' => false, 'message' => 'Kode promo tidak valid.'], 422);
         }
 
         // ===== Tentukan tenant & role validator (TETAP) =====

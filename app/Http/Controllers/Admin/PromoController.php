@@ -974,6 +974,15 @@ class PromoController extends Controller
         $item       = null;
         $promo      = null;
 
+        // 🔍 LOG untuk debugging
+        Log::info('🎯 Promo validateCode started', [
+            'user_id' => $user->id,
+            'code' => $code,
+            'item_id' => $itemId,
+            'owner_hint' => $ownerHint,
+            'validator_role' => $data['validator_role'] ?? null
+        ]);
+
         // ====== STRATEGI PENCARIAN BERDASARKAN INPUT ======
 
         // 1) Jika ada item_id, ambil item spesifik (untuk QR code)
@@ -1005,17 +1014,32 @@ class PromoController extends Controller
         else {
             // Cek apakah ada master promo dengan kode tersebut
             $promo = \App\Models\Promo::where('code', $code)->first();
+            Log::info('🔍 Search master promo by code', ['code' => $code, 'found' => !!$promo, 'promo_id' => $promo->id ?? null]);
+            
             if (!$promo) {
-                // fallback lama: boleh cari promo_items yang benar-benar pakai kode itu (misal QR atau kasus khusus)
-                $userOwnItem = \App\Models\PromoItem::with(['promo', 'user'])
+                // 🔧 PERBAIKAN: Cari promo_item dengan kode tersebut tanpa membatasi user_id
+                // untuk mengcover kasus dimana user memasukkan kode unik dari promo_item
+                $promoItem = \App\Models\PromoItem::with(['promo', 'user'])
                     ->where('code', $code)
-                    ->where('user_id', $user->id)
                     ->first();
 
-                if ($userOwnItem) {
-                    $item  = $userOwnItem;
-                    $promo = $item->promo;
+                Log::info('🔍 Search promo_item by code', ['code' => $code, 'found' => !!$promoItem, 'item_owner' => $promoItem->user_id ?? null]);
+
+                if ($promoItem) {
+                    // Jika user yang login adalah pemilik item, gunakan item tersebut
+                    if ($promoItem->user_id == $user->id) {
+                        $item  = $promoItem;
+                        $promo = $item->promo;
+                        Log::info('🎯 User owns the promo_item, using existing item', ['item_id' => $item->id]);
+                    } else {
+                        // Jika bukan pemilik, coba ambil master promo untuk membuat item baru
+                        $promo = $promoItem->promo;
+                        $item = null;
+                        $ownerHint = $user->id;
+                        Log::info('🎯 User does not own the item, will create new item for this user', ['promo_id' => $promo->id]);
+                    }
                 } else {
+                    Log::warning('❌ Code not found in both promos and promo_items', ['code' => $code]);
                     return response()->json(['success' => false, 'message' => 'Promo dengan kode tersebut tidak ditemukan'], 404);
                 }
             } else {
@@ -1025,12 +1049,16 @@ class PromoController extends Controller
                     ->where('user_id', $user->id)
                     ->first();
 
+                Log::info('🔍 Search existing promo_item for user', ['promo_id' => $promo->id, 'user_id' => $user->id, 'found' => !!$existingItem]);
+
                 if ($existingItem) {
                     $item = $existingItem;
+                    Log::info('🎯 Found existing item for user', ['item_id' => $item->id]);
                 } else {
                     // belum punya — lanjut create item baru
                     $ownerHint = $user->id;
                     $item = null;
+                    Log::info('🎯 No existing item, will create new one', ['promo_id' => $promo->id, 'user_id' => $user->id]);
                 }
             }
         }

@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class VoucherValidation extends Model
 {
-    protected $fillable = ['voucher_id', 'user_id', 'code', 'validated_at', 'notes'];
+    protected $fillable = ['voucher_id', 'voucher_item_id', 'user_id', 'code', 'validated_at', 'notes'];
 
     public $timestamps = false;
 
@@ -22,5 +22,10 @@ class VoucherValidation extends Model
     public function user()
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function voucherItem()
+    {
+        return $this->belongsTo(VoucherItem::class, 'voucher_item_id');
     }
 }

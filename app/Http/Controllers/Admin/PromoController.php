@@ -1007,15 +1007,23 @@ class PromoController extends Controller
                 ->orderBy('created_at', 'asc') // FIFO - yang pertama dibuat dapat prioritas
                 ->get();
 
-            // Jika ada owner hint, prioritaskan item milik owner tersebut
-            if ($ownerHint && $potentialItems->count() > 0) {
-                $item = $potentialItems->where('user_id', $ownerHint)->first();
-            }
-
-            // Jika tidak ada owner hint atau tidak ditemukan untuk owner tersebut,
-            // ambil yang pertama (FIFO)
-            if (!$item && $potentialItems->count() > 0) {
-                $item = $potentialItems->first();
+            // PERBAIKAN: Prioritaskan item milik user yang sedang login dulu
+            if ($potentialItems->count() > 0) {
+                // Cari item milik user yang sedang login terlebih dahulu
+                $userOwnItem = $potentialItems->where('user_id', $user->id)->first();
+                
+                if ($userOwnItem) {
+                    $item = $userOwnItem;
+                }
+                // Jika ada owner hint, prioritaskan item milik owner tersebut
+                else if ($ownerHint && $ownerHint != $user->id) {
+                    $item = $potentialItems->where('user_id', $ownerHint)->first();
+                }
+                // Jika tidak ada item milik user login dan tidak ada owner hint,
+                // ambil yang pertama (FIFO)
+                else {
+                    $item = $potentialItems->first();
+                }
             }
 
             // Jika masih tidak ada item, cari di master promo
@@ -1026,10 +1034,10 @@ class PromoController extends Controller
                     return response()->json(['success' => false, 'message' => 'Promo dengan kode tersebut tidak ditemukan'], 404);
                 }
 
-                // Jika ada owner hint tapi belum ada item, nanti akan dibuat di bawah
-                // Jika tidak ada owner hint, error karena tidak tahu untuk siapa
+                // PERBAIKAN: Jika tidak ada ownerHint, gunakan user yang sedang login sebagai owner
+                // Ini untuk skenario user validation (bukan tenant validation)
                 if (!$ownerHint) {
-                    return response()->json(['success' => false, 'message' => 'Promo item tidak ditemukan. Silakan sertakan informasi pemilik.'], 404);
+                    $ownerHint = $user->id; // gunakan user yang sedang login
                 }
             } else {
                 $promo = $item->promo;

@@ -1003,12 +1003,22 @@ class PromoController extends Controller
                 ], 422);
             }
 
-            // Verifikasi kode PERSIS (case-sensitive, termasuk spasi)
-            if (!hash_equals((string)$item->code, $code)) {
+            // Verifikasi kode dengan logic yang diperbaiki untuk manual validation
+            $promo = $item->promo;
+            $isValidCode = false;
+            
+            // 🔧 PERBAIKAN: Untuk promo manual validation, hanya terima kode master
+            if ($promo && $promo->validation_type === 'manual') {
+                // Hanya terima kode master (yang ditulis admin) - TIDAK terima kode unik item
+                $isValidCode = hash_equals((string)$promo->code, $code);
+            } else {
+                // Untuk promo auto validation, harus exact match dengan kode item
+                $isValidCode = hash_equals((string)$item->code, $code);
+            }
+            
+            if (!$isValidCode) {
                 return response()->json(['success' => false, 'message' => 'Kode unik tidak valid.'], 422);
             }
-
-            $promo = $item->promo;
         }
         // 2) Jika tidak ada item_id, cari berdasarkan kode dengan logika yang sederhana
         else {
@@ -1221,14 +1231,14 @@ class PromoController extends Controller
                 }
 
                 // Generate kode untuk table promo_items
-                $base = $promo->code ?? $enteredCode; // "cobacoba"
+                $base = $promo->code ?? $enteredCode; // "mual"
                 
                 // 🔧 PERBAIKAN: Untuk promo manual validation, semua user pakai kode master yang sama
                 if ($promo->validation_type === 'manual') {
-                    $uniqueCode = $base; // Semua user pakai kode master "cobacoba"
+                    $uniqueCode = $base; // Semua user pakai kode master "mual" (tanpa suffix)
                 } else {
                     // Untuk promo auto validation, tetap generate kode unik per user
-                    $uniqueCode = $base . '-' . $ownerHint; // "cobacoba-34", "cobacoba-35"
+                    $uniqueCode = $base . '-' . $ownerHint; // "mual-34", "mual-35"
                     while (\App\Models\PromoItem::where('code', $uniqueCode)->exists()) {
                         $uniqueCode = $base . '-' . strtoupper(Str::random(4));
                     }

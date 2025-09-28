@@ -1175,12 +1175,38 @@ class PromoController extends Controller
             if (Schema::hasColumn('promo_items', 'status'))      $locked->status      = 'redeemed';
             $locked->save();
 
-            \App\Models\PromoValidation::create([
+            // PERBAIKAN: Simpan validasi dengan promo_item_id dan info owner yang tepat
+            $validationData = [
                 'promo_id'     => $promo->id,
-                'user_id'      => $validatorId,
+                'user_id'      => $validatorId, // siapa yang memvalidasi (tenant)
                 'code'         => $locked->code,
                 'validated_at' => now(),
-            ]);
+                'notes'        => 'Validated item_id=' . $locked->id . ' owner=' . $locked->user_id,
+            ];
+            
+            // Tambahkan promo_item_id jika kolom tersedia
+            if (Schema::hasColumn('promo_validations', 'promo_item_id')) {
+                $validationData['promo_item_id'] = $locked->id;
+            } else {
+                // Fallback: tambahkan info detail dalam notes untuk tracking yang akurat
+                $validationData['notes'] = 'item_id:' . $locked->id . '|owner_id:' . $locked->user_id . '|validator_id:' . $validatorId;
+            }
+            
+            // Cek apakah sudah ada record untuk promo_item_id ini
+            $existingValidation = null;
+            if (Schema::hasColumn('promo_validations', 'promo_item_id')) {
+                $existingValidation = \App\Models\PromoValidation::where('promo_item_id', $locked->id)->first();
+            }
+            
+            if (!$existingValidation) {
+                \App\Models\PromoValidation::create($validationData);
+            } else {
+                // Jika sudah ada (edge case), update timestamp untuk memastikan konsistensi
+                $existingValidation->update([
+                    'validated_at' => now(),
+                    'notes' => $validationData['notes']
+                ]);
+            }
         });
 
         $item->refresh();
@@ -1209,13 +1235,65 @@ class PromoController extends Controller
                 ], 404);
             }
 
-            $rows = PromoValidation::query()
-                ->with(['promo', 'user']) // user = validator (tenant)
-                ->leftJoin('promo_items', 'promo_items.code', '=', 'promo_validations.code')
-                ->select('promo_validations.*', 'promo_items.user_id as owner_id')
-                ->where('promo_validations.promo_id', $promoId)
-                ->orderBy('promo_validations.validated_at', 'desc')
-                ->get();
+            // PERBAIKAN: Query yang menampilkan semua validasi tanpa mapping yang salah
+            if (Schema::hasColumn('promo_validations', 'promo_item_id')) {
+                // Mode ideal: gunakan promo_item_id untuk akurasi tinggi
+                $rows = PromoValidation::query()
+                    ->with(['promo', 'user']) // user = validator (tenant)
+                    ->leftJoin('promo_items', 'promo_items.id', '=', 'promo_validations.promo_item_id')
+                    ->select('promo_validations.*', 'promo_items.user_id as owner_id')
+                    ->where('promo_validations.promo_id', $promoId)
+                    ->orderBy('promo_validations.validated_at', 'desc')
+                    ->get();
+            } else {
+                // Fallback: ambil semua record dan filter duplikasi dengan hati-hati
+                $allRows = PromoValidation::query()
+                    ->with(['promo', 'user']) // user = validator (tenant)
+                    ->where('promo_validations.promo_id', $promoId)
+                    ->orderBy('promo_validations.validated_at', 'desc')
+                    ->get();
+                    
+                // PERBAIKAN: Filter duplikasi berdasarkan item_id yang sebenarnya dari notes
+                // tapi tetap pertahankan semua record validation yang valid
+                $seen = [];
+                $rows = collect();
+                
+                foreach ($allRows as $row) {
+                    $itemId = null;
+                    if (preg_match('/item_id:(\d+)/', $row->notes, $matches)) {
+                        $itemId = $matches[1];
+                    }
+                    
+                    // Jika ada item_id dalam notes, gunakan sebagai key unik
+                    if ($itemId) {
+                        if (!isset($seen[$itemId])) {
+                            $seen[$itemId] = true;
+                            $rows->push($row);
+                        }
+                    } else {
+                        // Jika tidak ada item_id, gunakan kombinasi code + timestamp sebagai fallback
+                        $key = $row->code . '|' . $row->validated_at;
+                        if (!isset($seen[$key])) {
+                            $seen[$key] = true;
+                            $rows->push($row);
+                        }
+                    }
+                }
+                    
+                // Ambil owner_id dari notes
+                $rows = $rows->map(function ($row) {
+                    if (preg_match('/owner_id:(\d+)/', $row->notes, $matches)) {
+                        $row->owner_id = (int)$matches[1];
+                    } else {
+                        // Fallback: cari dari promo_items berdasarkan code
+                        $item = \App\Models\PromoItem::where('code', $row->code)
+                            ->where('promo_id', $row->promo_id)
+                            ->first();
+                        $row->owner_id = $item ? $item->user_id : null;
+                    }
+                    return $row;
+                });
+            }
 
             $ownerIds = $rows->pluck('owner_id')->filter()->unique()->values();
             $owners = $ownerIds->isNotEmpty()
@@ -1257,19 +1335,76 @@ class PromoController extends Controller
                 return response()->json(['success' => false, 'message' => 'User tidak terautentikasi'], 401);
             }
 
-            // Ambil riwayat yang relevan untuk kedua sisi:
-            // - Sebagai OWNER (pemilik item) → join ke promo_items by code
-            // - Sebagai VALIDATOR (tenant) → langsung dari promo_validations.user_id
-            $rows = PromoValidation::query()
-                ->with(['promo', 'user']) // 'user' = validator (tenant)
-                ->leftJoin('promo_items', 'promo_items.code', '=', 'promo_validations.code')
-                ->select('promo_validations.*', 'promo_items.user_id as owner_id')
-                ->where(function ($q) use ($userId) {
-                    $q->where('promo_items.user_id', $userId)       // user sebagai owner
-                        ->orWhere('promo_validations.user_id', $userId); // user sebagai validator (tenant)
-                })
-                ->orderBy('promo_validations.validated_at', 'desc')
-                ->get();
+            // PERBAIKAN: Query yang konsisten dengan method history untuk menghindari mapping yang salah
+            if (Schema::hasColumn('promo_validations', 'promo_item_id')) {
+                // Mode ideal: gunakan promo_item_id untuk akurasi tinggi
+                $rows = PromoValidation::query()
+                    ->with(['promo', 'user']) // 'user' = validator (tenant)
+                    ->leftJoin('promo_items', 'promo_items.id', '=', 'promo_validations.promo_item_id')
+                    ->select('promo_validations.*', 'promo_items.user_id as owner_id')
+                    ->where(function ($q) use ($userId) {
+                        $q->where('promo_items.user_id', $userId)       // user sebagai owner
+                            ->orWhere('promo_validations.user_id', $userId); // user sebagai validator (tenant)
+                    })
+                    ->orderBy('promo_validations.validated_at', 'desc')
+                    ->get();
+            } else {
+                // Fallback: ambil semua record dan filter dengan hati-hati untuk tidak menghilangkan data
+                $allRows = PromoValidation::query()
+                    ->with(['promo', 'user']) // 'user' = validator (tenant)
+                    ->orderBy('promo_validations.validated_at', 'desc')
+                    ->get();
+                    
+                // PERBAIKAN: Filter user tapi tetap pertahankan semua record validation yang relevan
+                $userRows = $allRows->filter(function ($r) use ($userId) {
+                    // Cek apakah user adalah owner berdasarkan notes
+                    $isOwner = preg_match('/owner_id:' . $userId . '/', $r->notes ?? '');
+                    // Cek apakah user adalah validator
+                    $isValidator = $r->user_id == $userId;
+                    
+                    return $isOwner || $isValidator;
+                });
+                
+                // PERBAIKAN: Deduplikasi berdasarkan item_id sebenarnya, bukan kombinasi yang bisa menghilangkan data
+                $seen = [];
+                $rows = collect();
+                
+                foreach ($userRows as $row) {
+                    $itemId = null;
+                    if (preg_match('/item_id:(\d+)/', $row->notes, $matches)) {
+                        $itemId = $matches[1];
+                    }
+                    
+                    // Jika ada item_id dalam notes, gunakan sebagai key unik
+                    if ($itemId) {
+                        if (!isset($seen[$itemId])) {
+                            $seen[$itemId] = true;
+                            $rows->push($row);
+                        }
+                    } else {
+                        // Jika tidak ada item_id, gunakan kombinasi code + timestamp + validator sebagai fallback
+                        $key = $row->code . '|' . $row->validated_at . '|' . $row->user_id;
+                        if (!isset($seen[$key])) {
+                            $seen[$key] = true;
+                            $rows->push($row);
+                        }
+                    }
+                }
+                
+                // Ambil owner_id dari notes jika tidak ada promo_item_id
+                $rows = $rows->map(function ($row) {
+                    if (preg_match('/owner_id:(\d+)/', $row->notes, $matches)) {
+                        $row->owner_id = (int)$matches[1];
+                    } else {
+                        // Fallback: cari dari promo_items berdasarkan code
+                        $item = \App\Models\PromoItem::where('code', $row->code)
+                            ->where('promo_id', $row->promo_id)
+                            ->first();
+                        $row->owner_id = $item ? $item->user_id : null;
+                    }
+                    return $row;
+                });
+            }
 
             // Ambil info owner (jika ada)
             $ownerIds = $rows->pluck('owner_id')->filter()->unique()->values();

@@ -19,6 +19,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Collection;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Carbon;
 
 class VoucherController extends Controller
 {
@@ -1570,5 +1571,82 @@ class VoucherController extends Controller
             Log::error("Error in userValidationHistory (voucher): " . $e->getMessage());
             return response()->json(['success' => false, 'message' => 'Gagal mengambil riwayat validasi: ' . $e->getMessage()], 500);
         }
+    }
+
+    public function claim(Request $request, string $id)
+    {
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['success' => false, 'message' => 'Unauthenticated'], 401);
+        }
+
+        return DB::transaction(function () use ($request, $id, $user) {
+            $voucher = Voucher::lockForUpdate()->find($id);
+            if (!$voucher) {
+                return response()->json(['success' => false, 'message' => 'Voucher tidak ditemukan'], 404);
+            }
+
+            // Cek kadaluwarsa
+            $validUntil = $voucher->valid_until ? Carbon::parse($voucher->valid_until) : null;
+            if ($validUntil && now()->greaterThan($validUntil)) {
+                // Opsional: tandai notif sebagai read
+                if ($nid = $request->input('notification_id')) {
+                    Notification::where('id', $nid)->where('user_id', $user->id)->update(['read_at' => now()]);
+                }
+                return response()->json(['success' => false, 'message' => 'Voucher sudah kadaluwarsa'], 410);
+            }
+
+            // Cek target_type
+            if ($voucher->target_type === 'user') {
+                if ($voucher->target_user_id && (int)$voucher->target_user_id !== (int)$user->id) {
+                    return response()->json(['success' => false, 'message' => 'Voucher ini tidak ditujukan untuk Anda'], 403);
+                }
+            } elseif ($voucher->target_type === 'community' && $voucher->community_id) {
+                $isMember = DB::table('community_memberships')
+                    ->where('community_id', $voucher->community_id)
+                    ->where('user_id', $user->id)
+                    ->when(\Illuminate\Support\Facades\Schema::hasColumn('community_memberships', 'status'), fn($q) => $q->where('status', 'active'))
+                    ->exists();
+                if (!$isMember) {
+                    return response()->json(['success' => false, 'message' => 'Voucher khusus anggota komunitas'], 403);
+                }
+            }
+
+            // Cegah klaim dobel
+            if (VoucherItem::where('voucher_id', $voucher->id)->where('user_id', $user->id)->exists()) {
+                if ($nid = $request->input('notification_id')) {
+                    Notification::where('id', $nid)->where('user_id', $user->id)->update(['read_at' => now()]);
+                }
+                return response()->json(['success' => true, 'message' => 'Voucher sudah pernah diklaim'], 200);
+            }
+
+            // Cek stok
+            if (!is_null($voucher->stock) && (int)$voucher->stock <= 0) {
+                if ($nid = $request->input('notification_id')) {
+                    Notification::where('id', $nid)->where('user_id', $user->id)->update(['read_at' => now()]);
+                }
+                return response()->json(['success' => false, 'message' => 'Voucher habis (out of stock)'], 410);
+            }
+
+            // Buat item + kurangi stok
+            $item = VoucherItem::create([
+                'voucher_id' => $voucher->id,
+                'user_id'    => $user->id,
+                'code'       => 'VI-' . strtoupper(\Illuminate\Support\Str::random(10)),
+            ]);
+            if (!is_null($voucher->stock)) {
+                $voucher->decrement('stock');
+            }
+
+            if ($nid = $request->input('notification_id')) {
+                Notification::where('id', $nid)->where('user_id', $user->id)->update(['read_at' => now()]);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Voucher berhasil diklaim',
+                'data'    => ['voucher' => $voucher->fresh(), 'item' => $item],
+            ]);
+        });
     }
 }

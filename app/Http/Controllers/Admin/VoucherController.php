@@ -1330,7 +1330,8 @@ class VoucherController extends Controller
             }
 
             // ==== Catat riwayat berbasis ITEM (bukan kode umum) ====
-            // PERBAIKAN: Selalu gunakan voucher_item_id untuk mencegah duplikasi
+            // PERBAIKAN: Setiap voucher_item_id hanya boleh divalidasi sekali, 
+            // jadi tidak perlu updateOrCreate - langsung create saja untuk menghindari overwrite
             $validationData = [
                 'user_id'      => $validatorId,           // siapa yang memvalidasi (tenant)
                 'voucher_id'   => $locked->voucher_id,
@@ -1339,26 +1340,30 @@ class VoucherController extends Controller
                 'notes'        => 'Validated item_id=' . $locked->id . ' owner=' . $locked->user_id,
             ];
             
-            // Tentukan unique constraint berdasarkan kolom yang tersedia
+            // Tambahkan voucher_item_id jika kolom tersedia
             if (Schema::hasColumn('voucher_validations', 'voucher_item_id')) {
-                // Mode ideal: unik per voucher_item_id
-                $validationWhere = ['voucher_item_id' => $locked->id];
                 $validationData['voucher_item_id'] = $locked->id;
             } else {
-                // Fallback: bedakan per code + voucher + owner untuk menghindari duplikasi
-                $validationWhere = [
-                    'code'        => $locked->code,
-                    'voucher_id'  => $locked->voucher_id,
-                    'user_id'     => $validatorId, // tambahkan validator untuk membedakan
-                ];
-                // Tambahkan notes yang mengandung item_id dan owner_id untuk tracking
+                // Fallback: tambahkan info detail dalam notes untuk tracking yang akurat
                 $validationData['notes'] = 'item_id:' . $locked->id . '|owner_id:' . $locked->user_id . '|validator_id:' . $validatorId;
             }
 
-            VoucherValidation::updateOrCreate(
-                $validationWhere,
-                $validationData
-            );
+            // PERBAIKAN: Gunakan create langsung karena voucher_item_id sudah unik dan hanya divalidasi sekali
+            // Cek dulu apakah sudah ada record untuk voucher_item_id ini (seharusnya tidak ada karena sudah dicek di atas)
+            $existingValidation = null;
+            if (Schema::hasColumn('voucher_validations', 'voucher_item_id')) {
+                $existingValidation = VoucherValidation::where('voucher_item_id', $locked->id)->first();
+            }
+            
+            if (!$existingValidation) {
+                VoucherValidation::create($validationData);
+            } else {
+                // Jika sudah ada (edge case), update timestamp untuk memastikan konsistensi
+                $existingValidation->update([
+                    'validated_at' => now(),
+                    'notes' => $validationData['notes']
+                ]);
+            }
 
             DB::commit();
 
@@ -1388,30 +1393,52 @@ class VoucherController extends Controller
                 return response()->json(['success' => false, 'message' => 'Voucher tidak ditemukan'], 404);
             }
 
-            // PERBAIKAN: Query yang lebih presisi untuk menghindari duplikasi
+            // PERBAIKAN: Query yang menampilkan semua validasi tanpa duplikasi
             if (Schema::hasColumn('voucher_validations', 'voucher_item_id')) {
                 // Mode ideal: gunakan voucher_item_id untuk akurasi tinggi
                 $rows = VoucherValidation::query()
                     ->with(['voucher', 'user']) // user = validator (tenant)
-                    ->join('voucher_items', 'voucher_items.id', '=', 'voucher_validations.voucher_item_id')
+                    ->leftJoin('voucher_items', 'voucher_items.id', '=', 'voucher_validations.voucher_item_id')
                     ->select('voucher_validations.*', 'voucher_items.user_id as owner_id')
                     ->where('voucher_validations.voucher_id', $voucherId)
                     ->orderBy('voucher_validations.validated_at', 'desc')
                     ->get();
             } else {
-                // Fallback: filter berdasarkan notes yang unik per item untuk menghindari duplikasi
-                $rows = VoucherValidation::query()
+                // Fallback: ambil semua record dan filter duplikasi dengan hati-hati
+                $allRows = VoucherValidation::query()
                     ->with(['voucher', 'user']) // user = validator (tenant)
                     ->where('voucher_validations.voucher_id', $voucherId)
                     ->orderBy('voucher_validations.validated_at', 'desc')
-                    ->get()
-                    ->unique(function ($item) {
-                        // Deduplikasi berdasarkan kombinasi code + notes (yang berisi item_id)
-                        return $item->code . '|' . $item->notes;
-                    })
-                    ->values();
+                    ->get();
                     
-                // Ambil owner_id dari notes jika tidak ada voucher_item_id
+                // PERBAIKAN: Filter duplikasi berdasarkan item_id yang sebenarnya dari notes
+                // tapi tetap pertahankan semua record validation yang valid
+                $seen = [];
+                $rows = collect();
+                
+                foreach ($allRows as $row) {
+                    $itemId = null;
+                    if (preg_match('/item_id:(\d+)/', $row->notes, $matches)) {
+                        $itemId = $matches[1];
+                    }
+                    
+                    // Jika ada item_id dalam notes, gunakan sebagai key unik
+                    if ($itemId) {
+                        if (!isset($seen[$itemId])) {
+                            $seen[$itemId] = true;
+                            $rows->push($row);
+                        }
+                    } else {
+                        // Jika tidak ada item_id, gunakan kombinasi code + timestamp sebagai fallback
+                        $key = $row->code . '|' . $row->validated_at;
+                        if (!isset($seen[$key])) {
+                            $seen[$key] = true;
+                            $rows->push($row);
+                        }
+                    }
+                }
+                    
+                // Ambil owner_id dari notes
                 $rows = $rows->map(function ($row) {
                     if (preg_match('/owner_id:(\d+)/', $row->notes, $matches)) {
                         $row->owner_id = (int)$matches[1];
@@ -1489,12 +1516,12 @@ class VoucherController extends Controller
                 return response()->json(['success' => false, 'message' => 'User tidak terautentikasi'], 401);
             }
 
-            // PERBAIKAN: Query yang konsisten dengan method history untuk menghindari duplikasi
+            // PERBAIKAN: Query yang konsisten dengan method history untuk menghindari kehilangan data
             if (Schema::hasColumn('voucher_validations', 'voucher_item_id')) {
                 // Mode ideal: gunakan voucher_item_id untuk akurasi tinggi
                 $rows = VoucherValidation::query()
                     ->with(['voucher', 'user']) // 'user' = validator (tenant)
-                    ->join('voucher_items', 'voucher_items.id', '=', 'voucher_validations.voucher_item_id')
+                    ->leftJoin('voucher_items', 'voucher_items.id', '=', 'voucher_validations.voucher_item_id')
                     ->select('voucher_validations.*', 'voucher_items.user_id as owner_id')
                     ->where(function ($q) use ($userId) {
                         $q->where('voucher_items.user_id', $userId)       // user sbg OWNER (pemilik item)
@@ -1503,24 +1530,47 @@ class VoucherController extends Controller
                     ->orderBy('voucher_validations.validated_at', 'desc')
                     ->get();
             } else {
-                // Fallback: filter dan deduplikasi berdasarkan notes untuk menghindari duplikasi
+                // Fallback: ambil semua record dan filter dengan hati-hati untuk tidak menghilangkan data
                 $allRows = VoucherValidation::query()
                     ->with(['voucher', 'user']) // 'user' = validator (tenant)
                     ->orderBy('voucher_validations.validated_at', 'desc')
                     ->get();
                     
-                // Filter dan deduplikasi
-                $rows = $allRows->filter(function ($r) use ($userId) {
+                // PERBAIKAN: Filter user tapi tetap pertahankan semua record validation yang relevan
+                $userRows = $allRows->filter(function ($r) use ($userId) {
                     // Cek apakah user adalah owner berdasarkan notes
                     $isOwner = preg_match('/owner_id:' . $userId . '/', $r->notes ?? '');
                     // Cek apakah user adalah validator
                     $isValidator = $r->user_id == $userId;
                     
                     return $isOwner || $isValidator;
-                })->unique(function ($item) {
-                    // Deduplikasi berdasarkan kombinasi code + notes (yang berisi item_id)
-                    return $item->code . '|' . $item->notes;
-                })->values();
+                });
+                
+                // PERBAIKAN: Deduplikasi berdasarkan item_id sebenarnya, bukan kombinasi yang bisa menghilangkan data
+                $seen = [];
+                $rows = collect();
+                
+                foreach ($userRows as $row) {
+                    $itemId = null;
+                    if (preg_match('/item_id:(\d+)/', $row->notes, $matches)) {
+                        $itemId = $matches[1];
+                    }
+                    
+                    // Jika ada item_id dalam notes, gunakan sebagai key unik
+                    if ($itemId) {
+                        if (!isset($seen[$itemId])) {
+                            $seen[$itemId] = true;
+                            $rows->push($row);
+                        }
+                    } else {
+                        // Jika tidak ada item_id, gunakan kombinasi code + timestamp sebagai fallback
+                        $key = $row->code . '|' . $row->validated_at . '|' . $row->user_id;
+                        if (!isset($seen[$key])) {
+                            $seen[$key] = true;
+                            $rows->push($row);
+                        }
+                    }
+                }
                 
                 // Ambil owner_id dari notes jika tidak ada voucher_item_id
                 $rows = $rows->map(function ($row) {

@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class PromoValidation extends Model
 {
-    protected $fillable = ['promo_id', 'user_id', 'code', 'validated_at', 'notes'];
+    protected $fillable = ['promo_id', 'promo_item_id', 'user_id', 'code', 'validated_at', 'notes'];
     public $timestamps = false;
 
     protected $casts = ['validated_at' => 'datetime'];
@@ -22,5 +22,10 @@ class PromoValidation extends Model
     public function user()
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function promoItem()
+    {
+        return $this->belongsTo(PromoItem::class, 'promo_item_id');
     }
 }

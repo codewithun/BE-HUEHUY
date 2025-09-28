@@ -944,11 +944,10 @@ class PromoController extends Controller
     }
 
     /**
-     * Idempotent validation:
-     * - Cari PromoItem dari code / item_id hint / (promo master + owner)
-     * - Update redeemed_at (+ status='redeemed' jika kolom ada)
-     * - Jika item belum ada tapi ada owner_hint → buatkan untuk owner itu (bukan tenant)
-     * - Kalau sudah redeemed, balas 200 OK (bukan 409)
+     * Idempotent validation dengan logika pencarian yang diperbaiki:
+     * - Jika ada item_id, validasi item spesifik (untuk QR code)
+     * - Jika tidak ada item_id, cari berdasarkan kode dengan urutan FIFO
+     * - Pastikan setiap user mendapat giliran validasi yang tepat
      */
     public function validateCode(Request $request)
     {
@@ -959,7 +958,7 @@ class PromoController extends Controller
 
         $data = $request->validate([
             'code'               => 'required|string',
-            'item_id'            => 'required|integer', // ⛔ Wajib: identitas item spesifik
+            'item_id'            => 'sometimes|integer', // Optional: untuk QR code dengan item spesifik
             'item_owner_id'      => 'sometimes|integer',
             'expected_type'      => 'sometimes|in:promo',
             'validator_role'     => 'sometimes|in:tenant',
@@ -967,47 +966,78 @@ class PromoController extends Controller
             'qr_timestamp'       => 'sometimes',
         ]);
 
-        // ⛔ Jangan trim: "harus sama persis"
-        $code       = (string)$data['code'];
-        $itemId     = (int)$data['item_id'];
+        $code       = trim((string)$data['code']);
+        $itemId     = $data['item_id'] ?? null;
         $ownerHint  = $data['item_owner_id'] ?? null;
+        $item       = null;
+        $promo      = null;
 
-        // Ambil item spesifik berdasar ID (bukan berdasar code)
-        $item = \App\Models\PromoItem::with(['promo', 'user'])
-            ->where('id', $itemId)
-            ->first();
+        // ====== STRATEGI PENCARIAN BERDASARKAN INPUT ======
+        
+        // 1) Jika ada item_id, ambil item spesifik (untuk QR code)
+        if ($itemId) {
+            $item = \App\Models\PromoItem::with(['promo', 'user'])
+                ->where('id', $itemId)
+                ->first();
 
-        if (!$item) {
-            return response()->json(['success' => false, 'message' => 'Promo item tidak ditemukan'], 404);
+            if (!$item) {
+                return response()->json(['success' => false, 'message' => 'Promo item tidak ditemukan'], 404);
+            }
+
+            // Jika FE mengirim owner_hint, pastikan cocok
+            if ($ownerHint && (int)$item->user_id !== (int)$ownerHint) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Promo item ini bukan milik user yang dimaksud'
+                ], 422);
+            }
+
+            // Verifikasi kode PERSIS (case-sensitive, termasuk spasi)
+            if (!hash_equals((string)$item->code, $code)) {
+                return response()->json(['success' => false, 'message' => 'Kode unik tidak valid.'], 422);
+            }
+
+            $promo = $item->promo;
+        } 
+        // 2) Jika tidak ada item_id, cari berdasarkan kode dengan logika yang aman
+        else {
+            // Pertama cari apakah ada PromoItem dengan kode tersebut
+            $potentialItems = \App\Models\PromoItem::with(['promo', 'user'])
+                ->where('code', $code) // Exact match dulu
+                ->orderBy('created_at', 'asc') // FIFO - yang pertama dibuat dapat prioritas
+                ->get();
+
+            // Jika ada owner hint, prioritaskan item milik owner tersebut
+            if ($ownerHint && $potentialItems->count() > 0) {
+                $item = $potentialItems->where('user_id', $ownerHint)->first();
+            }
+
+            // Jika tidak ada owner hint atau tidak ditemukan untuk owner tersebut,
+            // ambil yang pertama (FIFO)
+            if (!$item && $potentialItems->count() > 0) {
+                $item = $potentialItems->first();
+            }
+
+            // Jika masih tidak ada item, cari di master promo
+            if (!$item) {
+                $promo = \App\Models\Promo::where('code', $code)->first();
+                
+                if (!$promo) {
+                    return response()->json(['success' => false, 'message' => 'Promo dengan kode tersebut tidak ditemukan'], 404);
+                }
+
+                // Jika ada owner hint tapi belum ada item, nanti akan dibuat di bawah
+                // Jika tidak ada owner hint, error karena tidak tahu untuk siapa
+                if (!$ownerHint) {
+                    return response()->json(['success' => false, 'message' => 'Promo item tidak ditemukan. Silakan sertakan informasi pemilik.'], 404);
+                }
+            } else {
+                $promo = $item->promo;
+            }
         }
 
-        // Jika FE mengirim owner_hint, pastikan cocok
-        if ($ownerHint && (int)$item->user_id !== (int)$ownerHint) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Promo item ini bukan milik user yang dimaksud'
-            ], 422);
-        }
-
-        // Verifikasi kode PERSIS (case-sensitive, termasuk spasi)
-        if (!hash_equals((string)$item->code, $code)) {
-            return response()->json(['success' => false, 'message' => 'Kode unik tidak valid.'], 422);
-        }
-
-        // Verifikasi kode PERSIS (case-sensitive, termasuk spasi)
-        if (!hash_equals((string)$item->code, $code)) {
-            return response()->json(['success' => false, 'message' => 'Kode unik tidak valid.'], 422);
-        }
-
-        // Ambil promo dari item
-        $promo = $item->promo;
         if (!$promo) {
-            return response()->json(['success' => false, 'message' => 'Promo tidak ditemukan untuk item ini'], 404);
-        }
-
-        // Cek expired
-        if (!empty($promo->end_date) && now()->greaterThan($promo->end_date)) {
-            return response()->json(['success' => false, 'message' => 'Promo kedaluwarsa'], 422);
+            return response()->json(['success' => false, 'message' => 'Promo tidak ditemukan'], 404);
         }
 
         // Cek expired
@@ -1029,24 +1059,39 @@ class PromoController extends Controller
             $validatorId = $user->id;
         } else {
             // user-initiated (kode unik): kreditkan ke tenant agar tampil di riwayat tenant
-        // user-initiated (kode unik): kreditkan ke tenant agar tampil di riwayat tenant
             $validatorId = $tenantId ?: $user->id;
         }
 
-        // ====== Cek idempotensi BERDASARKAN ITEM ======
-        if (!is_null($item->redeemed_at) || in_array($item->status, ['redeemed', 'used'], true)) {
-            return response()->json([
-                'success' => true,
-                'message' => 'Promo sudah divalidasi sebelumnya',
-                'data'    => [
-                    'promo_item_id' => $item->id,
-                    'promo_item'    => $item,
-                    'promo'         => $this->transformPromoImageUrls($promo),
-                ],
-            ], 200);
-        }
+        // ====== HANDLING BERDASARKAN KONDISI ITEM ======
+        
+        // Jika item sudah ada, cek idempotensi dan proses
+        if ($item) {
+            if (!is_null($item->redeemed_at) || in_array($item->status, ['redeemed', 'used'], true)) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Promo sudah divalidasi sebelumnya',
+                    'data'    => [
+                        'promo_item_id' => $item->id,
+                        'promo_item'    => $item,
+                        'promo'         => $this->transformPromoImageUrls($promo),
+                    ],
+                ], 200);
+            }
 
-        // ====== Transaksi & lock per item ======
+            // Item ada tapi belum di-redeem, lakukan transaksi
+            return $this->processExistingItemValidation($item, $promo, $validatorId, $code);
+        } 
+        // Jika item belum ada, buat item baru
+        else {
+            return $this->createAndValidateNewItem($promo, $ownerHint, $validatorId, $code);
+        }
+    }
+
+    /**
+     * Proses validasi untuk item yang sudah ada
+     */
+    private function processExistingItemValidation($item, $promo, $validatorId, $code)
+    {
         DB::beginTransaction();
         try {
             $locked = \App\Models\PromoItem::with(['promo'])
@@ -1094,41 +1139,8 @@ class PromoController extends Controller
                 ], 200);
             }
 
-            // ==== Catat riwayat berbasis ITEM (bukan kode umum) ====
-            // PERBAIKAN: Setiap promo_item_id hanya boleh divalidasi sekali, 
-            // jadi tidak perlu updateOrCreate - langsung create saja untuk menghindari overwrite
-            $validationData = [
-                'user_id'      => $validatorId,           // siapa yang memvalidasi (tenant)
-                'promo_id'     => $locked->promo_id,
-                'validated_at' => now(),
-                'code'         => $locked->code,          // keep for audit
-                'notes'        => 'Validated item_id=' . $locked->id . ' owner=' . $locked->user_id,
-            ];
-            
-            // Tambahkan promo_item_id jika kolom tersedia
-            if (Schema::hasColumn('promo_validations', 'promo_item_id')) {
-                $validationData['promo_item_id'] = $locked->id;
-            } else {
-                // Fallback: tambahkan info detail dalam notes untuk tracking yang akurat
-                $validationData['notes'] = 'item_id:' . $locked->id . '|owner_id:' . $locked->user_id . '|validator_id:' . $validatorId;
-            }
-
-            // PERBAIKAN: Gunakan create langsung karena promo_item_id sudah unik dan hanya divalidasi sekali
-            // Cek dulu apakah sudah ada record untuk promo_item_id ini (seharusnya tidak ada karena sudah dicek di atas)
-            $existingValidation = null;
-            if (Schema::hasColumn('promo_validations', 'promo_item_id')) {
-                $existingValidation = \App\Models\PromoValidation::where('promo_item_id', $locked->id)->first();
-            }
-            
-            if (!$existingValidation) {
-                \App\Models\PromoValidation::create($validationData);
-            } else {
-                // Jika sudah ada (edge case), update timestamp untuk memastikan konsistensi
-                $existingValidation->update([
-                    'validated_at' => now(),
-                    'notes' => $validationData['notes']
-                ]);
-            }
+            // Simpan validasi
+            $this->savePromoValidation($locked, $validatorId, $code);
 
             DB::commit();
 
@@ -1143,8 +1155,92 @@ class PromoController extends Controller
             ], 200);
         } catch (\Throwable $e) {
             DB::rollBack();
-            Log::error('validateCode txn error: ' . $e->getMessage(), ['code' => $item->code, 'item_id' => $item->id]);
+            Log::error('processExistingItemValidation error: ' . $e->getMessage(), ['code' => $code, 'item_id' => $item->id]);
             return response()->json(['success' => false, 'message' => 'Gagal memproses validasi'], 500);
+        }
+    }
+
+    /**
+     * Buat item baru dan lakukan validasi
+     */
+    private function createAndValidateNewItem($promo, $ownerHint, $validatorId, $code)
+    {
+        // Cek stok dulu
+        if (!is_null($promo->stock)) {
+            $affected = \App\Models\Promo::where('id', $promo->id)->where('stock', '>', 0)->decrement('stock');
+            if ($affected === 0) {
+                return response()->json(['success' => false, 'message' => 'Stok promo habis'], 409);
+            }
+        }
+
+        DB::beginTransaction();
+        try {
+            // Buat PromoItem baru
+            $item = \App\Models\PromoItem::create([
+                'promo_id'     => $promo->id,
+                'user_id'      => $ownerHint,
+                'code'         => $code,
+                'status'       => 'redeemed',
+                'redeemed_at'  => now(),
+                'expires_at'   => $promo->end_date,
+            ]);
+
+            // Simpan validasi
+            $this->savePromoValidation($item, $validatorId, $code);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Validasi berhasil',
+                'data'    => [
+                    'promo_item_id' => $item->id,
+                    'promo_item'    => $item->load(['promo', 'user']),
+                    'promo'         => $this->transformPromoImageUrls($promo),
+                ],
+            ], 200);
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            Log::error('createAndValidateNewItem error: ' . $e->getMessage(), ['promo_id' => $promo->id, 'owner_hint' => $ownerHint]);
+            return response()->json(['success' => false, 'message' => 'Gagal membuat dan memvalidasi item promo'], 500);
+        }
+    }
+
+    /**
+     * Helper untuk menyimpan validasi promo
+     */
+    private function savePromoValidation($item, $validatorId, $code)
+    {
+        $validationData = [
+            'user_id'      => $validatorId,
+            'promo_id'     => $item->promo_id,
+            'validated_at' => now(),
+            'code'         => $code,
+            'notes'        => 'Validated item_id=' . $item->id . ' owner=' . $item->user_id,
+        ];
+        
+        // Tambahkan promo_item_id jika kolom tersedia
+        if (Schema::hasColumn('promo_validations', 'promo_item_id')) {
+            $validationData['promo_item_id'] = $item->id;
+        } else {
+            // Fallback: tambahkan info detail dalam notes
+            $validationData['notes'] = 'item_id:' . $item->id . '|owner_id:' . $item->user_id . '|validator_id:' . $validatorId;
+        }
+
+        // Cek apakah sudah ada record untuk promo_item_id ini
+        $existingValidation = null;
+        if (Schema::hasColumn('promo_validations', 'promo_item_id')) {
+            $existingValidation = \App\Models\PromoValidation::where('promo_item_id', $item->id)->first();
+        }
+        
+        if (!$existingValidation) {
+            \App\Models\PromoValidation::create($validationData);
+        } else {
+            // Update jika sudah ada (edge case)
+            $existingValidation->update([
+                'validated_at' => now(),
+                'notes' => $validationData['notes']
+            ]);
         }
     }
 

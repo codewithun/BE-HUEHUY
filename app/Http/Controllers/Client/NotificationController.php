@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Client;
 
 use App\Http\Controllers\Controller;
 use App\Models\Notification;
+use App\Models\Voucher; // TAMBAH: Import model Voucher
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
@@ -46,16 +47,15 @@ class NotificationController extends Controller
             $sortBy = 'created_at';
         }
 
-        // ====== PERBAIKAN: PAGINATION CERDAS DENGAN SOFT LIMIT ======
-        $paginateRaw = $request->get('paginate', 'smart'); // Default 'smart' pagination
+        // ====== PAGINATION CERDAS DENGAN SOFT LIMIT ======
+        $paginateRaw = $request->get('paginate', 'smart');
         $paginateAll = ($paginateRaw === 'all' || $request->boolean('all'));
         $smartMode = ($paginateRaw === 'smart');
         $paginate = !$paginateAll && !$smartMode ? (int) $paginateRaw : 0;
 
-        // Smart pagination: Ambil batch pertama dengan limit wajar
-        $smartLimit = $smartMode ? (int) $request->get('limit', 100) : 0; // Default 100 untuk smart mode
+        $smartLimit = $smartMode ? (int) $request->get('limit', 100) : 0;
         if ($smartLimit < 10) $smartLimit = 100;
-        if ($smartLimit > 500) $smartLimit = 500; // Max 500 per request untuk performa
+        if ($smartLimit > 500) $smartLimit = 500;
 
         $tabParam  = $request->get('tab');
         $typeParam = $request->get('type');
@@ -63,20 +63,16 @@ class NotificationController extends Controller
 
         $unreadOnly = (bool) $request->boolean('unread_only', false);
         $sinceRaw   = $request->get('since');
-
-        // Pagination cursor untuk infinite scroll
-        $cursor = $request->get('cursor'); // ID terakhir dari request sebelumnya
+        $cursor = $request->get('cursor');
 
         $user = Auth::user();
         if (!$user) {
-            return response()->json(['message' => 'Unauthenticated'], 401);
+            return response()->json(['success' => false, 'message' => 'Unauthenticated'], 401);
         }
 
         Log::info('NotifIndex', [
             'user_id' => $user->id,
             'tab' => $tab,
-            'mode' => $paginateAll ? 'all' : ($smartMode ? 'smart' : 'paginate'),
-            'smart_limit' => $smartLimit,
             'cursor' => $cursor,
         ]);
 
@@ -98,150 +94,209 @@ class NotificationController extends Controller
 
         // ====== FILTER SINCE ======
         if (!empty($sinceRaw)) {
-            $ts = strtotime($sinceRaw);
-            if ($ts !== false) {
-                $query->where('created_at', '>=', date('Y-m-d H:i:s', $ts));
+            try {
+                $since = \Carbon\Carbon::parse($sinceRaw);
+                $query->where('created_at', '>=', $since);
+            } catch (\Exception $e) {
+                Log::warning('Invalid since parameter', ['since' => $sinceRaw]);
             }
         }
 
         // ====== CURSOR PAGINATION (untuk infinite scroll) ======
         if ($cursor && $smartMode) {
-            if ($sortBy === 'created_at' && $sortDirection === 'DESC') {
-                $query->where('created_at', '<', $cursor);
-            } elseif ($sortBy === 'id' && $sortDirection === 'DESC') {
+            if ($sortDirection === 'DESC') {
                 $query->where('id', '<', $cursor);
+            } else {
+                $query->where('id', '>', $cursor);
             }
-            // Tambah kondisi lain sesuai kebutuhan
         }
 
         try {
-            // ====== COUNT TOTAL & UNREAD (OPTIMIZED) ======
-            $totalCount = $query->count(); // Count dengan filter yang sama
+            $query->orderBy($sortBy, $sortDirection);
 
-            $unreadCount = Notification::where('user_id', $user->id)
-                ->whereNull('read_at')
-                ->when($typesFromTab, fn($q) => $q->whereIn('type', $typesFromTab))
-                ->when(!$typesFromTab && $tab && $tab !== 'all', fn($q) => $q->where('type', $tab))
-                ->count();
-
-            // ====== SMART MODE: AMBIL BATCH TERBATAS ======
             if ($smartMode) {
-                $items = $query->orderBy($sortBy, $sortDirection)
-                    ->select([
-                        'id', 'type', 'title', 'message', 'image_url', 
-                        'target_type', 'target_id', 'action_url', 'meta', 
-                        'read_at', 'created_at'
-                    ])
-                    ->limit($smartLimit)
-                    ->get();
-
-                // Tentukan cursor untuk request berikutnya
-                $nextCursor = null;
+                $items = $query->take($smartLimit)->get();
+                $hasMore = count($items) >= $smartLimit;
+                $nextCursor = $hasMore && $items->isNotEmpty() ? $items->last()->id : null;
+            } elseif ($paginateAll) {
+                $items = $query->get();
                 $hasMore = false;
-                
-                if ($items->count() === $smartLimit) {
-                    $lastItem = $items->last();
-                    $nextCursor = $sortBy === 'created_at' ? $lastItem->created_at : $lastItem->id;
-                    
-                    // Cek apakah masih ada data setelah cursor ini
-                    $hasMore = $query->where($sortBy, $sortDirection === 'DESC' ? '<' : '>', $nextCursor)->exists();
-                }
+                $nextCursor = null;
+            } else {
+                $paginated = $query->paginate($paginate ?: 10);
+                $items = collect($paginated->items());
+                $hasMore = $paginated->hasMorePages();
+                $nextCursor = null;
+            }
 
-                Log::info('NotifIndexResult (SMART)', [
-                    'user_id' => $user->id,
-                    'returned' => $items->count(),
-                    'total_available' => $totalCount,
+            // ====== INJECT STATUS LIVE VOUCHER ======
+            $items = $this->injectLiveVoucherStatus($items);
+
+            $responseData = [
+                'success' => true,
+                'data' => $items->values(),
+                'total_row' => $items->count(),
+            ];
+
+            if ($smartMode) {
+                $responseData['meta'] = [
                     'has_more' => $hasMore,
                     'next_cursor' => $nextCursor,
-                ]);
-
-                return response()->json([
-                    'message' => $items->isEmpty() ? 'empty data' : 'success',
-                    'data' => $items,
-                    'total_row' => $totalCount,
-                    'meta' => [
-                        'mode' => 'smart',
-                        'limit' => $smartLimit,
-                        'returned' => $items->count(),
-                        'has_more' => $hasMore,
-                        'next_cursor' => $nextCursor,
-                        'applied_tab' => $tab ?? 'all',
-                        'applied_types' => $typesFromTab ?: ($tab && $tab !== 'all' ? [$tab] : null),
-                        'unread_cnt' => $unreadCount,
-                        'sorting' => ['by' => $sortBy, 'dir' => $sortDirection],
-                        'filters' => ['unread_only' => $unreadOnly, 'since' => $sinceRaw],
-                    ],
-                ], 200);
+                    'limit' => $smartLimit,
+                ];
             }
 
-            // ====== MODE LAMA: ALL atau PAGINATE ======
-            if ($paginateAll) {
-                // WARNING: Hanya untuk debugging atau user dengan notif sedikit
-                if ($totalCount > 1000) {
-                    return response()->json([
-                        'message' => 'Too many notifications. Use smart mode instead.',
-                        'total_count' => $totalCount,
-                        'suggestion' => 'Add ?paginate=smart&limit=100 to your request'
-                    ], 413); // Payload Too Large
-                }
-
-                $items = $query->orderBy($sortBy, $sortDirection)
-                    ->select([
-                        'id', 'type', 'title', 'message', 'image_url', 
-                        'target_type', 'target_id', 'action_url', 'meta', 
-                        'read_at', 'created_at'
-                    ])
-                    ->get();
-
-                return response()->json([
-                    'message' => $items->isEmpty() ? 'empty data' : 'success',
-                    'data' => $items,
-                    'total_row' => $items->count(),
-                    'meta' => [
-                        'mode' => 'all',
-                        'applied_tab' => $tab ?? 'all',
-                        'unread_cnt' => $unreadCount,
-                    ],
-                ], 200);
-            }
-
-            // ====== PAGINATE BIASA ======
-            if ($paginate < 1) $paginate = 50;
-            if ($paginate > 200) $paginate = 200; // Batasi untuk performa
-
-            $paginator = $query->orderBy($sortBy, $sortDirection)->paginate($paginate);
-            $items = $paginator->items();
-
-            return response()->json([
-                'message' => count($items) === 0 ? 'empty data' : 'success',
-                'data' => $items,
-                'total_row' => $paginator->total(),
-                'meta' => [
-                    'mode' => 'paginate',
-                    'pagination' => [
-                        'current_page' => $paginator->currentPage(),
-                        'per_page' => $paginator->perPage(),
-                        'last_page' => $paginator->lastPage(),
-                        'total' => $paginator->total(),
-                    ],
-                    'applied_tab' => $tab ?? 'all',
-                    'unread_cnt' => $unreadCount,
-                ],
-            ], 200);
+            return response()->json($responseData)->header('Cache-Control', 'no-store');
 
         } catch (\Throwable $e) {
-            Log::error('NotificationController@index error', [
+            Log::error('NotificationController@index error: ' . $e->getMessage(), [
                 'user_id' => $user->id,
-                'error' => $e->getMessage(),
+                'error' => $e->getTraceAsString()
             ]);
 
             return response()->json([
-                'message' => 'Error loading notifications',
-                'error' => $e->getMessage(),
-            ], 500);
+                'success' => false,
+                'message' => 'Gagal mengambil notifikasi',
+                'data' => [],
+                'total_row' => 0,
+            ], 500)->header('Cache-Control', 'no-store');
         }
     }
 
+    /**
+     * TAMBAH: Method untuk inject status live voucher ke notifikasi
+     */
+    private function injectLiveVoucherStatus($items)
+    {
+        try {
+            if ($items->isEmpty()) {
+                return $items;
+            }
+
+            Log::info('🔍 Starting live voucher status injection', [
+                'total_items' => $items->count()
+            ]);
+
+            // Ambil semua voucher_id dari notifikasi type=voucher
+            $voucherIds = $items->where('type', 'voucher')
+                ->where('target_type', 'voucher')
+                ->pluck('target_id')
+                ->filter()
+                ->unique()
+                ->values();
+
+            Log::info('🎯 Found voucher notifications', [
+                'voucher_ids' => $voucherIds->toArray()
+            ]);
+
+            if ($voucherIds->isEmpty()) {
+                Log::info('✅ No voucher notifications found, skipping injection');
+                return $items;
+            }
+
+            // PERBAIKAN: Hanya ambil kolom yang pasti ada
+            try {
+                $vouchers = Voucher::whereIn('id', $voucherIds)
+                    ->select(['id', 'valid_until', 'stock', 'name']) // HAPUS 'status' yang tidak ada
+                    ->get()
+                    ->keyBy('id');
+
+                Log::info('📊 Vouchers fetched from database', [
+                    'requested_ids' => $voucherIds->toArray(),
+                    'found_vouchers' => $vouchers->keys()->toArray()
+                ]);
+            } catch (\Throwable $e) {
+                Log::error('❌ Failed to fetch vouchers', [
+                    'error' => $e->getMessage(),
+                    'voucher_ids' => $voucherIds->toArray()
+                ]);
+                // Return original items jika gagal fetch voucher
+                return $items;
+            }
+
+            // Inject field live_* ke setiap notifikasi voucher
+            $items = $items->map(function ($notification) use ($vouchers) {
+                try {
+                    // Hanya proses notifikasi voucher
+                    if ($notification->type !== 'voucher' || 
+                        $notification->target_type !== 'voucher' || 
+                        !$notification->target_id) {
+                        return $notification;
+                    }
+
+                    // Ambil data voucher live
+                    $voucher = $vouchers->get($notification->target_id);
+                    if (!$voucher) {
+                        // Voucher sudah dihapus
+                        $notification->live_expired = true;
+                        $notification->live_available = false;
+                        $notification->live_stock = 0;
+                        $notification->live_status = 'deleted';
+                        return $notification;
+                    }
+
+                    // Cek status kadaluwarsa
+                    $validUntil = $voucher->valid_until;
+                    $expired = $validUntil ? now()->greaterThan($validUntil) : false;
+
+                    // Cek stok
+                    $stock = $voucher->stock ?? 0;
+                    $outOfStock = !is_null($voucher->stock) && $stock <= 0;
+
+                    // PERBAIKAN: Default status 'active' karena kolom status tidak ada
+                    $status = 'active'; // Semua voucher yang ada dianggap aktif
+                    $inactive = false;  // Tidak ada status inactive jika kolom tidak ada
+
+                    // Inject field live ke notifikasi
+                    $notification->live_valid_until = $validUntil;
+                    $notification->live_expired = $expired;
+                    $notification->live_stock = $stock;
+                    $notification->live_status = $status;
+                    $notification->live_out_of_stock = $outOfStock;
+                    $notification->live_inactive = $inactive;
+                    $notification->live_available = !$expired && !$outOfStock && !$inactive;
+                    $notification->live_voucher_name = $voucher->name;
+
+                    // Log untuk debugging hanya jika tidak tersedia
+                    if ($expired || $outOfStock) {
+                        Log::info('🔴 Voucher not available in live status', [
+                            'notification_id' => $notification->id,
+                            'voucher_id' => $notification->target_id,
+                            'expired' => $expired,
+                            'out_of_stock' => $outOfStock,
+                            'valid_until' => $validUntil,
+                            'stock' => $stock,
+                        ]);
+                    }
+
+                    return $notification;
+                } catch (\Throwable $e) {
+                    Log::error('❌ Error processing notification for live status', [
+                        'notification_id' => $notification->id ?? 'unknown',
+                        'error' => $e->getMessage()
+                    ]);
+                    return $notification;
+                }
+            });
+
+            Log::info('✅ Injected live voucher status successfully', [
+                'total_notifications' => $items->count(),
+                'voucher_notifications' => $voucherIds->count(),
+                'vouchers_found' => $vouchers->count(),
+            ]);
+
+            return $items;
+
+        } catch (\Throwable $e) {
+            Log::error('❌ Critical error in injectLiveVoucherStatus', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            // Return original items untuk mencegah crash
+            return $items;
+        }
+    }
 
     /**
      * POST /api/notification/{id}/read

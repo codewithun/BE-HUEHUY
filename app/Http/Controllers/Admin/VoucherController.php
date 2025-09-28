@@ -1478,50 +1478,62 @@ class VoucherController extends Controller
                 return response()->json(['success' => false, 'message' => 'User tidak terautentikasi'], 401);
             }
 
-            $q = VoucherValidation::query()
-                // eager load relasi tetap boleh, tapi pastikan kita SELECT voucher_validations.* agar modelnya ter-hydrate
-                ->with(['user:id,name', 'voucher:id,name,image']);
+            $hasItemIdCol = \Illuminate\Support\Facades\Schema::hasColumn('voucher_validations', 'voucher_item_id');
 
-            // selalu kualifikasikan kolom validasi
-            $q->select('voucher_validations.*');
+            $q = \App\Models\VoucherValidation::query()
+                ->with(['user:id,name', 'voucher:id,name,image'])
+                ->select('voucher_validations.*');
 
-            if (\Illuminate\Support\Facades\Schema::hasColumn('voucher_validations', 'voucher_item_id')) {
-                // ✅ Skema baru: join by voucher_item_id, TIDAK menduplikasi alias voucher_item_id
+            if ($hasItemIdCol) {
+                // ✅ Skema baru: aman & 1:1 ke item
                 $q->leftJoin('voucher_items as vi', 'vi.id', '=', 'voucher_validations.voucher_item_id')
-                    ->addSelect(DB::raw('vi.user_id as owner_user_id'));
+                    ->addSelect(DB::raw('vi.user_id as owner_user_id'))
+                    ->where(function ($w) use ($userId) {
+                        $w->where('voucher_validations.user_id', $userId) // validator (tenant)
+                            ->orWhere('vi.user_id', $userId);               // owner (end-user)
+                    });
             } else {
-                // ⚠️ Skema lama: tanpa voucher_item_id, jangan join di endpoint user (biar aman)
-                // Kalau tetap mau owner, bisa join ketat code+voucher_id, tapi RISKY untuk duplikasi.
-                // Disini kita skip, FE akan tetap tampil dengan validator & voucher.
+                // ⚠️ Skema lama: join ketat + groupBy untuk cegah duplikasi
+                $q->leftJoin('voucher_items as vi', function ($j) {
+                    $j->on('vi.code', '=', 'voucher_validations.code')
+                        ->on('vi.voucher_id', '=', 'voucher_validations.voucher_id');
+                })
+                    ->addSelect(DB::raw('MAX(vi.user_id) as owner_user_id'))
+                    ->where(function ($w) use ($userId) {
+                        $w->where('voucher_validations.user_id', $userId) // validator (tenant)
+                            ->orWhere('vi.user_id', $userId);               // owner (end-user)
+                    })
+                    ->groupBy('voucher_validations.id');
             }
 
-            $rows = $q->orderByDesc('voucher_validations.validated_at')->get()
+            $rows = $q->orderByDesc('voucher_validations.validated_at')
+                ->get()
                 ->map(function ($v) {
-                    // owner (kalau skema baru)
                     $owner = null;
                     if (isset($v->owner_user_id) && $v->owner_user_id) {
                         $owner = \App\Models\User::select('id', 'name')->find($v->owner_user_id);
                     }
+
                     return [
-                        'id'               => $v->id,
-                        'code'             => $v->code,
-                        'validated_at'     => $v->validated_at,
-                        'user'             => $v->user,     // validator (tenant)
-                        'voucher'          => $v->voucher,
-                        'owner'            => $owner,       // pemilik voucher_item (kalau ada)
-                        'voucher_item_id'  => \Illuminate\Support\Facades\Schema::hasColumn('voucher_validations', 'voucher_item_id')
-                            ? ($v->voucher_item_id ?? null)
-                            : null,
+                        'id'              => $v->id,
+                        'code'            => $v->code,
+                        'validated_at'    => $v->validated_at,
+                        'user'            => $v->user,     // validator (tenant)
+                        'voucher'         => $v->voucher,
+                        'owner'           => $owner,       // pemilik item (end-user)
+                        'voucher_item_id' => $v->voucher_item_id ?? null, // hanya terisi di skema baru
                     ];
                 });
 
-            // FE kamu sudah support bentuk { data: [...] }
             return response()->json(['data' => $rows]);
         } catch (\Throwable $e) {
             Log::error("Error in userValidationHistory (voucher): " . $e->getMessage(), [
                 'trace' => $e->getTraceAsString(),
             ]);
-            return response()->json(['success' => false, 'message' => 'Gagal mengambil riwayat validasi: ' . $e->getMessage()], 500);
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengambil riwayat validasi: ' . $e->getMessage()
+            ], 500);
         }
     }
 }

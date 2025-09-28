@@ -1478,37 +1478,49 @@ class VoucherController extends Controller
                 return response()->json(['success' => false, 'message' => 'User tidak terautentikasi'], 401);
             }
 
-            $rows = VoucherValidation::query()
-                ->with(['user:id,name', 'voucher:id,name,image']) // validator & voucher
-                ->when(Schema::hasColumn('voucher_validations', 'voucher_item_id'), function ($q) {
-                    $q->leftJoin('voucher_items as vi', 'vi.id', '=', 'voucher_validations.voucher_item_id')
-                        ->addSelect([
-                            'voucher_validations.*',
-                            DB::raw('vi.id as voucher_item_id'),
-                            DB::raw('vi.user_id as owner_user_id'),
-                        ]);
-                })
-                ->orderByDesc('validated_at')
-                ->get()
+            $q = VoucherValidation::query()
+                // eager load relasi tetap boleh, tapi pastikan kita SELECT voucher_validations.* agar modelnya ter-hydrate
+                ->with(['user:id,name', 'voucher:id,name,image']);
+
+            // selalu kualifikasikan kolom validasi
+            $q->select('voucher_validations.*');
+
+            if (\Illuminate\Support\Facades\Schema::hasColumn('voucher_validations', 'voucher_item_id')) {
+                // ✅ Skema baru: join by voucher_item_id, TIDAK menduplikasi alias voucher_item_id
+                $q->leftJoin('voucher_items as vi', 'vi.id', '=', 'voucher_validations.voucher_item_id')
+                    ->addSelect(DB::raw('vi.user_id as owner_user_id'));
+            } else {
+                // ⚠️ Skema lama: tanpa voucher_item_id, jangan join di endpoint user (biar aman)
+                // Kalau tetap mau owner, bisa join ketat code+voucher_id, tapi RISKY untuk duplikasi.
+                // Disini kita skip, FE akan tetap tampil dengan validator & voucher.
+            }
+
+            $rows = $q->orderByDesc('voucher_validations.validated_at')->get()
                 ->map(function ($v) {
-                    // bentuk response FE-mu: isi owner dari vi
+                    // owner (kalau skema baru)
                     $owner = null;
-                    if (isset($v->owner_user_id)) {
+                    if (isset($v->owner_user_id) && $v->owner_user_id) {
                         $owner = \App\Models\User::select('id', 'name')->find($v->owner_user_id);
                     }
                     return [
-                        'id'             => $v->id,
-                        'code'           => $v->code,
-                        'validated_at'   => $v->validated_at,
-                        'user'           => $v->user,       // validator (tenant)
-                        'voucher'        => $v->voucher,
-                        'owner'          => $owner,         // pemilik voucher_item
-                        'voucher_item_id' => $v->voucher_item_id ?? null,
+                        'id'               => $v->id,
+                        'code'             => $v->code,
+                        'validated_at'     => $v->validated_at,
+                        'user'             => $v->user,     // validator (tenant)
+                        'voucher'          => $v->voucher,
+                        'owner'            => $owner,       // pemilik voucher_item (kalau ada)
+                        'voucher_item_id'  => \Illuminate\Support\Facades\Schema::hasColumn('voucher_validations', 'voucher_item_id')
+                            ? ($v->voucher_item_id ?? null)
+                            : null,
                     ];
                 });
+
+            // FE kamu sudah support bentuk { data: [...] }
             return response()->json(['data' => $rows]);
         } catch (\Throwable $e) {
-            Log::error("Error in userValidationHistory (voucher): " . $e->getMessage());
+            Log::error("Error in userValidationHistory (voucher): " . $e->getMessage(), [
+                'trace' => $e->getTraceAsString(),
+            ]);
             return response()->json(['success' => false, 'message' => 'Gagal mengambil riwayat validasi: ' . $e->getMessage()], 500);
         }
     }

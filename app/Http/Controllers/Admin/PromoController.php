@@ -999,48 +999,31 @@ class PromoController extends Controller
 
             $promo = $item->promo;
         } 
-        // 2) Jika tidak ada item_id, cari berdasarkan kode dengan logika yang aman
+        // 2) Jika tidak ada item_id, cari berdasarkan kode dengan logika yang sederhana
         else {
-            // Pertama cari apakah ada PromoItem dengan kode tersebut
-            $potentialItems = \App\Models\PromoItem::with(['promo', 'user'])
-                ->where('code', $code) // Exact match dulu
-                ->orderBy('created_at', 'asc') // FIFO - yang pertama dibuat dapat prioritas
-                ->get();
+            // PERBAIKAN: Untuk promo dengan validasi kode unik, setiap user harus punya PromoItem sendiri
+            // Jadi pertama cek apakah user yang login sudah punya item dengan kode ini
+            $userOwnItem = \App\Models\PromoItem::with(['promo', 'user'])
+                ->where('code', $code)
+                ->where('user_id', $user->id) // item milik user yang sedang login
+                ->first();
 
-            // PERBAIKAN: Prioritaskan item milik user yang sedang login dulu
-            if ($potentialItems->count() > 0) {
-                // Cari item milik user yang sedang login terlebih dahulu
-                $userOwnItem = $potentialItems->where('user_id', $user->id)->first();
-                
-                if ($userOwnItem) {
-                    $item = $userOwnItem;
-                }
-                // Jika ada owner hint, prioritaskan item milik owner tersebut
-                else if ($ownerHint && $ownerHint != $user->id) {
-                    $item = $potentialItems->where('user_id', $ownerHint)->first();
-                }
-                // Jika tidak ada item milik user login dan tidak ada owner hint,
-                // ambil yang pertama (FIFO)
-                else {
-                    $item = $potentialItems->first();
-                }
-            }
-
-            // Jika masih tidak ada item, cari di master promo
-            if (!$item) {
+            if ($userOwnItem) {
+                // User sudah punya item dengan kode ini, gunakan item tersebut
+                $item = $userOwnItem;
+                $promo = $item->promo;
+            } else {
+                // User belum punya item dengan kode ini
+                // Cek apakah ada master promo dengan kode tersebut
                 $promo = \App\Models\Promo::where('code', $code)->first();
                 
                 if (!$promo) {
                     return response()->json(['success' => false, 'message' => 'Promo dengan kode tersebut tidak ditemukan'], 404);
                 }
 
-                // PERBAIKAN: Jika tidak ada ownerHint, gunakan user yang sedang login sebagai owner
-                // Ini untuk skenario user validation (bukan tenant validation)
-                if (!$ownerHint) {
-                    $ownerHint = $user->id; // gunakan user yang sedang login
-                }
-            } else {
-                $promo = $item->promo;
+                // Set ownerHint ke user yang sedang login untuk membuat item baru nanti
+                $ownerHint = $user->id;
+                $item = null; // akan dibuat di createAndValidateNewItem
             }
         }
 

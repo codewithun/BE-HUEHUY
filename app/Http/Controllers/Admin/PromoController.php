@@ -1220,11 +1220,18 @@ class PromoController extends Controller
                     }
                 }
 
-                // Generate kode unik untuk table promo_items
-                $base = $promo->code ?? $enteredCode; // mis. "waduh"
-                $uniqueCode = $base . '-' . $ownerHint; // mis. "waduh-35"
-                while (\App\Models\PromoItem::where('code', $uniqueCode)->exists()) {
-                    $uniqueCode = $base . '-' . strtoupper(Str::random(4));
+                // Generate kode untuk table promo_items
+                $base = $promo->code ?? $enteredCode; // "cobacoba"
+                
+                // 🔧 PERBAIKAN: Untuk promo manual validation, semua user pakai kode master yang sama
+                if ($promo->validation_type === 'manual') {
+                    $uniqueCode = $base; // Semua user pakai kode master "cobacoba"
+                } else {
+                    // Untuk promo auto validation, tetap generate kode unik per user
+                    $uniqueCode = $base . '-' . $ownerHint; // "cobacoba-34", "cobacoba-35"
+                    while (\App\Models\PromoItem::where('code', $uniqueCode)->exists()) {
+                        $uniqueCode = $base . '-' . strtoupper(Str::random(4));
+                    }
                 }
 
                 $item = \App\Models\PromoItem::create([

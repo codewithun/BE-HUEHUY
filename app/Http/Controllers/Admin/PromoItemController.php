@@ -142,6 +142,16 @@ class PromoItemController extends Controller
                 }
             } elseif ($isClaimAction && $authUserId) {
                 // treat as a claim action coming from FE (e.g. { claim: true })
+                // Kurangi stok promo saat di-claim (reserved)
+                if ($promo && !is_null($promo->stock)) {
+                    $affected = Promo::where('id', $promo->id)
+                        ->where('stock', '>', 0)
+                        ->decrement('stock');
+
+                    if ($affected === 0) {
+                        return ['ok' => false, 'reason' => 'Stok promo habis'];
+                    }
+                }
                 $data['status'] = 'reserved';
                 $data['reserved_at'] = Carbon::now();
                 $data['user_id'] = $authUserId;
@@ -253,7 +263,8 @@ class PromoItemController extends Controller
         $promo = Promo::find($item->promo_id);
 
         $result = DB::transaction(function () use ($request, $item, $promo) {
-            if ($promo && !is_null($promo->stock)) {
+            // Only reduce stock if the item wasn't already reserved (to prevent double reduction)
+            if ($promo && !is_null($promo->stock) && $item->status !== 'reserved') {
                 $affected = Promo::where('id', $promo->id)
                     ->where('stock', '>', 0)
                     ->decrement('stock');

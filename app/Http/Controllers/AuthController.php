@@ -85,7 +85,6 @@ class AuthController extends Controller
                         $query->whereNotNull('corporate_id')
                               ->whereNotNull('role_id');
                     })
-                    ->whereIn('role_id', [3, 4, 5]) // Role corporate: 3=Admin Corporate, 4=Staff Corporate, 5=Manager Corporate
                     ->with(['corporate_user', 'corporate_user.role', 'corporate_user.corporate'])
                     ->first();
                 break;

@@ -57,6 +57,11 @@ Route::prefix('admin')->name('admin.')->group(function () {
 
     Route::apiResource('/users', UserController::class);
     Route::put('/users/{id}/update-point', [UserController::class, 'updatePoint']);
+    Route::put('/users/{id}/update-role', [UserController::class, 'updateRole']);
+    Route::post('/users/{id}/assign-to-corporate', [UserController::class, 'assignToCorporate']);
+    Route::delete('/users/{id}/remove-from-corporate', [UserController::class, 'removeFromCorporate']);
+    Route::get('/users/check-roles-structure', [UserController::class, 'checkRolesStructure']);
+    Route::post('/users/fix-corrupt-roles', [UserController::class, 'fixCorruptRoles']);
     Route::apiResource('/roles', RoleController::class);
 
     Route::apiResource('/articles', ArticleController::class);

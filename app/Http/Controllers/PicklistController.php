@@ -24,7 +24,6 @@ class PicklistController extends Controller
         } else {
             return Role::where('is_corporate', 0)->get(['id as value', 'name as label']);
         }
-        return Role::get(['id as value', 'name as label']);
     }
 
     public function cubeType()

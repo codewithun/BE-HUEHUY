@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Models\CorporateUser;
 use App\Models\Corporate;
+use App\Models\Role;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -61,7 +62,7 @@ class UserController extends Controller
             ? $model->selectable
             : ['*']; // fallback kalau properti selectable nggak ada
 
-        $query = User::with('role');
+        $query = User::with(['role', 'corporate_user', 'corporate_user.corporate', 'corporate_user.role']);
 
         // ==== Search bawaanmu =====
         if (filled($request->get("search"))) {
@@ -109,6 +110,12 @@ class UserController extends Controller
                     'role'  => [
                         'name' => optional($u->role)->name
                     ],
+                    'corporate_user' => $u->corporate_user ? [
+                        'corporate_id' => $u->corporate_user->corporate_id,
+                        'corporate_name' => optional($u->corporate_user->corporate)->name,
+                        'role_id' => $u->corporate_user->role_id,
+                        'corporate_role_name' => optional($u->corporate_user->role)->name
+                    ] : null,
                 ];
             });
 
@@ -138,7 +145,13 @@ class UserController extends Controller
                 'phone' => $u->phone,
                 'role'  => [
                     'name' => optional($u->role)->name
-                    ],
+                ],
+                'corporate_user' => $u->corporate_user ? [
+                    'corporate_id' => $u->corporate_user->corporate_id,
+                    'corporate_name' => optional($u->corporate_user->corporate)->name,
+                    'role_id' => $u->corporate_user->role_id,
+                    'corporate_role_name' => optional($u->corporate_user->role)->name
+                ] : null,
             ];
         });
 
@@ -161,13 +174,14 @@ class UserController extends Controller
 
         // ? Validate request
         $validation = $this->validation($request->all(), [
-            'role_id'     => 'required|numeric|exists:roles,id',
-            'name'        => 'required|string|max:100',
-            'email'       => 'required|email|unique:users,email',
-            'phone'       => 'nullable|string|max:100',
-            'password'    => 'required|string|min:8|max:50|confirmed',
-            'corporate_id'=> 'nullable|numeric|exists:corporates,id', // Tambahan untuk corporate user
-            'image'       => 'nullable',
+            'role_id'           => 'required|numeric|exists:roles,id,is_corporate,0', // Hanya role global
+            'corporate_role_id' => 'nullable|numeric|exists:roles,id,is_corporate,1', // Role corporate
+            'name'              => 'required|string|max:100',
+            'email'             => 'required|email|unique:users,email',
+            'phone'             => 'nullable|string|max:100',
+            'password'          => 'required|string|min:8|max:50|confirmed',
+            'corporate_id'      => 'nullable|numeric|exists:corporates,id',
+            'image'             => 'nullable',
         ]);
 
         if ($validation) return $validation;
@@ -223,40 +237,21 @@ class UserController extends Controller
             ], 500);
         }
 
-        // * TAMBAHAN: Auto-create CorporateUser for corporate roles (3, 4, 5)
-        if (in_array($request->role_id, [3, 4, 5])) {
+        // * TAMBAHAN: Create CorporateUser jika ada corporate_role_id
+        if ($request->corporate_role_id && $request->corporate_id) {
             try {
-                // Ambil corporate_id dari request atau default ke corporate pertama
-                $corporateId = $request->corporate_id;
-                
-                if (!$corporateId) {
-                    // Jika tidak ada corporate_id, ambil corporate pertama atau buat default
-                    $defaultCorporate = Corporate::first();
-                    if (!$defaultCorporate) {
-                        // Jika belum ada corporate, buat satu default
-                        $defaultCorporate = Corporate::create([
-                            'name' => 'Default Corporate',
-                            'description' => 'Default corporate untuk user mitra',
-                            'address' => 'Default Address',
-                            'phone' => '000000000'
-                        ]);
-                        Log::info('Created default corporate', ['corporate_id' => $defaultCorporate->id]);
-                    }
-                    $corporateId = $defaultCorporate->id;
-                }
-
-                // Buat CorporateUser
+                // Buat CorporateUser dengan role corporate yang benar
                 $corporateUser = new CorporateUser();
                 $corporateUser->user_id = $model->id;
-                $corporateUser->corporate_id = $corporateId;
-                $corporateUser->role_id = $request->role_id; // Role corporate
+                $corporateUser->corporate_id = $request->corporate_id;
+                $corporateUser->role_id = $request->corporate_role_id; // Gunakan corporate_role_id
                 $corporateUser->save();
 
                 Log::info('CorporateUser created successfully', [
                     'corporate_user_id' => $corporateUser->id,
                     'user_id' => $model->id,
-                    'corporate_id' => $corporateId,
-                    'role_id' => $request->role_id
+                    'corporate_id' => $request->corporate_id,
+                    'corporate_role_id' => $request->corporate_role_id
                 ]);
 
             } catch (\Throwable $th) {
@@ -274,7 +269,7 @@ class UserController extends Controller
         DB::commit();
 
         // Reload model dengan relations untuk response
-        $model->load(['role', 'corporate_user', 'corporate_user.corporate']);
+        $model->load(['role', 'corporate_user', 'corporate_user.corporate', 'corporate_user.role']);
 
         return response([
             "message" => "success",
@@ -294,17 +289,20 @@ class UserController extends Controller
 
         // ? Validate request
         $validation = $this->validation($request->all(), [
-            'name'     => 'nullable|string|max:100',
-            'email'    => 'nullable|email',
-            'phone'    => 'nullable|string|max:100',
-            'password' => 'nullable|string|min:8|max:50|confirmed',
-            'image'    => 'nullable',
+            'name'              => 'nullable|string|max:100',
+            'email'             => 'nullable|email|unique:users,email,' . $id,
+            'phone'             => 'nullable|string|max:100|unique:users,phone,' . $id,
+            'password'          => 'nullable|string|min:8|max:50|confirmed',
+            'role_id'           => 'prohibited', // Larang ubah role di endpoint ini
+            'corporate_role_id' => 'prohibited', // Larang ubah corporate role di endpoint ini
+            'image'             => 'nullable',
         ]);
 
         if ($validation) return $validation;
 
-        // ? Dump data
-        $model = $this->dump_field($request->all(), $model);
+        // ? Buang role_id dan corporate_role_id dari payload untuk double protection
+        $safe = collect($request->all())->except(['role_id', 'corporate_role_id'])->all();
+        $model = $this->dump_field($safe, $model);
 
         // * Password Encryption
         if ($request->password) {
@@ -332,10 +330,341 @@ class UserController extends Controller
 
         DB::commit();
 
+        // Load relations untuk response
+        $model->load(['role', 'corporate_user', 'corporate_user.corporate', 'corporate_user.role']);
+
         return response([
             "message" => "success",
             "data"    => $model
         ]);
+    }
+
+    // ============================================>
+    // ## Update user role (dedicated endpoint)
+    // ============================================>
+    public function updateRole(Request $request, string $id)
+    {
+        // ? Validate request
+        $validation = $this->validation($request->all(), [
+            'role_id' => 'required|numeric|exists:roles,id,is_corporate,0', // Hanya role global
+        ]);
+
+        if ($validation) return $validation;
+
+        // ? Initial
+        DB::beginTransaction();
+        $model = User::findOrFail($id);
+        $oldRoleId = $model->role_id;
+
+        // ? Update role
+        $model->role_id = $request->role_id;
+
+        // ? Executing
+        try {
+            $model->save();
+            
+            Log::info('Admin updated user role', [
+                'user_id' => $model->id,
+                'old_role_id' => $oldRoleId,
+                'new_role_id' => $request->role_id,
+                'admin_id' => auth()->id()
+            ]);
+            
+        } catch (\Throwable $th) {
+            DB::rollBack();
+            return response([
+                "message" => "Error: server side having problem!",
+            ], 500);
+        }
+
+        DB::commit();
+
+        // Load role relation untuk response
+        $model->load('role');
+
+        return response([
+            "message" => "User role updated successfully",
+            "data" => $model
+        ]);
+    }
+
+    // ============================================>
+    // ## Assign user to corporate
+    // ============================================>
+    public function assignToCorporate(Request $request, string $id)
+    {
+        // ? Validate request
+        $validation = $this->validation($request->all(), [
+            'corporate_id'      => 'required|numeric|exists:corporates,id',
+            'corporate_role_id' => 'required|numeric|exists:roles,id,is_corporate,1', // Role corporate
+        ]);
+
+        if ($validation) return $validation;
+
+        // ? Initial
+        DB::beginTransaction();
+        $user = User::findOrFail($id);
+
+        // Check if user already assigned to this corporate
+        $existingCorporateUser = CorporateUser::where('user_id', $user->id)
+            ->where('corporate_id', $request->corporate_id)
+            ->first();
+
+        if ($existingCorporateUser) {
+            return response([
+                "message" => "Error: User already assigned to this corporate!",
+            ], 422);
+        }
+
+        // ? Create CorporateUser
+        try {
+            $corporateUser = new CorporateUser();
+            $corporateUser->user_id = $user->id;
+            $corporateUser->corporate_id = $request->corporate_id;
+            $corporateUser->role_id = $request->corporate_role_id;
+            $corporateUser->save();
+
+            Log::info('User assigned to corporate successfully', [
+                'corporate_user_id' => $corporateUser->id,
+                'user_id' => $user->id,
+                'corporate_id' => $request->corporate_id,
+                'corporate_role_id' => $request->corporate_role_id,
+                'admin_id' => auth()->id()
+            ]);
+            
+        } catch (\Throwable $th) {
+            DB::rollBack();
+            Log::error('Failed to assign user to corporate', [
+                'error' => $th->getMessage(),
+                'user_id' => $user->id
+            ]);
+            return response([
+                "message" => "Error: server side having problem!",
+            ], 500);
+        }
+
+        DB::commit();
+
+        // Load relations untuk response
+        $user->load(['role', 'corporate_user', 'corporate_user.corporate', 'corporate_user.role']);
+
+        return response([
+            "message" => "User assigned to corporate successfully",
+            "data" => $user
+        ]);
+    }
+
+    // ============================================>
+    // ## Remove user from corporate
+    // ============================================>
+    public function removeFromCorporate(Request $request, string $id)
+    {
+        // ? Validate request
+        $validation = $this->validation($request->all(), [
+            'corporate_id' => 'required|numeric|exists:corporates,id',
+        ]);
+
+        if ($validation) return $validation;
+
+        // ? Initial
+        DB::beginTransaction();
+        $user = User::findOrFail($id);
+
+        // Find corporate user
+        $corporateUser = CorporateUser::where('user_id', $user->id)
+            ->where('corporate_id', $request->corporate_id)
+            ->first();
+
+        if (!$corporateUser) {
+            return response([
+                "message" => "Error: User is not assigned to this corporate!",
+            ], 422);
+        }
+
+        // ? Remove CorporateUser
+        try {
+            $corporateUser->delete();
+
+            Log::info('User removed from corporate successfully', [
+                'user_id' => $user->id,
+                'corporate_id' => $request->corporate_id,
+                'admin_id' => auth()->id()
+            ]);
+            
+        } catch (\Throwable $th) {
+            DB::rollBack();
+            Log::error('Failed to remove user from corporate', [
+                'error' => $th->getMessage(),
+                'user_id' => $user->id
+            ]);
+            return response([
+                "message" => "Error: server side having problem!",
+            ], 500);
+        }
+
+        DB::commit();
+
+        return response([
+            "message" => "User removed from corporate successfully",
+            "data" => $user
+        ]);
+    }
+
+    // ============================================>
+    // ## Fix sistem roles dan data corrupt
+    // ============================================>
+    public function fixCorruptRoles(Request $request)
+    {
+        DB::beginTransaction();
+        
+        try {
+            // ✅ STEP 1: Setup correct roles data structure
+            $correctRoles = [
+                // Role Global (is_corporate = 0)
+                ['name' => 'Admin', 'is_corporate' => 0, 'slug' => 'admin'],
+                ['name' => 'User', 'is_corporate' => 0, 'slug' => 'user'],
+                ['name' => 'Manager Tenant', 'is_corporate' => 0, 'slug' => 'manager_tenant'],
+                
+                // Role Corporate (is_corporate = 1)  
+                ['name' => 'Kepala Mitra', 'is_corporate' => 1, 'slug' => 'kepala_mitra'],
+                ['name' => 'Manager Mitra', 'is_corporate' => 1, 'slug' => 'manager_mitra'],
+                ['name' => 'Staff Mitra', 'is_corporate' => 1, 'slug' => 'staff_mitra'],
+            ];
+
+            // ✅ STEP 2: Update/Insert correct roles
+            foreach ($correctRoles as $roleData) {
+                $existing = Role::where('name', $roleData['name'])->first();
+                if ($existing) {
+                    // Update jika sudah ada tapi wrong category
+                    $existing->update([
+                        'is_corporate' => $roleData['is_corporate'],
+                        'slug' => $roleData['slug'] ?? strtolower(str_replace(' ', '_', $roleData['name']))
+                    ]);
+                    Log::info('Updated role', ['role' => $roleData['name'], 'is_corporate' => $roleData['is_corporate']]);
+                } else {
+                    // Create jika belum ada
+                    Role::create([
+                        'name' => $roleData['name'],
+                        'is_corporate' => $roleData['is_corporate'],
+                        'slug' => $roleData['slug'] ?? strtolower(str_replace(' ', '_', $roleData['name']))
+                    ]);
+                    Log::info('Created role', ['role' => $roleData['name'], 'is_corporate' => $roleData['is_corporate']]);
+                }
+            }
+
+            // ✅ STEP 3: Fix users with corrupt role_id (corporate role di global field)
+            $corruptUsers = User::join('roles', 'roles.id', '=', 'users.role_id')
+                ->where('roles.is_corporate', 1)
+                ->select('users.id', 'users.email', 'users.role_id', 'roles.name as role_name')
+                ->get();
+
+            $fixedCount = 0;
+            $results = [];
+
+            foreach ($corruptUsers as $user) {
+                // Reset ke role global default (User)
+                $defaultGlobalRole = Role::where('is_corporate', 0)
+                    ->where('name', 'User')
+                    ->first();
+                
+                if (!$defaultGlobalRole) {
+                    // Fallback ke role global pertama
+                    $defaultGlobalRole = Role::where('is_corporate', 0)->first();
+                }
+
+                if ($defaultGlobalRole) {
+                    User::where('id', $user->id)->update([
+                        'role_id' => $defaultGlobalRole->id
+                    ]);
+                    
+                    $fixedCount++;
+                    $results[] = [
+                        'user_id' => $user->id,
+                        'email' => $user->email,
+                        'old_role_id' => $user->role_id,
+                        'old_role_name' => $user->role_name,
+                        'new_role_id' => $defaultGlobalRole->id,
+                        'new_role_name' => $defaultGlobalRole->name
+                    ];
+                    
+                    Log::info('Fixed user role', [
+                        'user_id' => $user->id,
+                        'email' => $user->email,
+                        'from' => $user->role_name,
+                        'to' => $defaultGlobalRole->name
+                    ]);
+                }
+            }
+
+            DB::commit();
+
+            return response([
+                "message" => "Successfully fixed role system and {$fixedCount} corrupt user roles",
+                "data" => [
+                    "roles_structure_fixed" => true,
+                    "corrupt_users_fixed" => $fixedCount,
+                    "fixed_users" => $results,
+                    "role_structure" => [
+                        "global_roles" => ["Admin", "User", "Manager Tenant"],
+                        "corporate_roles" => ["Kepala Mitra", "Manager Mitra", "Staff Mitra"]
+                    ]
+                ]
+            ]);
+
+        } catch (\Throwable $th) {
+            DB::rollBack();
+            Log::error('Failed to fix role system', [
+                'error' => $th->getMessage(),
+                'trace' => $th->getTraceAsString()
+            ]);
+            
+            return response([
+                "message" => "Error: Failed to fix role system!",
+                "error" => $th->getMessage()
+            ], 500);
+        }
+    }
+
+    // ============================================>
+    // ## Check current roles structure  
+    // ============================================>
+    public function checkRolesStructure(Request $request)
+    {
+        try {
+            $globalRoles = Role::where('is_corporate', 0)
+                ->orderBy('name', 'asc')
+                ->get(['id', 'name', 'slug', 'is_corporate']);
+
+            $corporateRoles = Role::where('is_corporate', 1)
+                ->orderBy('name', 'asc')
+                ->get(['id', 'name', 'slug', 'is_corporate']);
+
+            // Check corrupt users 
+            $corruptUsers = User::join('roles', 'roles.id', '=', 'users.role_id')
+                ->where('roles.is_corporate', 1)
+                ->select('users.id', 'users.email', 'users.role_id', 'roles.name as role_name')
+                ->get();
+
+            return response([
+                "message" => "Current roles structure",
+                "data" => [
+                    "global_roles" => $globalRoles,
+                    "corporate_roles" => $corporateRoles,
+                    "corrupt_users_count" => $corruptUsers->count(),
+                    "corrupt_users" => $corruptUsers->take(5), // Show first 5
+                    "structure_correct" => [
+                        "should_be_global" => ["Admin", "User", "Manager Tenant"],
+                        "should_be_corporate" => ["Kepala Mitra", "Manager Mitra", "Staff Mitra"]
+                    ]
+                ]
+            ]);
+
+        } catch (\Throwable $th) {
+            return response([
+                "message" => "Error checking roles structure",
+                "error" => $th->getMessage()
+            ], 500);
+        }
     }
 
     // ===============================================>

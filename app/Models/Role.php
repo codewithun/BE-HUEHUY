@@ -14,6 +14,7 @@ class Role extends Model
     // =========================>
     protected $fillable = [
         'name',
+        'slug',
         'is_corporate'
     ];
 
@@ -30,6 +31,7 @@ class Role extends Model
     public $selectable = [
         'roles.id',
         'roles.name',
+        'roles.slug',
         'roles.is_corporate',
     ];
 }

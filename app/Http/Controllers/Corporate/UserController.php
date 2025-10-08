@@ -81,7 +81,7 @@ class UserController extends Controller
         // ? Validate request
         $validation = $this->validation($request->all(), [
             'email' => 'required|string|email|max:255',
-            'role_id' => 'nullable|numeric'
+            'corporate_role_id' => 'required|numeric'
         ]);
 
         if ($validation) return $validation;
@@ -121,7 +121,7 @@ class UserController extends Controller
         }
 
         // * Validate role params is role for corporate
-        $role = Role::where('id', $request->role_id)
+        $role = Role::where('id', $request->corporate_role_id)
             ->where('is_corporate', 1)
             ->first();
 
@@ -129,7 +129,7 @@ class UserController extends Controller
             return response([
                 "message" => "Error: Unprocessable Entity!",
                 "errors" => [
-                    "role_id" => [
+                    "corporate_role_id" => [
                         "The selected role is not for corporate"
                     ]
                 ]
@@ -140,18 +140,16 @@ class UserController extends Controller
         DB::beginTransaction();
         $model = new CorporateUser();
 
-        // ? Dump data
-        $model = $this->dump_field($request->all(), $model);
+        // ? Manual assignment - TIDAK menggunakan dump_field untuk menghindari overwrite field yang tidak diinginkan
         $model->user_id = $user->id;
         $model->corporate_id = $credentialUserCorporate->corporate_id;
+        $model->role_id = $request->corporate_role_id; // Role corporate disimpan di corporate_users
 
         // ? Executing
         try {
             $model->save();
             
-            // * Update user role_id untuk sinkronisasi
-            $user->role_id = $role->id;
-            $user->save();
+            // Tidak menyentuh users.role_id. Role corporate hanya di corporate_users.
             
         } catch (\Throwable $th) {
             DB::rollBack();
@@ -175,7 +173,7 @@ class UserController extends Controller
     {
         // ? Validate request
         $validation = $this->validation($request->all(), [
-            'role_id' => 'required|numeric',
+            'corporate_role_id' => 'required|numeric',
             'name' => 'required|string|max:100',
             'email' => 'required|email',
             'phone' => 'nullable|string|max:100|unique:users,phone',
@@ -188,7 +186,7 @@ class UserController extends Controller
         $credentialUserCorporate = Auth::user()->corporate_user;
 
         // * Validate role params is role for corporate
-        $role = Role::where('id', $request->role_id)
+        $role = Role::where('id', $request->corporate_role_id)
             ->where('is_corporate', 1)
             ->first();
 
@@ -196,7 +194,7 @@ class UserController extends Controller
             return response([
                 "message" => "Error: Unprocessable Entity!",
                 "errors" => [
-                    "role_id" => [
+                    "corporate_role_id" => [
                         "The selected role is not for corporate"
                     ]
                 ]
@@ -207,10 +205,15 @@ class UserController extends Controller
         DB::beginTransaction();
         $model = new User();
         
-        // ? Dump data
-        $model = $this->dump_field($request->all(), $model);
+        // ? Manual assignment untuk field yang aman - TIDAK menggunakan dump_field untuk menghindari overwrite role_id
+        $model->name = $request->name;
+        $model->email = $request->email;
+        $model->phone = $request->phone;
         $model->verified_at = Carbon::now();
-        $model->role_id = $role->id; // * Set role_id di user juga
+        
+        // Set role global ke default aman (bukan role corporate)
+        $defaultGlobalRole = Role::where('is_corporate', 0)->where('slug', 'user')->value('id');
+        $model->role_id = $defaultGlobalRole ?: 1; // fallback ke ID 1 jika tidak ada role 'user'
 
         // * Password Encryption
         if ($request->password) {
@@ -238,7 +241,7 @@ class UserController extends Controller
             $corporateUser = new CorporateUser();
             $corporateUser->user_id = $model->id;
             $corporateUser->corporate_id = $credentialUserCorporate->corporate_id;
-            $corporateUser->role_id = $role->id;
+            $corporateUser->role_id = $request->corporate_role_id; // Role corporate disimpan di corporate_users
             $corporateUser->save();
         } catch (\Throwable $th) {
             DB::rollBack();
@@ -267,56 +270,63 @@ class UserController extends Controller
 
         // ? Validate request
         $validation = $this->validation($request->all(), [
-            'role_id' => 'nullable|numeric'
+            'corporate_role_id' => 'nullable|numeric',
+            'name' => 'nullable|string|max:100',
+            'phone' => 'nullable|string|max:100'
         ]);
 
         if ($validation) return $validation;
 
         $credentialUserCorporate = Auth::user()->corporate_user;
 
-        // * Validate role params is role for corporate
-        $role = Role::where('id', $request->role_id)
-            ->where('is_corporate', 1)
-            ->first();
+        // * Validate role params is role for corporate (hanya jika ada corporate_role_id)
+        if ($request->corporate_role_id) {
+            $role = Role::where('id', $request->corporate_role_id)
+                ->where('is_corporate', 1)
+                ->first();
 
-        if (!$role) {
-            return response([
-                "message" => "Error: Unprocessable Entity!",
-                "errors" => [
-                    "role_id" => [
-                        "The selected role is not for corporate"
+            if (!$role) {
+                return response([
+                    "message" => "Error: Unprocessable Entity!",
+                    "errors" => [
+                        "corporate_role_id" => [
+                            "The selected role is not for corporate"
+                        ]
                     ]
-                ]
-            ], 422);
+                ], 422);
+            }
         }
 
-        // ? Dump data
-        $model = $this->dump_field($request->all(), $model);
-        $model->role_id = $role->id; // * Set role_id di user juga
-
-        // ? Executing
+        // Buang 'corporate_role_id' dari payload agar dump_field tidak menyentuh users.role_id
+        $safe = collect($request->all())->except(['corporate_role_id'])->all();
+        $model = $this->dump_field($safe, $model);
+        
+        // ? Update user data (tanpa role_id)
         try {
-            $model->save();
+            $model->save(); // hanya untuk field non-role (misal name/phone, kalau ada)
         } catch (\Throwable $th) {
             DB::rollBack();
             return response([
                 "message" => "Error: server side having problem!",
+                "description" => "Failed to update user"
             ], 500);
         }
 
-        // ? Update user corporate role
-        try {
-            CorporateUser::where('user_id', $model->id)
-                ->where('corporate_id', $credentialUserCorporate->corporate_id)
-                ->update([
-                    'role_id' => $role->id
-                ]);
-        } catch (\Throwable $th) {
-            DB::rollBack();
-            return response([
-                "message" => "Error: server side having problem!",
-                "description" => "Failed to update corporate user role"
-            ], 500);
+        // ? Update corporate user role (hanya di tabel corporate_users, jika ada corporate_role_id)
+        if ($request->corporate_role_id) {
+            try {
+                CorporateUser::where('user_id', $model->id)
+                    ->where('corporate_id', $credentialUserCorporate->corporate_id)
+                    ->update([
+                        'role_id' => $request->corporate_role_id
+                    ]);
+            } catch (\Throwable $th) {
+                DB::rollBack();
+                return response([
+                    "message" => "Error: server side having problem!",
+                    "description" => "Failed to update corporate user role"
+                ], 500);
+            }
         }
 
         DB::commit();

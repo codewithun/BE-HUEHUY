@@ -69,15 +69,15 @@ class User extends Authenticatable
     ];
 
     /**
-     * * Relation to `Role` model
+     * * Relasi ke Role
      */
     public function role() : BelongsTo
     {
-        return $this->belongsTo(Role::class);
+        return $this->belongsTo(Role::class, 'role_id', 'id');
     }
 
     /**
-     * * Relation to `CorporateUser` model
+     * * PENTING: Relasi ke CorporateUser
      */
     public function corporate_user() : HasOne
     {

@@ -286,7 +286,7 @@ class CorporateController extends Controller
         // ? Validate request
         $validation = $this->validation($request->all(), [
             'email' => 'required|string|email|max:255',
-            'role_id' => 'nullable|numeric'
+            'corporate_role_id' => 'required|numeric|exists:roles,id,is_corporate,1'
         ]);
 
         if ($validation) return $validation;
@@ -324,15 +324,15 @@ class CorporateController extends Controller
         }
 
         // * Validate role params is role for corporate
-        $role = Role::where('id', $request->role_id)
+        $corporateRole = Role::where('id', $request->corporate_role_id)
             ->where('is_corporate', 1)
             ->first();
 
-        if (!$role) {
+        if (!$corporateRole) {
             return response([
                 "message" => "Error: Unprocessable Entity!",
                 "errors" => [
-                    "role_id" => [
+                    "corporate_role_id" => [
                         "The selected role is not for corporate"
                     ]
                 ]
@@ -344,10 +344,14 @@ class CorporateController extends Controller
         // ? Create Corporate Member
         $corporateUser = new CorporateUser();
         $corporateUser->user_id = $user->id;
-        $corporateUser->role_id = $role->id;
+        $corporateUser->role_id = $corporateRole->id;
         $corporateUser->corporate_id = $id;
+        
         try {
             $corporateUser->save();
+            
+            // Note: Do NOT sync corporate role to users.role_id (global). Keep global role unchanged.
+            
         } catch (\Throwable $th) {
             DB::rollBack();
             return response([
@@ -371,7 +375,7 @@ class CorporateController extends Controller
     {
         // ? Validate request
         $validation = $this->validation($request->all(), [
-            'role_id' => 'required|numeric',
+            'corporate_role_id' => 'required|numeric|exists:roles,id,is_corporate,1', // Role corporate
             'name' => 'required|string|max:100',
             'email' => 'required|email|unique:users,email',
             'phone' => 'nullable|string|max:100|unique:users,phone',
@@ -381,17 +385,17 @@ class CorporateController extends Controller
 
         if ($validation) return $validation;
 
-        // * Validate role params is role for corporate
-        $role = Role::where('id', $request->role_id)
+        // * Validate corporate role params
+        $corporateRole = Role::where('id', $request->corporate_role_id)
             ->where('is_corporate', 1)
             ->first();
 
-        if (!$role) {
+        if (!$corporateRole) {
             return response([
                 "message" => "Error: Unprocessable Entity!",
                 "errors" => [
-                    "role_id" => [
-                        "The selected role is not for corporate"
+                    "corporate_role_id" => [
+                        "The selected corporate role is not valid"
                     ]
                 ]
             ], 422);
@@ -401,9 +405,17 @@ class CorporateController extends Controller
         DB::beginTransaction();
         $model = new User();
 
-        // ? Dump data
-        $model = $this->dump_field($request->all(), $model);
+        // ? Manual assignment untuk field yang aman
+        $model->name = $request->name;
+        $model->email = $request->email;
+        $model->phone = $request->phone;
         $model->verified_at = Carbon::now();
+        
+        // ✅ Set role global default (User) - TIDAK menggunakan role corporate
+        $defaultGlobalRole = Role::where('is_corporate', 0)
+            ->where('name', 'User')
+            ->first();
+        $model->role_id = $defaultGlobalRole ? $defaultGlobalRole->id : 1; // Fallback ke ID 1
 
         // * Password Encryption
         if ($request->password) {
@@ -431,7 +443,7 @@ class CorporateController extends Controller
             $corporateUser = new CorporateUser();
             $corporateUser->user_id = $model->id;
             $corporateUser->corporate_id = $id;
-            $corporateUser->role_id = $role->id;
+            $corporateUser->role_id = $corporateRole->id; // ✅ Role corporate ke table corporate_users
             $corporateUser->save();
         } catch (\Throwable $th) {
             DB::rollBack();
@@ -481,21 +493,21 @@ class CorporateController extends Controller
     {
         // ? Validate request
         $validation = $this->validation($request->all(), [
-            'role_id' => 'required|numeric',
+            'corporate_role_id' => 'required|numeric|exists:roles,id,is_corporate,1',
         ]);
 
         if ($validation) return $validation;
 
         // * Validate role params is role for corporate
-        $role = Role::where('id', $request->role_id)
+        $corporateRole = Role::where('id', $request->corporate_role_id)
             ->where('is_corporate', 1)
             ->first();
 
-        if (!$role) {
+        if (!$corporateRole) {
             return response([
                 "message" => "Error: Unprocessable Entity!",
                 "errors" => [
-                    "role_id" => [
+                    "corporate_role_id" => [
                         "The selected role is not for corporate"
                     ]
                 ]
@@ -509,28 +521,18 @@ class CorporateController extends Controller
             ->where('id', $corporateUserId)
             ->firstOrFail();
         
-        $model->role_id = $role->id;
+        $model->role_id = $corporateRole->id;
 
         // ? Executing
         try {
             $model->save();
+            // Note: Do NOT sync corporate role to users.role_id (global). Keep global role unchanged.
+                
         } catch (\Throwable $th) {
+            DB::rollBack();
             return response([
                 "message" => "Error: server side having problem!",
                 "description" => "Failed to update corporate user role"
-            ], 500);
-        }
-
-        // ? Update user role
-        try {
-            User::where('id', $model->user_id)
-                ->update([
-                    'role_id' => $role->id
-                ]);
-        } catch (\Throwable $th) {
-            return response([
-                "message" => "Error: server side having problem!",
-                "description" => "Failed to update user role"
             ], 500);
         }
 
@@ -542,4 +544,3 @@ class CorporateController extends Controller
         ]);
     }
 }
-        

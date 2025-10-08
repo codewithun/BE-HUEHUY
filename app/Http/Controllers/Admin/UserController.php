@@ -4,9 +4,12 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Models\CorporateUser;
+use App\Models\Corporate;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class UserController extends Controller
 {
@@ -151,14 +154,20 @@ class UserController extends Controller
     // =============================================>
     public function store(Request $request)
     {
+        Log::info('Admin UserController store called', [
+            'request_data' => $request->all(),
+            'content_type' => $request->header('Content-Type')
+        ]);
+
         // ? Validate request
         $validation = $this->validation($request->all(), [
-            'role_id'  => 'nullable|numeric|exists:roles,id',
-            'name'     => 'nullable|string|max:100',
-            'email'    => 'nullable|email',
-            'phone'    => 'nullable|string|max:100',
-            'password' => 'nullable|string|min:8|max:50|confirmed',
-            'image'    => 'nullable',
+            'role_id'     => 'required|numeric|exists:roles,id',
+            'name'        => 'required|string|max:100',
+            'email'       => 'required|email|unique:users,email',
+            'phone'       => 'nullable|string|max:100',
+            'password'    => 'required|string|min:8|max:50|confirmed',
+            'corporate_id'=> 'nullable|numeric|exists:corporates,id', // Tambahan untuk corporate user
+            'image'       => 'nullable',
         ]);
 
         if ($validation) return $validation;
@@ -167,9 +176,24 @@ class UserController extends Controller
         DB::beginTransaction();
         $model = new User();
 
-        // ? Dump data
-        $model = $this->dump_field($request->all(), $model);
+        // ? Manual assignment untuk field yang required
+        $model->name = $request->name;
+        $model->email = $request->email;
+        $model->phone = $request->phone;
+        $model->role_id = $request->role_id;
         $model->verified_at = Carbon::now();
+        $model->picture_source = null;
+
+        Log::info('Admin UserController before save', [
+            'model_data' => [
+                'name' => $model->name,
+                'email' => $model->email,
+                'phone' => $model->phone,
+                'role_id' => $model->role_id,
+                'verified_at' => $model->verified_at,
+                'picture_source' => $model->picture_source
+            ]
+        ]);
 
         // * Password Encryption
         if ($request->password) {
@@ -181,17 +205,76 @@ class UserController extends Controller
             $model->picture_source = $this->upload_file($request->file('image'), 'profile');
         }
 
-        // ? Executing
+        // ? Executing - Save User first
         try {
             $model->save();
+            Log::info('Admin UserController user created successfully', [
+                'user_id' => $model->id,
+                'user_email' => $model->email
+            ]);
         } catch (\Throwable $th) {
             DB::rollBack();
+            Log::error('Admin UserController user creation failed', [
+                'error' => $th->getMessage(),
+                'trace' => $th->getTraceAsString()
+            ]);
             return response([
                 "message" => "Error: server side having problem!",
             ], 500);
         }
 
+        // * TAMBAHAN: Auto-create CorporateUser for corporate roles (3, 4, 5)
+        if (in_array($request->role_id, [3, 4, 5])) {
+            try {
+                // Ambil corporate_id dari request atau default ke corporate pertama
+                $corporateId = $request->corporate_id;
+                
+                if (!$corporateId) {
+                    // Jika tidak ada corporate_id, ambil corporate pertama atau buat default
+                    $defaultCorporate = Corporate::first();
+                    if (!$defaultCorporate) {
+                        // Jika belum ada corporate, buat satu default
+                        $defaultCorporate = Corporate::create([
+                            'name' => 'Default Corporate',
+                            'description' => 'Default corporate untuk user mitra',
+                            'address' => 'Default Address',
+                            'phone' => '000000000'
+                        ]);
+                        Log::info('Created default corporate', ['corporate_id' => $defaultCorporate->id]);
+                    }
+                    $corporateId = $defaultCorporate->id;
+                }
+
+                // Buat CorporateUser
+                $corporateUser = new CorporateUser();
+                $corporateUser->user_id = $model->id;
+                $corporateUser->corporate_id = $corporateId;
+                $corporateUser->role_id = $request->role_id; // Role corporate
+                $corporateUser->save();
+
+                Log::info('CorporateUser created successfully', [
+                    'corporate_user_id' => $corporateUser->id,
+                    'user_id' => $model->id,
+                    'corporate_id' => $corporateId,
+                    'role_id' => $request->role_id
+                ]);
+
+            } catch (\Throwable $th) {
+                DB::rollBack();
+                Log::error('CorporateUser creation failed', [
+                    'error' => $th->getMessage(),
+                    'user_id' => $model->id
+                ]);
+                return response([
+                    "message" => "Error: Failed to create corporate user relationship!",
+                ], 500);
+            }
+        }
+
         DB::commit();
+
+        // Reload model dengan relations untuk response
+        $model->load(['role', 'corporate_user', 'corporate_user.corporate']);
 
         return response([
             "message" => "success",

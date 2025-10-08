@@ -28,6 +28,10 @@ Route::prefix('corporate')->name('corporate.')->group(function () {
     });
 
     Route::get('/dashboard/counter-data', [DashboardController::class, 'counterData']);
+    
+    // Corporate-specific account endpoint with full relations
+    Route::get('/account', [App\Http\Controllers\AuthController::class, 'corporateAccount']);
+    Route::get('/profile', [App\Http\Controllers\AuthController::class, 'corporateAccount']); // Alias untuk frontend
 
     Route::apiResource('/users', UserController::class);
     Route::post('/users-new', [UserController::class, 'createNew']);

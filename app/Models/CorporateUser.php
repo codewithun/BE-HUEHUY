@@ -33,6 +33,7 @@ class CorporateUser extends Model
         'corporate_users.user_id',
         'corporate_users.corporate_id',
         'corporate_users.role_id',
+        'corporate_users.created_at',
     ];
 
     /**

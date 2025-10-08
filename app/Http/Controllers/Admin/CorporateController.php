@@ -346,8 +346,14 @@ class CorporateController extends Controller
         $corporateUser->user_id = $user->id;
         $corporateUser->role_id = $role->id;
         $corporateUser->corporate_id = $id;
+        
         try {
             $corporateUser->save();
+            
+            // * UPDATE: Sinkronisasi role_id di tabel users
+            $user->role_id = $role->id;
+            $user->save();
+            
         } catch (\Throwable $th) {
             DB::rollBack();
             return response([
@@ -404,6 +410,7 @@ class CorporateController extends Controller
         // ? Dump data
         $model = $this->dump_field($request->all(), $model);
         $model->verified_at = Carbon::now();
+        $model->role_id = $role->id; // * Set role_id corporate
 
         // * Password Encryption
         if ($request->password) {
@@ -514,23 +521,18 @@ class CorporateController extends Controller
         // ? Executing
         try {
             $model->save();
-        } catch (\Throwable $th) {
-            return response([
-                "message" => "Error: server side having problem!",
-                "description" => "Failed to update corporate user role"
-            ], 500);
-        }
-
-        // ? Update user role
-        try {
+            
+            // * UPDATE: Sinkronisasi role_id di tabel users
             User::where('id', $model->user_id)
                 ->update([
                     'role_id' => $role->id
                 ]);
+                
         } catch (\Throwable $th) {
+            DB::rollBack();
             return response([
                 "message" => "Error: server side having problem!",
-                "description" => "Failed to update user role"
+                "description" => "Failed to update corporate user role"
             ], 500);
         }
 
@@ -542,4 +544,3 @@ class CorporateController extends Controller
         ]);
     }
 }
-        

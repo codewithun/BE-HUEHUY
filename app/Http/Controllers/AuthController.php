@@ -8,6 +8,7 @@ use App\Mail\VerificationCodeMail;
 use App\Models\PasswordReset;
 use App\Models\PersonalAccessToken;
 use App\Models\User;
+use App\Models\CorporateUser;
 use App\Models\UserTokenVerify;
 use App\Models\EmailVerificationCode;
 use Carbon\Carbon;
@@ -65,7 +66,11 @@ class AuthController extends Controller
         // =========================>
         // ## get user request
         // =========================>
-        Log::info('Searching user with email: ' . $request->email . ' and scope: ' . $scope);
+        Log::info('Login attempt:', [
+            'email' => $request->email,
+            'scope' => $scope,
+            'request_id' => uniqid()
+        ]);
 
         switch ($scope) {
             case 'admin':
@@ -74,8 +79,14 @@ class AuthController extends Controller
                     ->first();
                 break;
             case 'corporate':
+                // * PERBAIKAN: Cari user berdasarkan corporate_user dan role corporate
                 $user = User::where('email', $request->email)
-                    ->join('corporate_users', 'corporate_users.user_id', 'users.id')
+                    ->whereHas('corporate_user', function($query) {
+                        $query->whereNotNull('corporate_id')
+                              ->whereNotNull('role_id');
+                    })
+                    ->whereIn('role_id', [3, 4, 5]) // Role corporate: 3=Admin Corporate, 4=Staff Corporate, 5=Manager Corporate
+                    ->with(['corporate_user', 'corporate_user.role', 'corporate_user.corporate'])
                     ->first();
                 break;
             default: // 'user' scope - terima user biasa (role_id: 2) dan manager tenant (role_id: 6)
@@ -85,14 +96,25 @@ class AuthController extends Controller
                 break;
         }
 
-        Log::info('User found:', ['user' => $user ? $user->toArray() : null]);
+        Log::info('User search result:', [
+            'email' => $request->email,
+            'user_found' => $user ? true : false,
+            'user_id' => $user ? $user->id : null,
+            'user_email' => $user ? $user->email : null,
+            'user_role_id' => $user ? $user->role_id : null,
+            'has_corporate_user' => $user && $user->corporate_user ? true : false,
+            'corporate_id' => $user && $user->corporate_user ? $user->corporate_user->corporate_id : null
+        ]);
 
         if (!$user) {
-            Log::warning('User not found for email: ' . $request->email . ' with scope: ' . $scope);
+            Log::warning('User not found for login:', [
+                'email' => $request->email, 
+                'scope' => $scope
+            ]);
             return response([
-                'message' => 'User not found',
+                'message' => 'User not found or not registered as corporate member',
                 'errors' => [
-                    'email' => ['Data tidak ditemukan untuk scope ' . $scope]
+                    'email' => ['User tidak ditemukan atau tidak terdaftar sebagai member corporate untuk scope ' . $scope]
                 ]
             ], 422);
         }
@@ -114,6 +136,20 @@ class AuthController extends Controller
         }
 
         Log::info('Password check successful for user:', ['email' => $user->email]);
+
+        // * TAMBAHAN: Untuk corporate, pastikan ada corporate_user
+        if ($scope === 'corporate' && !$user->corporate_user) {
+            Log::warning('User found but no corporate access:', [
+                'email' => $user->email,
+                'user_id' => $user->id
+            ]);
+            return response([
+                'message' => 'User tidak memiliki akses corporate',
+                'errors' => [
+                    'email' => ['User tidak terdaftar sebagai member corporate']
+                ]
+            ], 422);
+        }
 
         // =========================>
         // ## verification gate (WAJIB)
@@ -860,7 +896,10 @@ class AuthController extends Controller
     public function account()
     {
         try {
-            $user = Auth::user();
+            // PERBAIKAN: Load user dengan relasi corporate_user dan role
+            $user = User::with(['corporate_user.corporate', 'corporate_user.role', 'role'])
+                ->where('id', Auth::id())
+                ->first();
 
             if (!$user) {
                 return response()->json([
@@ -869,23 +908,60 @@ class AuthController extends Controller
                 ], 401);
             }
 
-            Log::info('Account endpoint called for user:', ['user_id' => $user->id, 'email' => $user->email]);
+            Log::info('Account endpoint called for user:', [
+                'user_id' => $user->id, 
+                'email' => $user->email,
+                'role_id' => $user->role_id,
+                'has_corporate_user' => $user->corporate_user ? 'yes' : 'no',
+                'corporate_id' => $user->corporate_user ? $user->corporate_user->corporate_id : 'none'
+            ]);
 
-            // PERBAIKAN: SESUAI DENGAN DATABASE SCHEMA
+            // PERBAIKAN: Include corporate_user data dengan proper structure
+            $corporateUserData = null;
+            if ($user->corporate_user) {
+                $corporateUserData = [
+                    'id' => $user->corporate_user->id,
+                    'user_id' => $user->corporate_user->user_id,
+                    'corporate_id' => $user->corporate_user->corporate_id,
+                    'role_id' => $user->corporate_user->role_id,
+                    'created_at' => $user->corporate_user->created_at,
+                    'corporate' => $user->corporate_user->corporate ? [
+                        'id' => $user->corporate_user->corporate->id,
+                        'name' => $user->corporate_user->corporate->name,
+                        'description' => $user->corporate_user->corporate->description,
+                        'address' => $user->corporate_user->corporate->address,
+                        'phone' => $user->corporate_user->corporate->phone,
+                    ] : null,
+                    'role' => $user->corporate_user->role ? [
+                        'id' => $user->corporate_user->role->id,
+                        'name' => $user->corporate_user->role->name,
+                    ] : null,
+                ];
+            }
+
             $userArray = [
                 'id' => (int) $user->id,
                 'name' => (string) ($user->name ?? 'User'),
                 'email' => (string) ($user->email ?? ''),
                 'phone' => $user->phone ?? null,
-                'picture_source' => $user->picture_source ?? null, // SESUAI DATABASE
+                'picture_source' => $user->picture_source ?? null,
                 'verified_at' => $user->verified_at ?? null,
                 'role_id' => (int) ($user->role_id ?? 2),
-                'role' => 'user',
+                'role' => $user->role ? [
+                    'id' => $user->role->id,
+                    'name' => $user->role->name,
+                ] : null,
                 'cubes' => [],
-                'corporate_user' => null
+                'corporate_user' => $corporateUserData // PERBAIKAN: Include corporate_user data
             ];
 
             $isVerified = !empty($user->verified_at);
+
+            Log::info('Account response prepared:', [
+                'user_id' => $user->id,
+                'has_corporate_user_in_response' => $corporateUserData ? 'yes' : 'no',
+                'corporate_id_in_response' => $corporateUserData ? $corporateUserData['corporate_id'] : 'none'
+            ]);
 
             return response()->json([
                 'message' => 'Success',
@@ -914,7 +990,7 @@ class AuthController extends Controller
                         'id' => Auth::id() ?? 0,
                         'name' => 'User',
                         'email' => '',
-                        'role' => 'user',
+                        'role' => null,
                         'cubes' => [],
                         'corporate_user' => null
                     ],
@@ -956,22 +1032,19 @@ class AuthController extends Controller
                 }
             }
 
-            // FALLBACK: Jika ada auth user
-            $user = Auth::user();
+            // FALLBACK: Jika ada auth user - load dengan relasi
+            $user = User::with([
+                'role', 
+                'corporate_user', 
+                'corporate_user.corporate', 
+                'corporate_user.role'
+            ])->find(Auth::id());
 
             if ($user) {
                 return response()->json([
                     'message' => 'Success',
                     'data' => [
-                        'profile' => [
-                            'id' => $user->id,
-                            'name' => $user->name,
-                            'email' => $user->email,
-                            'phone' => $user->phone ?? null,
-                            'picture_source' => $user->picture_source ?? null, // SESUAI DATABASE
-                            'verified_at' => $user->verified_at,
-                            'status' => $user->verified_at ? 'verified' : 'pending_verification'
-                        ]
+                        'profile' => $user // Gunakan user object lengkap dengan relasi
                     ],
                     'verification_required' => !$user->verified_at
                 ]);
@@ -1126,6 +1199,106 @@ class AuthController extends Controller
                 'message' => 'Verification failed',
                 'error' => config('app.debug') ? $e->getMessage() : 'Internal server error'
             ], 500);
+        }
+    }
+
+    public function profile()
+    {
+        $user = User::with([
+            'role', 
+            'corporate_user', 
+            'corporate_user.corporate', 
+            'corporate_user.role'
+        ])->find(Auth::id());
+
+        if (!$user) {
+            return response([
+                'message' => 'User not found',
+                'data' => null
+            ], 404);
+        }
+
+        // Debug log untuk melihat apakah corporate_user ter-load
+        Log::info('Profile loaded for user:', [
+            'user_id' => $user->id,
+            'email' => $user->email,
+            'role_id' => $user->role_id,
+            'has_corporate_user' => $user->corporate_user ? true : false,
+            'corporate_user_data' => $user->corporate_user ? $user->corporate_user->toArray() : null,
+            'corporate_id' => $user->corporate_user ? $user->corporate_user->corporate_id : null
+        ]);
+        
+        return response([
+            'message' => 'success',
+            'data' => $user
+        ]);
+    }
+
+    /**
+     * Corporate-specific account endpoint
+     */
+    public function corporateAccount()
+    {
+        try {
+            $user = User::with([
+                'role', 
+                'corporate_user', 
+                'corporate_user.corporate', 
+                'corporate_user.role'
+            ])->find(Auth::id());
+
+            if (!$user) {
+                return response()->json([
+                    'message' => 'Authentication required',
+                    'error' => 'No authenticated user found'
+                ], 401);
+            }
+
+            Log::info('Corporate account endpoint called:', [
+                'user_id' => $user->id,
+                'email' => $user->email,
+                'role_id' => $user->role_id,
+                'has_corporate_user' => $user->corporate_user !== null,
+                'corporate_id' => $user->corporate_user ? $user->corporate_user->corporate_id : null
+            ]);
+
+            $isVerified = !empty($user->verified_at);
+
+            return response()->json([
+                'message' => 'Success',
+                'data' => [
+                    'profile' => $user,
+                    'verification_status' => [
+                        'is_verified' => $isVerified,
+                        'verified_at' => $user->verified_at,
+                        'requires_verification' => !$isVerified
+                    ]
+                ]
+            ], 200);
+        } catch (\Throwable $e) {
+            Log::error('Corporate account endpoint error:', [
+                'error' => $e->getMessage(),
+                'user_id' => Auth::id()
+            ]);
+
+            return response()->json([
+                'message' => 'Success',
+                'data' => [
+                    'profile' => [
+                        'id' => Auth::id() ?? 0,
+                        'name' => 'User',
+                        'email' => '',
+                        'role' => 'user',
+                        'cubes' => [],
+                        'corporate_user' => null
+                    ],
+                    'verification_status' => [
+                        'is_verified' => false,
+                        'verified_at' => null,
+                        'requires_verification' => true
+                    ]
+                ]
+            ], 200);
         }
     }
 }

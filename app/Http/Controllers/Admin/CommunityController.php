@@ -11,6 +11,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
+use App\Models\Corporate;
 
 class CommunityController extends Controller
 {
@@ -71,7 +72,7 @@ class CommunityController extends Controller
     private function shapeCommunity($community, ?int $viewerUserId = null)
     {
         // pastikan relasi ke-load
-        $community->loadMissing(['adminContacts.role']);
+        $community->loadMissing(['adminContacts.role', 'corporate']);
 
         // hitung members (aktif)
         $members = $community->members_count
@@ -97,16 +98,28 @@ class CommunityController extends Controller
             'id'            => $community->id,
             'name'          => $community->name,
             'description'   => $community->description,
-            'logo'          => $community->logo,         // FE kamu sudah handle /storage/
+            'logo'          => $community->logo,
+
+            // Tambahan untuk FE
+            'corporate_id'  => $community->corporate_id,
+            'corporate'     => $community->corporate ? [
+                'id'   => $community->corporate->id,
+                'name' => $community->corporate->name,
+            ] : null,
+            'bg_color_1'    => $community->bg_color_1,
+            'bg_color_2'    => $community->bg_color_2,
+            'world_type'    => $community->world_type,
+            'is_active'     => (bool) $community->is_active,
+
             'category'      => $community->category ?? null,
             'privacy'       => $community->privacy ?? null,
             'is_verified'   => (bool) ($community->is_verified ?? false),
-            'isVerified'    => (bool) ($community->is_verified ?? false), // TAMBAH: alias untuk compatibility
+            'isVerified'    => (bool) ($community->is_verified ?? false),
+
             'members'       => $members,
             'isJoined'      => (bool) $isJoined,
-            'activePromos'  => $activePromos, // TAMBAH: field activePromos
+            'activePromos'  => $activePromos,
 
-            // === penting untuk FE ===
             'admin_contact_ids' => $community->adminContacts->pluck('id')->values(),
             'admin_contacts'    => $community->adminContacts->map(function ($u) {
                 return [
@@ -128,7 +141,7 @@ class CommunityController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Community::query()->with('adminContacts.role');
+        $query = Community::query()->with(['adminContacts.role', 'corporate']);
 
         // Optional: search
         if ($request->filled('search')) {
@@ -431,9 +444,20 @@ class CommunityController extends Controller
                 'name'                => 'required|string|max:255',
                 'description'         => 'nullable|string',
                 'logo'                => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
+
+                // Tambahan field dari FE
+                'corporate_id'        => 'nullable|integer|exists:corporates,id',
+                'bg_color_1'          => 'nullable|string|max:16',
+                'bg_color_2'          => 'nullable|string|max:16',
+                'world_type'          => 'nullable|string|max:50',
+                'type'                => 'nullable|string|max:50', // alias
+                'is_active'           => 'nullable|boolean',
+
+                // opsional lama
                 'category'            => 'nullable|string|max:100',
                 'privacy'             => 'nullable|in:public,private',
                 'is_verified'         => 'nullable|boolean',
+
                 'admin_contact_ids'   => 'nullable|array',
                 'admin_contact_ids.*' => 'integer|exists:users,id',
             ]);
@@ -447,6 +471,12 @@ class CommunityController extends Controller
             }
 
             $validated = $validator->validated();
+
+            // Alias: jika 'type' ada dan world_type belum diisi
+            if (empty($validated['world_type']) && !empty($validated['type'])) {
+                $validated['world_type'] = $validated['type'];
+            }
+            unset($validated['type']);
 
             // Handle logo upload
             if ($request->hasFile('logo')) {
@@ -511,10 +541,21 @@ class CommunityController extends Controller
             $validator = Validator::make($request->all(), [
                 'name'                => 'required|string|max:255',
                 'description'         => 'nullable|string',
-                'logo'                => 'nullable',
+                'logo'                => 'nullable', // bisa string path atau file dari FE
+
+                // Tambahan field dari FE
+                'corporate_id'        => 'nullable|integer|exists:corporates,id',
+                'bg_color_1'          => 'nullable|string|max:16',
+                'bg_color_2'          => 'nullable|string|max:16',
+                'world_type'          => 'nullable|string|max:50',
+                'type'                => 'nullable|string|max:50', // alias
+                'is_active'           => 'nullable|boolean',
+
+                // opsional lama
                 'category'            => 'nullable|string|max:100',
                 'privacy'             => 'nullable|in:public,private',
                 'is_verified'         => 'nullable|boolean',
+
                 'admin_contact_ids'   => 'nullable|array',
                 'admin_contact_ids.*' => 'integer|exists:users,id',
             ]);
@@ -529,6 +570,12 @@ class CommunityController extends Controller
 
             $community = Community::findOrFail($id);
             $validated = $validator->validated();
+
+            // Alias: map 'type' ke 'world_type' jika perlu
+            if (empty($validated['world_type']) && !empty($validated['type'])) {
+                $validated['world_type'] = $validated['type'];
+            }
+            unset($validated['type']);
 
             DB::beginTransaction();
 

@@ -6,6 +6,7 @@ use Carbon\Carbon;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
+use App\Models\User;
 
 class UserSeeder extends Seeder
 {
@@ -45,6 +46,17 @@ class UserSeeder extends Seeder
             ]
         ];
 
-        DB::table('users')->insert($data);
+        foreach ($data as $row) {
+            // Idempotent: create if not exists, else update core fields
+            User::updateOrCreate(
+                ['email' => $row['email']],
+                [
+                    'name'        => $row['name'],
+                    'password'    => $row['password'],
+                    'role_id'     => $row['role_id'],
+                    'verified_at' => $row['verified_at'],
+                ]
+            );
+        }
     }
 }

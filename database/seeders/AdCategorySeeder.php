@@ -26,6 +26,13 @@ class AdCategorySeeder extends Seeder
         File::copy(public_path('hiburan.jpg'), storage_path('app/public/ad-category/hiburan.jpg'));
         File::copy(public_path('otomotif.jpg'), storage_path('app/public/ad-category/otomotif.jpg'));
         File::copy(public_path('properti.jpg'), storage_path('app/public/ad-category/properti.jpg'));
+        
+        // Optional placeholder/category image if available
+        if (file_exists(public_path('category.png'))) {
+            File::copy(public_path('category.png'), storage_path('app/public/ad-category/category.png'));
+        } else if (file_exists(public_path('storage/ad-category/category.png'))) {
+            File::copy(public_path('storage/ad-category/category.png'), storage_path('app/public/ad-category/category.png'));
+        }
 
         $data = [
             [
@@ -75,7 +82,7 @@ class AdCategorySeeder extends Seeder
                 'parent_id' => null,
                 'is_primary_parent' => false,
                 'is_home_display' => true,
-                'picture_source' => null
+                'picture_source' => 'ad-category/category.png'
             ],
             [
                 'name' =>  'Makanan',

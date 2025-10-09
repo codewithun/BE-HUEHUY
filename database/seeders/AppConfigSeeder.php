@@ -15,7 +15,7 @@ class AppConfigSeeder extends Seeder
     {
         $data = [
             [
-                'id' => 1,
+                // 'id' => 1, // removed to avoid duplicate PK on reseed
                 'code' => 'MAX_CUBE_ACTIVATION_EXPIRY',
                 'name' => 'Maximal Cube Activation Expiry',
                 'description' => 'Config untuk maksimal aktivasi kubus yg belum aktif, jika melebihi waktu maka kubus akan dihapus. Satuan dalam bentuk hari',
@@ -26,7 +26,7 @@ class AppConfigSeeder extends Seeder
                 'updated_at' => Carbon::now()
             ],
             [
-                'id' => 2,
+                // 'id' => 2, // removed to avoid duplicate PK on reseed
                 'code' => 'OTHER_CATEGORY_PRODUCT',
                 'name' => 'Other Category Product Config',
                 'description' => 'Config untuk kategori produk lainnya.',
@@ -39,6 +39,7 @@ class AppConfigSeeder extends Seeder
             ]
         ];
 
-        AppConfig::insert($data);
+        // Upsert by unique 'code' to avoid duplicates on reseed; update selected columns
+        AppConfig::upsert($data, ['code'], ['name', 'description', 'value', 'updated_at']);
     }
 }

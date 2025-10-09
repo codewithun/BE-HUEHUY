@@ -89,7 +89,7 @@ class BannerController extends Controller
     {
         // ? Validate request
         $validation = $this->validation($request->all(), [
-            'image' => 'nullable',
+            'image' => 'required|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
         ]);
 
         if ($validation) return $validation;
@@ -133,7 +133,7 @@ class BannerController extends Controller
 
         // ? Validate request
         $validation = $this->validation($request->all(), [
-            'image' => 'nullable',
+            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
         ]);
 
         if ($validation) return $validation;

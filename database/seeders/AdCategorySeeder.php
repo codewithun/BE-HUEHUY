@@ -14,24 +14,43 @@ class AdCategorySeeder extends Seeder
      */
     public function run(): void
     {
-        if (file_exists(storage_path('app/public/ad-category/')) && is_dir(storage_path('app/public/ad-category/'))) {
-            array_map('unlink', glob(storage_path('app/public/ad-category/').'/*.*'));
-            rmdir(storage_path('app/public/ad-category/'));
-        } 
+        $destDir = storage_path('app/public/ad-category/');
+        if (!file_exists($destDir)) {
+            mkdir($destDir, 0777, true);
+        }
         
-        mkdir(storage_path('app/public/ad-category/'));
-        File::copy(public_path('resto-cafe.jpeg'), storage_path('app/public/ad-category/resto-cafe.jpeg'));
-        File::copy(public_path('teknologi.jpg'), storage_path('app/public/ad-category/teknologi.jpg'));
-        File::copy(public_path('hotel.jpg'), storage_path('app/public/ad-category/hotel.jpg'));
-        File::copy(public_path('hiburan.jpg'), storage_path('app/public/ad-category/hiburan.jpg'));
-        File::copy(public_path('otomotif.jpg'), storage_path('app/public/ad-category/otomotif.jpg'));
-        File::copy(public_path('properti.jpg'), storage_path('app/public/ad-category/properti.jpg'));
+        $assetsDir = database_path('seeders/assets/ad-category');
+        
+        // Copy default images only if missing; do not delete user-uploaded files
+        $defaults = [
+            'resto-cafe.jpeg',
+            'teknologi.jpg',
+            'hotel.jpg',
+            'hiburan.jpg',
+            'otomotif.jpg',
+            'properti.jpg',
+        ];
+        
+        foreach ($defaults as $filename) {
+            $dest = $destDir . DIRECTORY_SEPARATOR . $filename;
+            if (!file_exists($dest)) {
+                $candidate = $assetsDir . DIRECTORY_SEPARATOR . $filename;
+                $source = file_exists($candidate) ? $candidate : public_path($filename);
+                if (file_exists($source)) {
+                    File::copy($source, $dest);
+                }
+            }
+        }
         
         // Optional placeholder/category image if available
-        if (file_exists(public_path('category.png'))) {
-            File::copy(public_path('category.png'), storage_path('app/public/ad-category/category.png'));
-        } else if (file_exists(public_path('storage/ad-category/category.png'))) {
-            File::copy(public_path('storage/ad-category/category.png'), storage_path('app/public/ad-category/category.png'));
+        $categoryDest = $destDir . DIRECTORY_SEPARATOR . 'category.png';
+        if (!file_exists($categoryDest)) {
+            $categoryAsset = $assetsDir . DIRECTORY_SEPARATOR . 'category.png';
+            if (file_exists($categoryAsset)) {
+                File::copy($categoryAsset, $categoryDest);
+            } elseif (file_exists(public_path('category.png'))) {
+                File::copy(public_path('category.png'), $categoryDest);
+            }
         }
 
         $data = [

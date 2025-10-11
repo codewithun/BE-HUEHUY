@@ -21,7 +21,8 @@ class DynamicContent extends Model
         'source_type',
         'level',
         'is_active',
-        'world_id',
+        'community_id',
+        'size',
     ];
 
     // =========================>
@@ -43,7 +44,8 @@ class DynamicContent extends Model
         'dynamic_contents.source_type',
         'dynamic_contents.level',
         'dynamic_contents.is_active',
-        'dynamic_contents.world_id',
+        'dynamic_contents.community_id',
+        'dynamic_contents.size',
     ];
 
     /**

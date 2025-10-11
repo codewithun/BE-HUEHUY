@@ -10,12 +10,14 @@ use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Str;
 
 class Voucher extends Model
 {
     use HasFactory;
 
     protected $fillable = [
+        'ad_id',
         'name',
         'description',
         'image',
@@ -61,6 +63,16 @@ class Voucher extends Model
         return $this->belongsTo(Ad::class, 'ad_id', 'id');
     }
 
+    public static function generateVoucherCode(int $length = 10): string
+    {
+        do {
+            $code = strtoupper(Str::random($length));
+            $exists = static::where('code', $code)->exists();
+        } while ($exists);
+
+        return $code;
+    }
+
     public function voucher_items(): HasMany
     {
         return $this->hasMany(VoucherItem::class, 'voucher_id', 'id');
@@ -96,16 +108,16 @@ class Voucher extends Model
     }
 
     public function getImageUrlAttribute(): ?string
-{
-    if (!$this->image) return null;
-    if (filter_var($this->image, FILTER_VALIDATE_URL)) {
-        return $this->image;
-    }
+    {
+        if (!$this->image) return null;
+        if (filter_var($this->image, FILTER_VALIDATE_URL)) {
+            return $this->image;
+        }
 
-    /** @var \Illuminate\Filesystem\FilesystemAdapter $disk */
-    $disk = \Illuminate\Support\Facades\Storage::disk('public');
-    return $disk->url(ltrim($this->image, '/'));
-}
+        /** @var \Illuminate\Filesystem\FilesystemAdapter $disk */
+        $disk = \Illuminate\Support\Facades\Storage::disk('public');
+        return $disk->url(ltrim($this->image, '/'));
+    }
 
     public function getImageUrlVersionedAttribute(): ?string
     {
@@ -118,7 +130,7 @@ class Voucher extends Model
         // 1) Prioritas tertinggi: image_updated_at (ketika file diganti)
         if ($this->image_updated_at instanceof Carbon) {
             $ver = $this->image_updated_at->getTimestamp();
-        } 
+        }
         // 2) Fallback: updated_at (ketika record berubah)
         else if ($this->updated_at instanceof Carbon) {
             $ver = $this->updated_at->getTimestamp();
@@ -148,7 +160,7 @@ class Voucher extends Model
     public function getIsValidAttribute(): bool
     {
         return $this->stock > 0 &&
-               (!$this->valid_until || now()->isBefore($this->valid_until));
+            (!$this->valid_until || now()->isBefore($this->valid_until));
     }
 
     public function getValidationCountAttribute(): int
@@ -167,16 +179,16 @@ class Voucher extends Model
     {
         return $query->where(function ($q) use ($userId) {
             $q->where('target_type', 'all')
-              ->orWhere(function ($qq) use ($userId) {
-                  $qq->where('target_type', 'user')
-                     ->where('target_user_id', $userId);
-              })
-              ->orWhere(function ($qq) use ($userId) {
-                  $qq->where('target_type', 'community')
-                     ->whereHas('community.memberships', function($qqq) use ($userId) {
-                         $qqq->where('user_id', $userId)->where('status', 'active');
-                     });
-              });
+                ->orWhere(function ($qq) use ($userId) {
+                    $qq->where('target_type', 'user')
+                        ->where('target_user_id', $userId);
+                })
+                ->orWhere(function ($qq) use ($userId) {
+                    $qq->where('target_type', 'community')
+                        ->whereHas('community.memberships', function ($qqq) use ($userId) {
+                            $qqq->where('user_id', $userId)->where('status', 'active');
+                        });
+                });
         });
     }
 
@@ -184,30 +196,30 @@ class Voucher extends Model
     {
         return $query->where(function ($q) use ($communityId) {
             $q->where('target_type', 'all')
-              ->orWhere(function ($qq) use ($communityId) {
-                  $qq->where('target_type', 'community')
-                     ->where('community_id', $communityId);
-              });
+                ->orWhere(function ($qq) use ($communityId) {
+                    $qq->where('target_type', 'community')
+                        ->where('community_id', $communityId);
+                });
         });
     }
 
     public function scopeActive($query)
     {
         return $query->where('stock', '>', 0)
-                     ->where(function ($q) {
-                         $q->whereNull('valid_until')
-                           ->orWhere('valid_until', '>=', now());
-                     });
+            ->where(function ($q) {
+                $q->whereNull('valid_until')
+                    ->orWhere('valid_until', '>=', now());
+            });
     }
 
     public function scopeExpired($query)
     {
         return $query->where(function ($q) {
             $q->where('stock', '<=', 0)
-              ->orWhere(function ($qq) {
-                  $qq->whereNotNull('valid_until')
-                     ->where('valid_until', '<', now());
-              });
+                ->orWhere(function ($qq) {
+                    $qq->whereNotNull('valid_until')
+                        ->where('valid_until', '<', now());
+                });
         });
     }
 
@@ -220,7 +232,7 @@ class Voucher extends Model
     {
         return $query->where(function ($q) use ($communityId) {
             $q->where('community_id', $communityId)
-              ->orWhere('target_type', 'all');
+                ->orWhere('target_type', 'all');
         });
     }
 
@@ -234,30 +246,36 @@ class Voucher extends Model
     public function isEligibleForUser(int $userId): bool
     {
         switch ($this->target_type) {
-            case 'all': return true;
-            case 'user': return $this->target_user_id == $userId;
+            case 'all':
+                return true;
+            case 'user':
+                return $this->target_user_id == $userId;
             case 'community':
                 if (!$this->community_id) return false;
                 return User::where('id', $userId)
-                    ->whereHas('communityMemberships', function($q) {
+                    ->whereHas('communityMemberships', function ($q) {
                         $q->where('community_id', $this->community_id)->where('status', 'active');
                     })
                     ->exists();
-            default: return false;
+            default:
+                return false;
         }
     }
 
     public function getEligibleUsers()
     {
         switch ($this->target_type) {
-            case 'all': return User::whereNotNull('email_verified_at');
-            case 'user': return User::where('id', $this->target_user_id);
+            case 'all':
+                return User::whereNotNull('email_verified_at');
+            case 'user':
+                return User::where('id', $this->target_user_id);
             case 'community':
                 if (!$this->community_id) return User::whereRaw('1 = 0');
-                return User::whereHas('communityMemberships', function($q) {
+                return User::whereHas('communityMemberships', function ($q) {
                     $q->where('community_id', $this->community_id)->where('status', 'active');
                 });
-            default: return User::whereRaw('1 = 0');
+            default:
+                return User::whereRaw('1 = 0');
         }
     }
 
@@ -272,11 +290,11 @@ class Voucher extends Model
     public function setImageAttribute($value): void
     {
         $original = $this->attributes['image'] ?? null;
-        
+
         // Hanya set jika benar-benar ada nilai dan berbeda
         if ($value !== null && $value !== '') {
             $this->attributes['image'] = $value;
-            
+
             // Update timestamp hanya jika nilai benar-benar berubah
             if ($value !== $original) {
                 $this->attributes['image_updated_at'] = now();
@@ -317,8 +335,8 @@ class Voucher extends Model
         if (!$keyword) return $query;
         return $query->where(function ($q) use ($keyword) {
             $q->where('owner_name', 'like', "%{$keyword}%")
-              ->orWhere('owner_phone', 'like', "%{$keyword}%");
-              // ->orWhere('owner_email', 'like', "%{$keyword}%"); // jika ada kolom email
+                ->orWhere('owner_phone', 'like', "%{$keyword}%");
+            // ->orWhere('owner_email', 'like', "%{$keyword}%"); // jika ada kolom email
         });
     }
 

@@ -27,6 +27,7 @@ use App\Http\Controllers\Admin\EventController;
 use App\Http\Controllers\Admin\VoucherItemController;
 use App\Http\Controllers\Admin\UserController as AdminUserController;
 use App\Http\Controllers\Admin\PromoItemController;
+use App\Http\Controllers\Admin\AdCategoryController;
 
 /**
  * Unauthorized helper
@@ -335,6 +336,16 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // +++ NEW: ADMIN member history +++
         Route::get('/communities/{id}/member-history', [CommunityController::class, 'adminMemberHistory'])->whereNumber('id');
+
+        // === AD CATEGORIES CRUD (Admin) ===
+        Route::get('/ad-categories', [AdCategoryController::class, 'index']);
+        Route::get('/ad-categories/{id}', [AdCategoryController::class, 'show'])->whereNumber('id');
+        Route::post('/ad-categories', [AdCategoryController::class, 'store']);
+        Route::post('/ad-categories/{id}', [AdCategoryController::class, 'update'])->whereNumber('id'); // if your FE uses POST+_method=PUT
+        Route::delete('/ad-categories/{id}', [AdCategoryController::class, 'destroy'])->whereNumber('id');
+
+        // For parent select options in FE
+        Route::get('/options/ad-category', [AdCategoryController::class, 'options']);
     });
 
     // Admin/Corporate/Integration bundle
@@ -342,6 +353,15 @@ Route::middleware('auth:sanctum')->group(function () {
     require __DIR__.'/api/corporate.php';
     require __DIR__.'/api/integration.php';
 });
+
+/**
+ * =======================
+ * TEST ROUTES (Sementara untuk testing validation voucher)
+ * =======================
+ */
+if (app()->environment('local', 'development')) {
+    require __DIR__.'/test_validation.php';
+}
 
 /**
  * Fallback 404

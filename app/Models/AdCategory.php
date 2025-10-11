@@ -17,6 +17,7 @@ class AdCategory extends Model
         'parent_id',
         'name',
         'picture_source',
+        'image_updated_at',
         'is_primary_parent',
         'is_home_display',
     ];
@@ -36,6 +37,7 @@ class AdCategory extends Model
         'ad_categories.parent_id',
         'ad_categories.name',
         'ad_categories.picture_source',
+        'ad_categories.image_updated_at',
         'ad_categories.is_primary_parent',
         'ad_categories.is_home_display',
     ];
@@ -45,14 +47,17 @@ class AdCategory extends Model
         $toArray = parent::toArray();
 
         if(isset($toArray['picture_source'])) {
-            $toArray['picture_source'] = $this->picture_source ? asset('storage/' . $this->picture_source) : null;
+            $cacheBuster = $this->image_updated_at ? '?v=' . strtotime($this->image_updated_at) : '';
+            $toArray['picture_source'] = $this->picture_source 
+                ? asset('storage/' . $this->picture_source) . $cacheBuster 
+                : null;
         }
 
         return $toArray;
     }
 
     /**
-     * * Relation to `User` model
+     * * Relation to child categories
      */
     public function childs() : HasMany
     {

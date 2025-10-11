@@ -6,6 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Models\Banner;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 
 class BannerController extends Controller
 {
@@ -87,38 +90,42 @@ class BannerController extends Controller
     // =============================================>
     public function store(Request $request)
     {
-        // ? Validate request
-        $validation = $this->validation($request->all(), [
-            'image' => 'nullable',
+        // ? Validate request (mirror PromoController image rules)
+        $validator = Validator::make($request->all(), [
+            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:10240',
         ]);
 
-        if ($validation) return $validation;
+        if ($validator->fails()) {
+            return response()->json([
+                'message' => 'Validasi gagal',
+                'errors'  => $validator->errors(),
+            ], 422);
+        }
 
         // ? Initial
-        DB::beginTransaction();
-        $model = new Banner();
-
-        // * Check if has upload file
-        if ($request->hasFile('image')) {
-            $model->picture_source = $this->upload_file($request->file('image'), 'banner');
-        }
-
-        // ? Executing
         try {
+            DB::beginTransaction();
+            $model = new Banner();
+
+            if ($request->hasFile('image')) {
+                $path = $request->file('image')->store('banner', 'public');
+                $model->picture_source = $path;
+            }
+
             $model->save();
+            DB::commit();
+
+            return response([
+                'message' => 'success',
+                'data'    => $model,
+            ], 201);
         } catch (\Throwable $th) {
             DB::rollBack();
+            Log::error('Error creating banner: ' . $th->getMessage());
             return response([
-                "message" => "Error: server side having problem!",
+                'message' => 'Error: server side having problem!',
             ], 500);
         }
-
-        DB::commit();
-
-        return response([
-            "message" => "success",
-            "data" => $model
-        ], 201);
     }
 
     // ============================================>
@@ -131,20 +138,32 @@ class BannerController extends Controller
         $model = Banner::findOrFail($id);
         $oldPicture = $model->picture_source;
 
-        // ? Validate request
-        $validation = $this->validation($request->all(), [
-            'image' => 'nullable',
+        // ? Validate request (mirror PromoController update behavior)
+        if (!$request->hasFile('image')) {
+            // Remove potential string URL from FE defaultValue to avoid validation error
+            $request->request->remove('image');
+        }
+
+        $validator = Validator::make($request->all(), [
+            'image' => 'sometimes|file|image|mimes:jpeg,png,jpg,gif,svg,webp|max:10240',
         ]);
 
-        if ($validation) return $validation;
+        if ($validator->fails()) {
+            DB::rollBack();
+            return response()->json([
+                'message' => 'Validasi gagal',
+                'errors'  => $validator->errors(),
+            ], 422);
+        }
 
         // * Check if has upload file
         if ($request->hasFile('image')) {
-            $model->picture_source = $this->upload_file($request->file('image'), 'banner');
-
-            if ($oldPicture) {
-                $this->delete_file($oldPicture ?? '');
+            // Delete old file if exists
+            if (!empty($oldPicture)) {
+                Storage::disk('public')->delete($oldPicture);
             }
+            // Store new file
+            $model->picture_source = $request->file('image')->store('banner', 'public');
         }
 
         // ? Executing
@@ -152,8 +171,9 @@ class BannerController extends Controller
             $model->save();
         } catch (\Throwable $th) {
             DB::rollBack();
+            Log::error('Error updating banner: ' . $th->getMessage());
             return response([
-                "message" => "Error: server side having problem!",
+                'message' => 'Error: server side having problem!',
             ], 500);
         }
 
@@ -175,7 +195,7 @@ class BannerController extends Controller
 
         // * remove picture
         if ($model->picture_source) {
-            $this->delete_file($model->picture_source ?? '');
+            Storage::disk('public')->delete($model->picture_source ?? '');
         }
 
         // ? Executing

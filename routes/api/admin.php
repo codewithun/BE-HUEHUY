@@ -71,6 +71,7 @@ Route::prefix('admin')->name('admin.')->group(function () {
     Route::apiResource('/cubes', CubeController::class);
     Route::post('/cubes/create-gift', [CubeController::class, 'createGiftCube']);
     Route::put('/cubes/{id}/update-status', [CubeController::class, 'updateStatus']);
+    Route::post('/cubes/ads/{id}/validate-code', [CubeController::class, 'validateCode']);
     Route::apiResource('/cube-types', CubeTypeController::class)->only(['index', 'show', 'update']);
 
     Route::get('/grabs', [GrabController::class, 'index']);

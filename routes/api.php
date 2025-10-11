@@ -233,6 +233,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/communities/with-membership', [CommunityController::class, 'withMembership']);
     Route::get('/communities/user-communities', [CommunityController::class, 'userCommunities']);
     Route::post('/communities/{id}/join', [CommunityController::class, 'join'])->whereNumber('id');
+    // NEW: Join request (for private communities)
+    Route::post('/communities/{id}/join-request', [CommunityController::class, 'requestJoin'])->whereNumber('id');
     Route::post('/communities/{id}/leave', [CommunityController::class, 'leave'])->whereNumber('id');
 
     /**
@@ -325,6 +327,14 @@ Route::middleware('auth:sanctum')->group(function () {
 
          // +++ NEW: ADMIN members +++
         Route::get('/communities/{id}/members', [CommunityController::class, 'adminMembers'])->whereNumber('id');
+
+        // +++ NEW: ADMIN member requests management +++
+        Route::get('/communities/{id}/member-requests', [CommunityController::class, 'adminMemberRequests'])->whereNumber('id');
+        Route::post('/member-requests/{id}/approve', [CommunityController::class, 'approveMemberRequest'])->whereNumber('id');
+        Route::post('/member-requests/{id}/reject', [CommunityController::class, 'rejectMemberRequest'])->whereNumber('id');
+
+        // +++ NEW: ADMIN member history +++
+        Route::get('/communities/{id}/member-history', [CommunityController::class, 'adminMemberHistory'])->whereNumber('id');
     });
 
     // Admin/Corporate/Integration bundle

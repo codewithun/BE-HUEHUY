@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
 use App\Models\Corporate;
+use Illuminate\Support\Carbon;
 
 class CommunityController extends Controller
 {
@@ -83,11 +84,19 @@ class CommunityController extends Controller
 
         // isJoined untuk viewer (opsional kalau ada auth)
         $isJoined = false;
+        $hasRequested = false;
         if ($viewerUserId) {
             $isJoined = DB::table('community_memberships')
                 ->where('community_id', $community->id)
                 ->where('user_id', $viewerUserId)
                 ->where('status', 'active')
+                ->exists();
+
+            // flag pengajuan pending
+            $hasRequested = DB::table('community_memberships')
+                ->where('community_id', $community->id)
+                ->where('user_id', $viewerUserId)
+                ->where('status', 'pending')
                 ->exists();
         }
 
@@ -118,6 +127,7 @@ class CommunityController extends Controller
 
             'members'       => $members,
             'isJoined'      => (bool) $isJoined,
+            'hasRequested'  => (bool) $hasRequested,
             'activePromos'  => $activePromos,
 
             'admin_contact_ids' => $community->adminContacts->pluck('id')->values(),
@@ -252,6 +262,105 @@ class CommunityController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Gagal bergabung dengan komunitas: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * POST /api/communities/{id}/join-request
+     * Untuk komunitas private: buat membership status 'pending'.
+     * Untuk public (privacy != 'private'): langsung join agar kompatibel dengan FE.
+     */
+    public function requestJoin(Request $request, $id)
+    {
+        try {
+            $user = $request->user();
+            $community = Community::findOrFail($id);
+
+            // Jika sudah active member
+            if ($community->hasMember($user)) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Anda sudah menjadi anggota komunitas ini',
+                    'data'    => [
+                        'community'    => $this->shapeCommunity($community->fresh(), $user->id),
+                        'isJoined'     => true,
+                        'hasRequested' => false,
+                    ],
+                ], 200);
+            }
+
+            // Determine privacy: prefer explicit privacy, else fall back to world_type/type
+            $rawPrivacy   = strtolower((string)($community->privacy ?? ''));
+            $rawWorldType = strtolower((string)($community->world_type ?? $community->type ?? ''));
+            // Map FE value 'pribadi' -> backend 'private'
+            if ($rawWorldType === 'pribadi') {
+                $rawWorldType = 'private';
+            }
+            $privacy = $rawPrivacy !== '' ? $rawPrivacy : ($rawWorldType !== '' ? $rawWorldType : 'public');
+
+            // Jika bukan private, langsung join (fallback behavior)
+            if ($privacy !== 'private') {
+                $membership = $community->addMember($user);
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Berhasil bergabung dengan komunitas',
+                    'data'    => [
+                        'community'    => $this->shapeCommunity($community->fresh(), $user->id),
+                        'membership'   => $membership,
+                        'isJoined'     => true,
+                        'hasRequested' => false,
+                    ],
+                ], 200);
+            }
+
+            // Komunitas private → buat/pertahankan status pending
+            $membership = $community->memberships()
+                ->where('user_id', $user->id)
+                ->first();
+
+            if ($membership) {
+                if ($membership->status === 'active') {
+                    return response()->json([
+                        'success' => true,
+                        'message' => 'Anda sudah menjadi anggota komunitas ini',
+                        'data'    => [
+                            'community'    => $this->shapeCommunity($community->fresh(), $user->id),
+                            'membership'   => $membership,
+                            'isJoined'     => true,
+                            'hasRequested' => false,
+                        ],
+                    ], 200);
+                }
+                // set ke pending jika belum
+                if ($membership->status !== 'pending') {
+                    $membership->update([
+                        'status' => 'pending',
+                        // joined_at dibiarkan null ketika pending
+                    ]);
+                }
+            } else {
+                $membership = $community->memberships()->create([
+                    'user_id' => $user->id,
+                    'status'  => 'pending',
+                    // joined_at: null saat pending
+                ]);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Permintaan bergabung terkirim. Menunggu persetujuan admin.',
+                'data'    => [
+                    'community'    => $this->shapeCommunity($community->fresh(), $user->id),
+                    'membership'   => $membership,
+                    'isJoined'     => false,
+                    'hasRequested' => true,
+                ],
+            ], 201);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengirim permintaan bergabung: ' . $e->getMessage(),
             ], 500);
         }
     }
@@ -640,5 +749,135 @@ class CommunityController extends Controller
                 'message' => 'Failed to delete community: ' . $e->getMessage(),
             ], 500);
         }
+    }
+
+    /**
+     * GET /api/admin/communities/{id}/member-requests
+     * Daftar membership berstatus pending (butuh approval admin)
+     */
+    public function adminMemberRequests(Request $request, $id)
+    {
+        $community = Community::findOrFail($id);
+
+        $rows = CommunityMembership::with(['user.role'])
+            ->where('community_id', $community->id)
+            ->where('status', 'pending')
+            ->orderBy('created_at', 'desc')
+            ->get()
+            ->map(function ($m) {
+                return [
+                    // gunakan id membership sebagai requestId untuk approve/reject
+                    'id'         => $m->id,
+                    'user'       => [
+                        'id'    => $m->user->id,
+                        'name'  => $m->user->name,
+                        'email' => $m->user->email,
+                        'phone' => $m->user->phone,
+                        'role'  => ['name' => optional($m->user->role)->name],
+                    ],
+                    'status'     => $m->status,          // 'pending'
+                    'created_at' => $m->created_at,      // dipakai FE untuk "Diminta pada"
+                    'message'    => null,                // placeholder bila nanti ada pesan
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'data'    => $rows->values(),
+            'total_row' => $rows->count(),
+        ]);
+    }
+
+    /**
+     * POST /api/admin/member-requests/{id}/approve
+     * Ubah pending -> active, set joined_at
+     */
+    public function approveMemberRequest(Request $request, $id)
+    {
+        $membership = CommunityMembership::with('user')->findOrFail($id);
+
+        if ($membership->status === 'active') {
+            return response()->json(['success' => true, 'message' => 'Sudah aktif'], 200);
+        }
+
+        if ($membership->status !== 'pending') {
+            return response()->json(['success' => false, 'message' => 'Status tidak valid'], 422);
+        }
+
+        $membership->update([
+            'status'    => 'active',
+            'joined_at' => now(),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Permintaan disetujui',
+        ]);
+    }
+
+    /**
+     * POST /api/admin/member-requests/{id}/reject
+     * Ubah pending -> removed (atau hapus baris jika diinginkan)
+     */
+    public function rejectMemberRequest(Request $request, $id)
+    {
+        $membership = CommunityMembership::with('user')->findOrFail($id);
+
+        if ($membership->status !== 'pending') {
+            return response()->json(['success' => false, 'message' => 'Status tidak valid'], 422);
+        }
+
+        $membership->update([
+            'status' => 'removed',
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Permintaan ditolak',
+        ]);
+    }
+
+    /**
+     * GET /api/admin/communities/{id}/member-history
+     * Histori sederhana dari membership: joined (active.joined_at) dan left (removed.updated_at)
+     */
+    public function adminMemberHistory(Request $request, $id)
+    {
+        $community = Community::findOrFail($id);
+
+        $active = CommunityMembership::with('user')
+            ->where('community_id', $community->id)
+            ->where('status', 'active')
+            ->whereNotNull('joined_at')
+            ->get()
+            ->map(fn ($m) => [
+                'user_id'    => $m->user->id,
+                'user_name'  => $m->user->name,
+                'action'     => 'joined',
+                'created_at' => $m->joined_at ?? $m->created_at,
+                'user'       => ['name' => $m->user->name],
+            ]);
+
+        $removed = CommunityMembership::with('user')
+            ->where('community_id', $community->id)
+            ->where('status', 'removed')
+            ->get()
+            ->map(fn ($m) => [
+                'user_id'    => $m->user->id,
+                'user_name'  => $m->user->name,
+                'action'     => 'left',
+                'created_at' => $m->updated_at ?? $m->created_at,
+                'user'       => ['name' => $m->user->name],
+            ]);
+
+        $merged = $active->merge($removed)
+            ->sortByDesc(fn ($row) => Carbon::parse($row['created_at'])->timestamp)
+            ->values();
+
+        return response()->json([
+            'success' => true,
+            'data'    => $merged,
+            'total_row' => $merged->count(),
+        ]);
     }
 }

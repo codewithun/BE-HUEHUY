@@ -11,6 +11,7 @@ use App\Models\CubeTag;
 use App\Models\CubeType;
 use App\Models\OpeningHour;
 use App\Models\Voucher;
+use App\Models\Notification;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -138,11 +139,21 @@ class CubeController extends Controller
         // Pastikan array ter-normalisasi
         $this->normalizeArrayInput($request);
 
+        // * Debug log untuk melihat data yang diterima
+        Log::info('CubeController@store received data', [
+            'cube_type_id' => $request->cube_type_id,
+            'owner_user_id' => $request->owner_user_id,
+            'user_id' => $request->user_id,
+            'corporate_id' => $request->corporate_id,
+            'all_request' => $request->all()
+        ]);
+
         // ? Validate request
         $validation = $this->validation($request->all(), [
             'cube_type_id' => 'required|numeric',
             'parent_id'    => 'nullable|numeric|exists:cubes,id',
             'user_id'      => 'nullable|numeric|exists:users,id',
+            'owner_user_id' => 'nullable|numeric|exists:users,id',
             'corporate_id' => 'nullable|numeric|exists:corporates,id',
             'world_id'     => 'nullable|numeric|exists:worlds,id',
             'color'        => 'nullable|string|max:255',
@@ -167,11 +178,25 @@ class CubeController extends Controller
             'ads.is_daily_grab'          => 'nullable|boolean',
             'ads.status'                 => 'nullable|string',
             'ads.promo_type'             => ['nullable', 'string', Rule::in(['offline', 'online'])],
+            'ads.validation_type'        => ['nullable', 'string', Rule::in(['auto', 'manual'])],
+            'ads.code'                   => [
+                'nullable',
+                'string',
+                'max:255',
+                'unique:ads,code',
+                'required_if:ads.validation_type,manual'
+            ],
+            'ads.target_type'            => ['nullable', 'string', Rule::in(['all', 'user', 'community'])],
+            'ads.target_user_ids'        => 'nullable|array',
+            'ads.target_user_ids.*'      => 'numeric|exists:users,id',
+            'ads.community_id'           => 'nullable|numeric|exists:communities,id',
+            'ads.start_validate'         => 'nullable|date',
+            'ads.finish_validate'        => 'nullable|date|after_or_equal:ads.start_validate',
             'ads.max_production_per_day' => 'nullable|numeric|min:0',
             'ads.sell_per_day'           => 'nullable|numeric|min:0',
             'ads.level_umkm'             => 'nullable|numeric|min:0',
             'ads.image'                  => 'nullable',
-            'ads.validation_time_limit'  => 'nullable|string',
+            'ads.validation_time_limit'  => 'nullable|date_format:H:i',
 
             'opening_hours.*'          => 'nullable',
             'opening_hours.*.day'      => ['required', 'string', Rule::in(['senin', 'selasa', 'rabu', 'kamis', 'jumat', 'sabtu', 'minggu'])],
@@ -193,12 +218,44 @@ class CubeController extends Controller
             ], 422);
         }
 
+        // * Validate Manager Tenant Assignment
+        if ($request->cube_type_id == 2) {
+            // Cube type 2 = Kubus Merah (Corporate)
+            if (!$request->corporate_id) {
+                return response([
+                    "message" => "Error: Unprocessable Entity!",
+                    "errors" => [
+                        "corporate_id" => ["Manager Tenant (Mitra) wajib dipilih untuk Kubus Merah"]
+                    ]
+                ], 422);
+            }
+        } else {
+            // Cube type lainnya = perlu user (Manager Tenant individu)
+            if (!$request->owner_user_id && !$request->user_id) {
+                return response([
+                    "message" => "Error: Unprocessable Entity!",
+                    "errors" => [
+                        "owner_user_id" => ["Manager Tenant wajib dipilih"]
+                    ]
+                ], 422);
+            }
+        }
+
         // ? Initial
         DB::beginTransaction();
         $model = new Cube();
 
         // ? Dump data
         $model = $this->dump_field($request->all(), $model);
+
+        // * Handle owner_user_id mapping to user_id
+        if ($request->has('owner_user_id') && $request->owner_user_id) {
+            $model->user_id = $request->owner_user_id;
+            Log::info('CubeController@store mapping owner_user_id to user_id', [
+                'owner_user_id' => $request->owner_user_id,
+                'mapped_user_id' => $model->user_id
+            ]);
+        }
 
         $model->code   = $model->generateCubeCode($request->cube_type_id);
         $model->status = 'active';
@@ -283,8 +340,26 @@ class CubeController extends Controller
                 $ad->slug                    = $title ? StringHelper::uniqueSlug($title) : null;
                 $ad->description             = $adsPayload['description'] ?? null;
                 $ad->max_grab                = $adsPayload['max_grab'] ?? null;
-                $ad->is_daily_grab           = $adsPayload['is_daily_grab'] ?? null;
+                $ad->is_daily_grab           = $adsPayload['is_daily_grab'] ?? false;
                 $ad->promo_type              = $adsPayload['promo_type'] ?? null;
+                
+                // New validation fields
+                $ad->validation_type         = $adsPayload['validation_type'] ?? 'auto';
+                $ad->code                    = $adsPayload['code'] ?? null;
+                
+                // Target fields for voucher
+                $ad->target_type             = $adsPayload['target_type'] ?? 'all';
+                $ad->target_user_id          = $adsPayload['target_user_id'] ?? null;
+                $ad->community_id            = $adsPayload['community_id'] ?? null;
+                
+                // Date validation fields
+                if (!empty($adsPayload['start_validate'])) {
+                    $ad->start_validate = Carbon::createFromFormat('d-m-Y', $adsPayload['start_validate'])->format('Y-m-d H:i:s');
+                }
+                if (!empty($adsPayload['finish_validate'])) {
+                    $ad->finish_validate = Carbon::createFromFormat('d-m-Y', $adsPayload['finish_validate'])->format('Y-m-d H:i:s');
+                }
+                
                 $ad->max_production_per_day  = $adsPayload['max_production_per_day'] ?? null;
                 $ad->sell_per_day            = $adsPayload['sell_per_day'] ?? null;
                 $ad->level_umkm              = $adsPayload['level_umkm'] ?? null;
@@ -305,7 +380,30 @@ class CubeController extends Controller
                     $ad->picture_source = $this->upload_file($request->file('ads.image'), 'ads');
                 }
 
+                // * ads additional images
+                if ($request->hasFile('ads.image_1')) {
+                    $ad->image_1 = $this->upload_file($request->file('ads.image_1'), 'ads');
+                }
+                if ($request->hasFile('ads.image_2')) {
+                    $ad->image_2 = $this->upload_file($request->file('ads.image_2'), 'ads');
+                }
+                if ($request->hasFile('ads.image_3')) {
+                    $ad->image_3 = $this->upload_file($request->file('ads.image_3'), 'ads');
+                }
+
+                // Update image timestamp for cache busting
+                $ad->image_updated_at = now();
+
                 $ad->save();
+
+                // Process target users untuk voucher dengan target user tertentu
+                if ($ad->type === 'voucher' && $ad->target_type === 'user' && !empty($adsPayload['target_user_ids'])) {
+                    // Sync target users menggunakan tabel pivot
+                    $ad->target_users()->sync($adsPayload['target_user_ids']);
+                    
+                    // Send notifications
+                    $this->sendVoucherNotifications($ad, $adsPayload['target_user_ids']);
+                }
 
                 // ? Process Voucher (only online)
                 if ($ad->promo_type === 'online') {
@@ -384,6 +482,7 @@ class CubeController extends Controller
             'cube_type_id' => 'nullable|numeric|exists:cube_types,id',
             'parent_id'    => 'nullable|numeric|exists:cubes,id',
             'user_id'      => 'nullable|numeric|exists:users,id',
+            'owner_user_id' => 'nullable|numeric|exists:users,id',
             'corporate_id' => 'nullable|numeric|exists:corporates,id',
             'world_id'     => 'nullable|numeric|exists:worlds,id',
             'color'        => 'nullable|string|max:255',
@@ -400,6 +499,37 @@ class CubeController extends Controller
             'cube_tags.*.map_lat'  => 'nullable|numeric',
             'cube_tags.*.map_lng'  => 'nullable|numeric',
             'cube_tags.*.link'     => 'nullable|string|max:255',
+
+            // Add validation for ads fields in update
+            'ads.*'                      => 'nullable',
+            'ads.validation_type'        => ['nullable', 'string', Rule::in(['auto', 'manual'])],
+            'ads.code'                   => [
+                'nullable',
+                'string',
+                'max:255',
+                function ($attribute, $value, $fail) use ($request) {
+                    // Validasi unique untuk update (ignore current ad id jika ada)
+                    if ($value) {
+                        $adId = $request->input('ads.id');
+                        $exists = \App\Models\Ad::where('code', $value)
+                            ->when($adId, function ($query) use ($adId) {
+                                return $query->where('id', '!=', $adId);
+                            })
+                            ->exists();
+                        
+                        if ($exists) {
+                            $fail('Kode ini sudah digunakan oleh ads lain.');
+                        }
+                    }
+                },
+                'required_if:ads.validation_type,manual'
+            ],
+            'ads.target_type'            => ['nullable', 'string', Rule::in(['all', 'user', 'community'])],
+            'ads.target_user_ids'        => 'nullable|array',
+            'ads.target_user_ids.*'      => 'numeric|exists:users,id',
+            'ads.community_id'           => 'nullable|numeric|exists:communities,id',
+            'ads.start_validate'         => 'nullable|date',
+            'ads.finish_validate'        => 'nullable|date|after_or_equal:ads.start_validate',
         ]);
         if ($validation) return $validation;
 
@@ -412,6 +542,16 @@ class CubeController extends Controller
 
         // ? Dump data
         $model = $this->dump_field($request->all(), $model);
+
+        // * Handle owner_user_id mapping to user_id
+        if ($request->has('owner_user_id') && $request->owner_user_id) {
+            $model->user_id = $request->owner_user_id;
+            Log::info('CubeController@update mapping owner_user_id to user_id', [
+                'cube_id' => $model->id,
+                'owner_user_id' => $request->owner_user_id,
+                'mapped_user_id' => $model->user_id
+            ]);
+        }
 
         // * Check if has upload file
         try {
@@ -596,6 +736,7 @@ class CubeController extends Controller
             'cube_type_id' => 'required|numeric',
             'parent_id'    => 'nullable|numeric|exists:cubes,id',
             'user_id'      => 'nullable|numeric|exists:users,id',
+            'owner_user_id' => 'nullable|numeric|exists:users,id',
             'corporate_id' => 'nullable|numeric|exists:corporates,id',
             'world_id'     => 'nullable|numeric|exists:worlds,id',
             'color'        => 'nullable|string|max:255',
@@ -637,6 +778,29 @@ class CubeController extends Controller
             ], 422);
         }
 
+        // * Validate Manager Tenant Assignment for Gift Cubes
+        if ($request->cube_type_id == 2) {
+            // Cube type 2 = Kubus Merah (Corporate)
+            if (!$request->corporate_id) {
+                return response([
+                    "message" => "Error: Unprocessable Entity!",
+                    "errors" => [
+                        "corporate_id" => ["Manager Tenant (Mitra) wajib dipilih untuk Kubus Merah"]
+                    ]
+                ], 422);
+            }
+        } else {
+            // Cube type lainnya = perlu user (Manager Tenant individu)
+            if (!$request->owner_user_id && !$request->user_id) {
+                return response([
+                    "message" => "Error: Unprocessable Entity!",
+                    "errors" => [
+                        "owner_user_id" => ["Manager Tenant wajib dipilih"]
+                    ]
+                ], 422);
+            }
+        }
+
         // ? Initial
         DB::beginTransaction();
 
@@ -648,6 +812,16 @@ class CubeController extends Controller
 
                     // ? Dump data
                     $model = $this->dump_field($request->all(), $model);
+
+                    // * Handle owner_user_id mapping to user_id
+                    if ($request->has('owner_user_id') && $request->owner_user_id) {
+                        $model->user_id = $request->owner_user_id;
+                        Log::info('CubeController@createGiftCube mapping owner_user_id to user_id', [
+                            'iteration' => $i + 1,
+                            'owner_user_id' => $request->owner_user_id,
+                            'mapped_user_id' => $model->user_id
+                        ]);
+                    }
 
                     $model->code   = $model->generateCubeCode($request->cube_type_id);
                     $model->status = 'active';
@@ -743,5 +917,172 @@ class CubeController extends Controller
             "message" => "success",
             "data" => $cubeCreated
         ], 201);
+    }
+
+    /**
+     * Send voucher notifications to specific users
+     */
+    private function sendVoucherNotifications($ad, $userIds)
+    {
+        try {
+            if (empty($userIds) || !is_array($userIds)) {
+                return;
+            }
+
+            $title = "Voucher Baru Tersedia!";
+            $message = "Voucher '{$ad->title}' telah tersedia untuk Anda. Segera gunakan sebelum habis!";
+
+            foreach ($userIds as $userId) {
+                Notification::create([
+                    'user_id' => $userId,
+                    'type' => 'voucher',
+                    'title' => $title,
+                    'message' => $message,
+                    'target_type' => 'voucher',
+                    'target_id' => $ad->id,
+                    'meta' => json_encode([
+                        'cube_id' => $ad->cube_id,
+                        'ad_type' => $ad->type,
+                        'validation_type' => $ad->validation_type
+                    ])
+                ]);
+            }
+
+            Log::info('Voucher notifications sent', [
+                'ad_id' => $ad->id,
+                'user_count' => count($userIds)
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Failed to send voucher notifications', [
+                'ad_id' => $ad->id,
+                'error' => $e->getMessage()
+            ]);
+        }
+    }
+
+    /**
+     * Validate ad code (promo/voucher)
+     */
+    public function validateCode(Request $request, string $adId)
+    {
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['success' => false, 'message' => 'Unauthenticated'], 401);
+        }
+
+        $data = $request->validate([
+            'code' => 'required|string',
+            'validator_role' => 'sometimes|in:tenant,admin',
+        ]);
+
+        try {
+            $ad = Ad::with(['cube', 'community', 'target_users'])->findOrFail($adId);
+
+            // Cek apakah ad memiliki validation_type manual
+            if ($ad->validation_type !== 'manual') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Ads ini tidak menggunakan validasi manual'
+                ], 422);
+            }
+
+            // Verifikasi kode
+            if (!hash_equals((string)$ad->code, (string)$data['code'])) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Kode tidak valid'
+                ], 422);
+            }
+
+            // Cek validitas tanggal
+            $now = now();
+            if ($ad->start_validate && $now->lt($ad->start_validate)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Promo/voucher belum dimulai'
+                ], 422);
+            }
+
+            if ($ad->finish_validate && $now->gt($ad->finish_validate)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Promo/voucher sudah berakhir'
+                ], 422);
+            }
+
+            // Cek jam validasi
+            if ($ad->validation_time_limit) {
+                $currentTime = $now->format('H:i:s');
+                if ($currentTime > $ad->validation_time_limit) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Waktu validasi sudah berakhir untuk hari ini'
+                    ], 422);
+                }
+            }
+
+            // Cek target user untuk voucher
+            if ($ad->type === 'voucher' && $ad->target_type === 'user') {
+                $targetUserIds = $ad->target_users()->pluck('user_id')->toArray();
+                if (!in_array($user->id, $targetUserIds)) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Anda tidak memiliki akses untuk voucher ini'
+                    ], 403);
+                }
+            }
+
+            // Cek target community untuk voucher
+            if ($ad->type === 'voucher' && $ad->target_type === 'community' && $ad->community_id) {
+                // Cek apakah user adalah member dari community
+                $isMember = \App\Models\CommunityMembership::where('user_id', $user->id)
+                    ->where('community_id', $ad->community_id)
+                    ->exists();
+
+                if (!$isMember) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Anda bukan member dari komunitas yang ditargetkan'
+                    ], 403);
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Kode valid',
+                'data' => [
+                    'ad' => [
+                        'id' => $ad->id,
+                        'title' => $ad->title,
+                        'type' => $ad->type,
+                        'validation_type' => $ad->validation_type,
+                        'target_type' => $ad->target_type,
+                    ],
+                    'cube' => [
+                        'id' => $ad->cube->id,
+                        'code' => $ad->cube->code,
+                        'address' => $ad->cube->address,
+                    ],
+                    'validated_at' => $now->toISOString(),
+                    'validator' => [
+                        'id' => $user->id,
+                        'name' => $user->name,
+                        'role' => $data['validator_role'] ?? 'user'
+                    ]
+                ]
+            ]);
+
+        } catch (\Throwable $e) {
+            Log::error('Ad code validation failed', [
+                'ad_id' => $adId,
+                'user_id' => $user->id,
+                'error' => $e->getMessage()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Terjadi kesalahan saat validasi'
+            ], 500);
+        }
     }
 }

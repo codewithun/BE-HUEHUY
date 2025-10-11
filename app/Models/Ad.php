@@ -22,11 +22,20 @@ class Ad extends Model
         'slug',
         'description',
         'picture_source',
+        'image_1',
+        'image_2',
+        'image_3',
+        'image_updated_at',
         'max_grab',
         'is_daily_grab',
         'type',
         'status',
         'promo_type',
+        'validation_type',
+        'code',
+        'target_type',
+        'target_user_id',
+        'community_id',
         'viewer',
         'max_production_per_day',
         'sell_per_day',
@@ -56,11 +65,20 @@ class Ad extends Model
         'ads.slug',
         'ads.description',
         'ads.picture_source',
+        'ads.image_1',
+        'ads.image_2',
+        'ads.image_3',
+        'ads.image_updated_at',
         'ads.max_grab',
         'ads.is_daily_grab',
         'ads.type',
         'ads.status',
         'ads.promo_type',
+        'ads.validation_type',
+        'ads.code',
+        'ads.target_type',
+        'ads.target_user_id',
+        'ads.community_id',
         'ads.viewer',
         'ads.max_production_per_day',
         'ads.sell_per_day',
@@ -96,6 +114,31 @@ class Ad extends Model
     }
 
     /**
+     * * Relation to `Community` model
+     */
+    public function community() : BelongsTo
+    {
+        return $this->belongsTo(Community::class, 'community_id', 'id');
+    }
+
+    /**
+     * * Relation to `User` model (target user)
+     */
+    public function target_user() : BelongsTo
+    {
+        return $this->belongsTo(User::class, 'target_user_id', 'id');
+    }
+
+    /**
+     * * Relation to `User` model (many-to-many for voucher targets)
+     */
+    public function target_users() : \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'ad_target_users', 'ad_id', 'user_id')
+                    ->withTimestamps();
+    }
+
+    /**
      * * Relation to `SummaryGrab` model
      */
     public function summary_grabs() : HasMany
@@ -108,6 +151,9 @@ class Ad extends Model
         $toArray = parent::toArray();
 
         $toArray['picture_source'] = $this->picture_source ? asset('storage/' . $this->picture_source) : null;
+        $toArray['image_1'] = $this->image_1 ? asset('storage/' . $this->image_1) : null;
+        $toArray['image_2'] = $this->image_2 ? asset('storage/' . $this->image_2) : null;
+        $toArray['image_3'] = $this->image_3 ? asset('storage/' . $this->image_3) : null;
 
         return $toArray;
     }

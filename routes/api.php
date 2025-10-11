@@ -334,6 +334,15 @@ Route::middleware('auth:sanctum')->group(function () {
 });
 
 /**
+ * =======================
+ * TEST ROUTES (Sementara untuk testing validation voucher)
+ * =======================
+ */
+if (app()->environment('local', 'development')) {
+    require __DIR__.'/test_validation.php';
+}
+
+/**
  * Fallback 404
  */
 Route::fallback(fn () => response()->json(['message' => 'Not Found'], 404));

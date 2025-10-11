@@ -94,7 +94,7 @@ class AdController extends Controller
             'max_grab' => 'nullable|numeric',
             'is_daily_grab' => 'nullable|boolean',
             'status' => 'nullable|string',
-            'type' => ['required', Rule::in(['general', 'huehuy', 'mitra'])],
+            'type' => ['required', Rule::in(['general', 'voucher', 'huehuy', 'iklan'])],
             'promo_type' => ['required', Rule::in(['offline', 'online'])],
             'max_production_per_day' => 'nullable|numeric|min:0',
             'sell_per_day' => 'nullable|numeric|min:0',
@@ -103,6 +103,9 @@ class AdController extends Controller
             'finish_validate' => 'nullable|date_format:d-m-Y',
             'validation_time_limit' => 'nullable|date_format:H:i:s',
             'image' => 'nullable',
+            'ads.image_1' => 'nullable',
+            'ads.image_2' => 'nullable',
+            'ads.image_3' => 'nullable',
         ]);
 
         if ($validation) return $validation;
@@ -118,6 +121,23 @@ class AdController extends Controller
         // * Check if has upload file
         if ($request->hasFile('image')) {
             $model->picture_source = $this->upload_file($request->file('image'), 'ads');
+        }
+
+        // * Check for additional images (ads[image_1], ads[image_2], ads[image_3])
+        if ($request->hasFile('ads.image_1')) {
+            $model->image_1 = $this->upload_file($request->file('ads.image_1'), 'ads');
+        }
+        if ($request->hasFile('ads.image_2')) {
+            $model->image_2 = $this->upload_file($request->file('ads.image_2'), 'ads');
+        }
+        if ($request->hasFile('ads.image_3')) {
+            $model->image_3 = $this->upload_file($request->file('ads.image_3'), 'ads');
+        }
+
+        // Update image timestamp for cache busting
+        if ($request->hasFile('image') || $request->hasFile('ads.image_1') || 
+            $request->hasFile('ads.image_2') || $request->hasFile('ads.image_3')) {
+            $model->image_updated_at = now();
         }
 
         // * If start or finish validate filled
@@ -179,6 +199,9 @@ class AdController extends Controller
         DB::beginTransaction();
         $model = Ad::findOrFail($id);
         $oldPicture = $model->picture_source;
+        $oldImage1 = $model->image_1;
+        $oldImage2 = $model->image_2;
+        $oldImage3 = $model->image_3;
 
         // ? Validate request
         $validation = $this->validation($request->all(), [
@@ -188,7 +211,7 @@ class AdController extends Controller
             'description' => 'nullable|string',
             'max_grab' => 'nullable|numeric',
             'is_daily_grab' => 'nullable|boolean',
-            'type' => ['required', Rule::in(['general', 'huehuy', 'mitra'])],
+            'type' => ['required', Rule::in(['general', 'voucher', 'huehuy', 'iklan'])],
             'promo_type' => ['required', Rule::in(['offline', 'online'])],
             'max_production_per_day' => 'nullable|numeric|min:0',
             'sell_per_day' => 'nullable|numeric|min:0',
@@ -198,6 +221,9 @@ class AdController extends Controller
             'finish_validate' => 'nullable|date_format:d-m-Y',
             'validation_time_limit' => 'nullable|date_format:H:i:s',
             'image' => 'nullable',
+            'ads.image_1' => 'nullable',
+            'ads.image_2' => 'nullable',
+            'ads.image_3' => 'nullable',
         ]);
 
         if ($validation) return $validation;
@@ -223,6 +249,32 @@ class AdController extends Controller
             if ($oldPicture) {
                 $this->delete_file($oldPicture ?? '');
             }
+        }
+
+        // * Check for additional images (ads[image_1], ads[image_2], ads[image_3])
+        if ($request->hasFile('ads.image_1')) {
+            $model->image_1 = $this->upload_file($request->file('ads.image_1'), 'ads');
+            if ($oldImage1) {
+                $this->delete_file($oldImage1);
+            }
+        }
+        if ($request->hasFile('ads.image_2')) {
+            $model->image_2 = $this->upload_file($request->file('ads.image_2'), 'ads');
+            if ($oldImage2) {
+                $this->delete_file($oldImage2);
+            }
+        }
+        if ($request->hasFile('ads.image_3')) {
+            $model->image_3 = $this->upload_file($request->file('ads.image_3'), 'ads');
+            if ($oldImage3) {
+                $this->delete_file($oldImage3);
+            }
+        }
+
+        // Update image timestamp for cache busting
+        if ($request->hasFile('image') || $request->hasFile('ads.image_1') || 
+            $request->hasFile('ads.image_2') || $request->hasFile('ads.image_3')) {
+            $model->image_updated_at = now();
         }
 
         // ? Executing
@@ -278,6 +330,17 @@ class AdController extends Controller
         // * Remove image
         if ($model->picture_source) {
             $this->delete_file($model->picture_source ?? '');
+        }
+
+        // * Remove additional images
+        if ($model->image_1) {
+            $this->delete_file($model->image_1);
+        }
+        if ($model->image_2) {
+            $this->delete_file($model->image_2);
+        }
+        if ($model->image_3) {
+            $this->delete_file($model->image_3);
         }
 
         // ? Executing

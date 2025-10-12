@@ -86,10 +86,11 @@ class DynamicContentController extends Controller
     {
         // Debug logging untuk request
         Log::info('=== DYNAMIC CONTENT STORE START ===');
-        Log::info('Request data:', $request->all());
-        Log::info('Source type: ' . $request->source_type);
-        Log::info('Dynamic content cubes: ' . $request->dynamic_content_cubes);
-        Log::info('Community ID: ' . $request->community_id);
+    Log::info('Request data:', $request->all());
+    Log::info('Source type: ' . $request->source_type);
+    // Avoid array to string conversion when multiple cubes are selected
+    Log::info('Dynamic content cubes:', ['dynamic_content_cubes' => $request->dynamic_content_cubes]);
+    Log::info('Community ID: ' . $request->community_id);
         
         // ? Validate request
         $validation = $this->validation($request->all(), [
@@ -147,7 +148,8 @@ class DynamicContentController extends Controller
         // * Handle Dynamic Content Cubes
         if ($request->source_type == 'cube' && $request->dynamic_content_cubes) {
             Log::info('Processing cubes...');
-            Log::info('Raw cubes data: ' . $request->dynamic_content_cubes);
+            // Avoid array to string conversion; log raw payload safely
+            Log::info('Raw cubes data', ['raw' => $request->dynamic_content_cubes]);
             Log::info('Cubes data type: ' . gettype($request->dynamic_content_cubes));
             
             // Handle both array and string formats

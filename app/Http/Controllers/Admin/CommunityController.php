@@ -545,14 +545,15 @@ class CommunityController extends Controller
 
     /**
      * POST /api/admin/communities
-     */
+     */ 
     public function store(Request $request)
     {
         try {
             $validator = Validator::make($request->all(), [
                 'name'                => 'required|string|max:255',
                 'description'         => 'nullable|string',
-                'logo'                => 'nullable|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
+                // PERBAIKI: Logo optional untuk create, hanya validasi jika ada file
+                'logo'                => 'nullable|file|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',
 
                 // Tambahan field dari FE
                 'corporate_id'        => 'nullable|integer|exists:corporates,id',
@@ -560,7 +561,8 @@ class CommunityController extends Controller
                 'bg_color_2'          => 'nullable|string|max:16',
                 'world_type'          => 'nullable|string|max:50',
                 'type'                => 'nullable|string|max:50', // alias
-                'is_active'           => 'nullable|boolean',
+                // PERBAIKI: Gunakan string untuk menerima "0"/"1" dari FormData
+                'is_active'           => 'nullable',
 
                 // opsional lama
                 'category'            => 'nullable|string|max:100',
@@ -581,17 +583,42 @@ class CommunityController extends Controller
 
             $validated = $validator->validated();
 
+            // NORMALISASI: Konversi is_active ke integer 0/1
+            if (array_key_exists('is_active', $validated)) {
+                $isActive = $validated['is_active'];
+                // Handle berbagai format input dari frontend (string, bool, numeric, array checkbox)
+                if (is_array($isActive)) {
+                    // Contoh dari checkbox FE: [1] atau ['1']
+                    $flat = collect($isActive)
+                        ->map(fn ($v) => is_bool($v) ? ($v ? '1' : '0') : strtolower(trim((string) $v)))
+                        ->filter(fn ($v) => $v !== '');
+                    $validated['is_active'] = $flat->contains(fn ($v) => in_array($v, ['1', 'true', 'on', 'yes'], true)) ? 1 : 0;
+                } elseif (is_string($isActive)) {
+                    $validated['is_active'] = in_array(strtolower($isActive), ['1', 'true', 'on', 'yes'], true) ? 1 : 0;
+                } elseif (is_bool($isActive)) {
+                    $validated['is_active'] = $isActive ? 1 : 0;
+                } elseif (is_numeric($isActive)) {
+                    $validated['is_active'] = (int) $isActive > 0 ? 1 : 0;
+                } else {
+                    $validated['is_active'] = 0;
+                }
+            } else {
+                // Default value jika tidak ada
+                $validated['is_active'] = 0;
+            }
+
             // Alias: jika 'type' ada dan world_type belum diisi
             if (empty($validated['world_type']) && !empty($validated['type'])) {
                 $validated['world_type'] = $validated['type'];
             }
             unset($validated['type']);
 
-            // Handle logo upload
+            // Handle logo upload - hanya jika ada file yang diupload
             if ($request->hasFile('logo')) {
                 $validated['logo'] = $request->file('logo')->store('communities', 'public');
-            } elseif (is_string($request->input('logo')) && $request->input('logo') !== '') {
-                $validated['logo'] = $request->input('logo');
+            } else {
+                // Jika tidak ada file, hapus dari validated agar tidak disimpan
+                unset($validated['logo']);
             }
 
             DB::beginTransaction();
@@ -650,7 +677,8 @@ class CommunityController extends Controller
             $validator = Validator::make($request->all(), [
                 'name'                => 'required|string|max:255',
                 'description'         => 'nullable|string',
-                'logo'                => 'nullable', // bisa string path atau file dari FE
+                // PERBAIKI: Untuk update, logo bisa kosong atau file
+                'logo'                => 'nullable',
 
                 // Tambahan field dari FE
                 'corporate_id'        => 'nullable|integer|exists:corporates,id',
@@ -658,7 +686,8 @@ class CommunityController extends Controller
                 'bg_color_2'          => 'nullable|string|max:16',
                 'world_type'          => 'nullable|string|max:50',
                 'type'                => 'nullable|string|max:50', // alias
-                'is_active'           => 'nullable|boolean',
+                // PERBAIKI: Gunakan string untuk menerima "0"/"1" dari FormData
+                'is_active'           => 'nullable',
 
                 // opsional lama
                 'category'            => 'nullable|string|max:100',
@@ -668,6 +697,21 @@ class CommunityController extends Controller
                 'admin_contact_ids'   => 'nullable|array',
                 'admin_contact_ids.*' => 'integer|exists:users,id',
             ]);
+
+            // Validasi khusus untuk logo jika berupa file upload
+            if ($request->hasFile('logo')) {
+                $logoValidator = Validator::make($request->all(), [
+                    'logo' => 'file|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048'
+                ]);
+                
+                if ($logoValidator->fails()) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Logo validation failed',
+                        'errors'  => $logoValidator->errors(),
+                    ], 422);
+                }
+            }
 
             if ($validator->fails()) {
                 return response()->json([
@@ -679,6 +723,26 @@ class CommunityController extends Controller
 
             $community = Community::findOrFail($id);
             $validated = $validator->validated();
+
+            // NORMALISASI: Konversi is_active ke integer 0/1
+            if (array_key_exists('is_active', $validated)) {
+                $isActive = $validated['is_active'];
+                // Handle berbagai format input dari frontend (string, bool, numeric, array checkbox)
+                if (is_array($isActive)) {
+                    $flat = collect($isActive)
+                        ->map(fn ($v) => is_bool($v) ? ($v ? '1' : '0') : strtolower(trim((string) $v)))
+                        ->filter(fn ($v) => $v !== '');
+                    $validated['is_active'] = $flat->contains(fn ($v) => in_array($v, ['1', 'true', 'on', 'yes'], true)) ? 1 : 0;
+                } elseif (is_string($isActive)) {
+                    $validated['is_active'] = in_array(strtolower($isActive), ['1', 'true', 'on', 'yes'], true) ? 1 : 0;
+                } elseif (is_bool($isActive)) {
+                    $validated['is_active'] = $isActive ? 1 : 0;
+                } elseif (is_numeric($isActive)) {
+                    $validated['is_active'] = (int) $isActive > 0 ? 1 : 0;
+                } else {
+                    $validated['is_active'] = 0;
+                }
+            }
 
             // Alias: map 'type' ke 'world_type' jika perlu
             if (empty($validated['world_type']) && !empty($validated['type'])) {

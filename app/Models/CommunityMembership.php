@@ -39,7 +39,8 @@ class CommunityMembership extends Model
             if (empty($membership->status)) {
                 $membership->status = 'active';
             }
-            if (empty($membership->joined_at)) {
+            // Hanya set joined_at otomatis untuk status active
+            if (empty($membership->joined_at) && strtolower((string)$membership->status) === 'active') {
                 $membership->joined_at = now();
             }
         });

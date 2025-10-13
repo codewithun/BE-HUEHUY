@@ -15,6 +15,14 @@ class Community extends Model
         'name',
         'description',
         'logo',
+        // Tambahan agar sesuai FE
+        'corporate_id',
+        'bg_color_1',
+        'bg_color_2',
+        'world_type',
+        'is_active',
+
+        // opsional lama
         'category',
         'privacy',
         'is_verified',
@@ -22,6 +30,7 @@ class Community extends Model
 
     protected $casts = [
         'is_verified' => 'boolean',
+        'is_active'   => 'boolean',
     ];
 
     /**
@@ -136,5 +145,11 @@ class Community extends Model
         // relasi ke user yang jadi kontak admin/manager tenant
         return $this->belongsToMany(User::class, 'community_admin_contacts')
             ->withTimestamps();
+    }
+
+    // Relasi ke mitra
+    public function corporate()
+    {
+        return $this->belongsTo(Corporate::class);
     }
 }

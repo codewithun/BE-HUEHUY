@@ -134,6 +134,9 @@ Route::prefix('admin')->name('admin.')->group(function () {
         ->whereNumber('id');
 
     Route::apiResource('/communities', CommunityController::class);
+    // Tambah ini: daftar anggota komunitas (admin)
+    Route::get('/communities/{id}/members', [CommunityController::class, 'adminMembers'])
+        ->whereNumber('id');
 
     // Event routes
     Route::apiResource('/events', EventController::class);

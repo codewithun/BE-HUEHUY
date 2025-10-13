@@ -9,6 +9,7 @@ use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\Log;
 
 class DynamicContentController extends Controller
 {
@@ -22,7 +23,7 @@ class DynamicContentController extends Controller
         $sortby = $request->get("sortBy", "created_at");
         $paginate = $request->get("paginate", 10);
         $filter = $request->get("filter", null);
-        $world_id = $request->get("world_id", null);
+        $community_id = $request->get("community_id", null);
 
         // ? Preparation
         $columnAliases = [];
@@ -46,11 +47,17 @@ class DynamicContentController extends Controller
             }
         }
 
-        if ($world_id) {
-            $query->where('world_id', $world_id);
-        } else {
-            $query->whereNull('world_id');
+        // Optional query param filter: type=home|hunting
+        if ($request->filled('type')) {
+            $query->where('type', $request->get('type'));
         }
+
+        // PERBAIKAN: Filter komunitas yang lebih fleksibel
+        if ($community_id && $community_id !== '' && $community_id !== 'null') {
+            // Jika ada filter komunitas yang dipilih, tampilkan hanya widget komunitas tersebut
+            $query->where('community_id', $community_id);
+        }
+        // HAPUS bagian else - sehingga kalau tidak ada filter, tampilkan SEMUA widget (global + komunitas)
 
         // ? Sort & executing with pagination
         $query = $query->orderBy('level', 'asc')
@@ -77,20 +84,26 @@ class DynamicContentController extends Controller
     // =============================================>
     public function store(Request $request)
     {
+        // Debug logging untuk request
+        Log::info('=== DYNAMIC CONTENT STORE START ===');
+    Log::info('Request data:', $request->all());
+    Log::info('Source type: ' . $request->source_type);
+    // Avoid array to string conversion when multiple cubes are selected
+    Log::info('Dynamic content cubes:', ['dynamic_content_cubes' => $request->dynamic_content_cubes]);
+    Log::info('Community ID: ' . $request->community_id);
+        
         // ? Validate request
         $validation = $this->validation($request->all(), [
             'name' => 'required|string|max:255',
             'description' => 'required|string|max:255',
-            'type' => ['required', Rule::in(['home', 'hunting'])],
-            'content_type' => ['required', Rule::in(['nearby', 'horizontal', 'vertical', 'category', 'ad_category', 'recommendation'])],
-            'source_type' => ['nullable', Rule::in(['cube', 'ad', 'shuffle_cube'])],
-            // 'level' => 'required|numeric',
-            // 'is_active' => 'required|boolean',
-            'world_id' => 'nullable',
-
-            'dynamic_content_cubes' => [Rule::requiredIf($request->source_type == 'cube')],
-            // 'dynamic_content_cubes.*.cube_id' => 'required|numeric|exists:cubes,id'
-
+            'type' => ['required', Rule::in(['home', 'hunting', 'information'])],
+            'content_type' => ['required', Rule::in(['nearby', 'horizontal', 'vertical', 'category', 'ad_category', 'recommendation', 'promo'])],
+            'source_type' => ['nullable', Rule::in(['cube', 'ad', 'shuffle_cube', 'promo_selected'])],
+            'size' => ['nullable', Rule::in(['S', 'M', 'L', 'XL', 'XL-Ads'])],
+            'community_id' => 'nullable|numeric|exists:communities,id',
+            'dynamic_content_cubes' => [Rule::requiredIf(function() use ($request) {
+                return $request->source_type === 'cube' && $request->content_type === 'promo';
+            })],
         ]);
 
         if ($validation) return $validation;
@@ -99,7 +112,16 @@ class DynamicContentController extends Controller
         DB::beginTransaction();
         $model = new DynamicContent();
 
-        $last_level = DynamicContent::where('type', $request->type)->where('world_id', $request->world_id)->orderBy('level', 'DESC')->first('level');
+        // Handle community_id filtering properly
+        $query = DynamicContent::where('type', $request->type);
+        
+        if ($request->community_id) {
+            $query->where('community_id', $request->community_id);
+        } else {
+            $query->whereNull('community_id');
+        }
+        
+        $last_level = $query->orderBy('level', 'DESC')->first();
 
         // ? Dump data
         $model = $this->dump_field($request->all(), $model);
@@ -109,33 +131,70 @@ class DynamicContentController extends Controller
         // ? Executing
         try {
             $model->save();
+            Log::info('Dynamic content saved successfully:', ['id' => $model->id]);
         } catch (\Throwable $th) {
+            Log::error('Failed to save dynamic content:', [
+                'error' => $th->getMessage(),
+                'file' => $th->getFile(),
+                'line' => $th->getLine(),
+                'data' => $model->toArray()
+            ]);
             DB::rollBack();
             return response([
-                "message" => "Error: server side having problem!",
+                "message" => "Error: server side having problem! - " . $th->getMessage(),
             ], 500);
         }
 
         // * Handle Dynamic Content Cubes
-        if ($request->source_type == 'cube') {
-            $cubes = explode(',', $request->dynamic_content_cubes);
-            $prepareDynamicContentCubes = [];
-            foreach ($cubes as $item) {
-
-                array_push($prepareDynamicContentCubes, [
-                    'dynamic_content_id' => $model->id,
-                    'cube_id' => $item,
-                    'created_at' => Carbon::now()
-                ]);
+        if ($request->source_type == 'cube' && $request->dynamic_content_cubes) {
+            Log::info('Processing cubes...');
+            // Avoid array to string conversion; log raw payload safely
+            Log::info('Raw cubes data', ['raw' => $request->dynamic_content_cubes]);
+            Log::info('Cubes data type: ' . gettype($request->dynamic_content_cubes));
+            
+            // Handle both array and string formats
+            $cubes = [];
+            if (is_array($request->dynamic_content_cubes)) {
+                $cubes = $request->dynamic_content_cubes;
+            } elseif (is_string($request->dynamic_content_cubes)) {
+                // Handle comma-separated string or single value
+                $cubes = explode(',', $request->dynamic_content_cubes);
+            } else {
+                // Single numeric value
+                $cubes = [$request->dynamic_content_cubes];
             }
+            
+            // Clean up the array - remove empty values and ensure numeric
+            $cubes = array_filter(array_map('intval', $cubes), function($cube) {
+                return $cube > 0;
+            });
+                
+            Log::info('Processed cubes:', $cubes);
+            
+            if (!empty($cubes)) {
+                $prepareDynamicContentCubes = [];
+                foreach ($cubes as $item) {
+                    $prepareDynamicContentCubes[] = [
+                        'dynamic_content_id' => $model->id,
+                        'cube_id' => intval($item),
+                        'created_at' => Carbon::now(),
+                        'updated_at' => Carbon::now()
+                    ];
+                }
 
-            try {
-                DynamicContentCube::insert($prepareDynamicContentCubes);
-            } catch (\Throwable $th) {
-                DB::rollBack();
-                return response([
-                    "message" => "Error: failed to insert new dynamic content cubes",
-                ], 500);
+                try {
+                    DynamicContentCube::insert($prepareDynamicContentCubes);
+                    Log::info('Successfully inserted cubes:', $prepareDynamicContentCubes);
+                } catch (\Throwable $th) {
+                    Log::error('Failed to insert cubes:', [
+                        'error' => $th->getMessage(),
+                        'data' => $prepareDynamicContentCubes
+                    ]);
+                    DB::rollBack();
+                    return response([
+                        "message" => "Error: failed to insert new dynamic content cubes - " . $th->getMessage(),
+                    ], 500);
+                }
             }
         }
 
@@ -160,13 +219,13 @@ class DynamicContentController extends Controller
         $validation = $this->validation($request->all(), [
             'name' => 'nullable|string|max:255',
             'description' => 'nullable|string|max:255',
-            'type' => ['nullable', Rule::in(['home', 'hunting'])],
-            'content_type' => ['nullable', Rule::in(['nearby', 'horizontal', 'vertical', 'category', 'ad_category', 'recommendation'])],
-            'source_type' => ['nullable', Rule::in(['cube', 'ad', 'shuffle_cube'])],
+            'type' => ['nullable', Rule::in(['home', 'hunting', 'information'])],
+            'content_type' => ['nullable', Rule::in(['nearby', 'horizontal', 'vertical', 'category', 'ad_category', 'recommendation', 'promo'])],
+            'source_type' => ['nullable', Rule::in(['cube', 'ad', 'shuffle_cube', 'promo_selected'])],
+            'size' => ['nullable', Rule::in(['S', 'M', 'L', 'XL', 'XL-Ads'])],
             'level' => 'nullable|numeric',
             'is_active' => 'nullable|boolean',
-            'world_id' => 'nullable',
-
+            'community_id' => 'nullable|numeric|exists:communities,id',
             'dynamic_content_cubes' => [Rule::requiredIf($request->source_type == 'cube')],
         ]);
 
@@ -174,7 +233,7 @@ class DynamicContentController extends Controller
 
         if($request->level) {
             if($request->level < $model->level) {
-                $lowest_stages = DynamicContent::where('type', $model->type)->where('world_id', $model->world_id)->where('level', '<', $model->level)->where('level', '>=', $request->level )->get();
+                $lowest_stages = DynamicContent::where('type', $model->type)->where('community_id', $model->community_id)->where('level', '<', $model->level)->where('level', '>=', $request->level )->get();
     
                 foreach ($lowest_stages as $lowest_stage) {
                     $lowest_stage->update(['level' => $lowest_stage->level + 1]);
@@ -182,7 +241,7 @@ class DynamicContentController extends Controller
             }
 
             if($request->level > $model->level) {
-                $lowest_stages = DynamicContent::where('type', $model->type)->where('world_id', $model->world_id)->where('level', '>', $model->level)->where('level', '<=', $request->level )->get();
+                $lowest_stages = DynamicContent::where('type', $model->type)->where('community_id', $model->community_id)->where('level', '>', $model->level)->where('level', '<=', $request->level )->get();
 
                 foreach ($lowest_stages as $lowest_stage) {
                     $lowest_stage->update(['level' => $lowest_stage->level - 1]);
@@ -205,28 +264,45 @@ class DynamicContentController extends Controller
         }
 
         // * Handle Dynamic Content Cubes
-        if ($request->source_type == 'cube') {
-            $cubes = explode(',', $request->dynamic_content_cubes);
-            $prepareDynamicContentCubes = [];
-
-            DynamicContentCube::where('dynamic_content_id', $model->id)->delete();
-
-            foreach ($cubes as $item) {
-
-                array_push($prepareDynamicContentCubes, [
-                    'dynamic_content_id' => $model->id,
-                    'cube_id' => $item,
-                    'created_at' => Carbon::now()
-                ]);
+        if ($request->source_type == 'cube' && $request->dynamic_content_cubes) {
+            // Handle both array and string formats
+            $cubes = [];
+            if (is_array($request->dynamic_content_cubes)) {
+                $cubes = $request->dynamic_content_cubes;
+            } elseif (is_string($request->dynamic_content_cubes)) {
+                $cubes = explode(',', $request->dynamic_content_cubes);
+            } else {
+                $cubes = [$request->dynamic_content_cubes];
             }
+            
+            // Clean up the array
+            $cubes = array_filter(array_map('intval', $cubes), function($cube) {
+                return $cube > 0;
+            });
+            
+            if (!empty($cubes)) {
+                $prepareDynamicContentCubes = [];
+                
+                // Delete existing cubes first
+                DynamicContentCube::where('dynamic_content_id', $model->id)->delete();
 
-            try {
-                DynamicContentCube::insert($prepareDynamicContentCubes);
-            } catch (\Throwable $th) {
-                DB::rollBack();
-                return response([
-                    "message" => "Error: failed to insert new dynamic content cubes",
-                ], 500);
+                foreach ($cubes as $item) {
+                    $prepareDynamicContentCubes[] = [
+                        'dynamic_content_id' => $model->id,
+                        'cube_id' => intval($item),
+                        'created_at' => Carbon::now(),
+                        'updated_at' => Carbon::now()
+                    ];
+                }
+
+                try {
+                    DynamicContentCube::insert($prepareDynamicContentCubes);
+                } catch (\Throwable $th) {
+                    DB::rollBack();
+                    return response([
+                        "message" => "Error: failed to insert new dynamic content cubes - " . $th->getMessage(),
+                    ], 500);
+                }
             }
         }
 
@@ -261,4 +337,3 @@ class DynamicContentController extends Controller
         ]);
     }
 }
-        

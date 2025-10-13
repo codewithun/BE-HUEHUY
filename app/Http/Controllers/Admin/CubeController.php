@@ -919,6 +919,54 @@ class CubeController extends Controller
         ], 201);
     }
 
+    // GET /api/admin/cubes/{id}
+    public function show(string $id)
+    {
+        try {
+            $cube = Cube::with([
+                'cube_type',
+                'user',
+                'corporate',
+                'world',
+                'opening_hours',
+                'tags',
+                'ads' => function ($query) {
+                    return $query->select([
+                        'ads.*',
+                        DB::raw('CAST(IF(ads.is_daily_grab = 1,
+                                (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
+                                SUM(total_grab)
+                            ) AS SIGNED) AS total_grab'),
+                        DB::raw('CAST(IF(ads.is_daily_grab = 1,
+                                ads.max_grab - (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
+                                ads.max_grab - SUM(total_grab)
+                            ) AS SIGNED) AS total_remaining'),
+                    ])
+                    ->leftJoin('summary_grabs', 'summary_grabs.ad_id', 'ads.id')
+                    ->groupBy('ads.id');
+                },
+                'ads.ad_category'
+            ])->find($id);
+
+            if (!$cube) {
+                return response(['message' => 'not found'], 404);
+            }
+
+            return response([
+                'message' => 'success',
+                'data' => $cube,
+            ], 200);
+        } catch (\Throwable $e) {
+            Log::error('CubeController@show failed', [
+                'id' => $id,
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+            return response(['message' => 'Error: server side having problem!'], 500);
+        }
+    }
+
     /**
      * Send voucher notifications to specific users
      */

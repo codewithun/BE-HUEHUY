@@ -21,7 +21,8 @@ class CorporateController extends Controller
         // ? Initial params
         $sortDirection = $request->get("sortDirection", "DESC");
         $sortby = $request->get("sortBy", "created_at");
-        $paginate = $request->get("paginate", 10);
+        $paginateRaw = $request->get("paginate", 10);
+        $paginateAll = ($paginateRaw === 'all' || (int)$paginateRaw === 0);
         $filter = $request->get("filter", null);
 
         // ? Preparation
@@ -30,6 +31,11 @@ class CorporateController extends Controller
         // ? Begin
         $model = new Corporate();
         $query = Corporate::query();
+
+        // Safe selectable fallback
+        $selectable = property_exists($model, 'selectable') && is_array($model->selectable)
+            ? $model->selectable
+            : ['*'];
 
         // ? When search
         if ($request->get("search") != "") {
@@ -46,23 +52,39 @@ class CorporateController extends Controller
             }
         }
 
-        // ? Sort & executing with pagination
-        $query = $query->orderBy($this->remark_column($sortby, $columnAliases), $sortDirection)
-            ->select($model->selectable)->paginate($paginate);
+        // ? Sort & executing
+        $query = $query->orderBy($this->remark_column($sortby, $columnAliases), $sortDirection);
 
-        // ? When empty
-        if (empty($query->items())) {
+        if ($paginateAll) {
+            $items = $query->select($selectable)->get();
+
+            if ($items->isEmpty()) {
+                return response([
+                    "message" => "empty data",
+                    "data" => [],
+                ], 200);
+            }
+
+            return response([
+                "message" => "success",
+                "data" => $items,
+                "total_row" => $items->count(),
+            ]);
+        }
+
+        $page = $query->select($selectable)->paginate((int)$paginateRaw);
+
+        if (empty($page->items())) {
             return response([
                 "message" => "empty data",
                 "data" => [],
             ], 200);
         }
 
-        // ? When success
         return response([
             "message" => "success",
-            "data" => $query->all(),
-            "total_row" => $query->total(),
+            "data" => $page->all(),
+            "total_row" => $page->total(),
         ]);
     }
 
@@ -232,7 +254,8 @@ class CorporateController extends Controller
         // ? Initial params
         $sortDirection = $request->get("sortDirection", "DESC");
         $sortby = $request->get("sortBy", "created_at");
-        $paginate = $request->get("paginate", 10);
+        $paginateRaw = $request->get("paginate", 10);
+        $paginateAll = ($paginateRaw === 'all' || (int)$paginateRaw === 0);
         $filter = $request->get("filter", null);
 
         // ? Preparation
@@ -240,7 +263,12 @@ class CorporateController extends Controller
 
         // ? Begin
         $model = new CorporateUser();
-        $query = CorporateUser::with('user', 'user.role', 'role');
+        $query = CorporateUser::with('user', 'user.role', 'role')->where('corporate_id', $id);
+
+        // Safe selectable fallback
+        $selectable = property_exists($model, 'selectable') && is_array($model->selectable)
+            ? $model->selectable
+            : ['*'];
 
         // ? When search
         if ($request->get("search") != "") {
@@ -257,24 +285,39 @@ class CorporateController extends Controller
             }
         }
 
-        // ? Sort & executing with pagination
-        $query = $query->where('corporate_id', $id)
-            ->orderBy($this->remark_column($sortby, $columnAliases), $sortDirection)
-            ->select($model->selectable)->paginate($paginate);
+        // ? Sort & executing
+        $query = $query->orderBy($this->remark_column($sortby, $columnAliases), $sortDirection);
 
-        // ? When empty
-        if (empty($query->items())) {
+        if ($paginateAll) {
+            $items = $query->select($selectable)->get();
+
+            if ($items->isEmpty()) {
+                return response([
+                    "message" => "empty data",
+                    "data" => [],
+                ], 200);
+            }
+
+            return response([
+                "message" => "success",
+                "data" => $items,
+                "total_row" => $items->count(),
+            ]);
+        }
+
+        $page = $query->select($selectable)->paginate((int)$paginateRaw);
+
+        if (empty($page->items())) {
             return response([
                 "message" => "empty data",
                 "data" => [],
             ], 200);
         }
 
-        // ? When success
         return response([
             "message" => "success",
-            "data" => $query->all(),
-            "total_row" => $query->total(),
+            "data" => $page->all(),
+            "total_row" => $page->total(),
         ]);
     }
 

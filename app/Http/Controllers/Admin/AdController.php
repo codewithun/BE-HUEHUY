@@ -9,6 +9,7 @@ use App\Models\Voucher;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 
 class AdController extends Controller
@@ -357,5 +358,41 @@ class AdController extends Controller
             "data" => $model
         ]);
     }
+
+    // GET /api/admin/ads/{id}
+    public function show(string $id)
+    {
+        try {
+            $ad = \App\Models\Ad::select([
+                    'ads.*',
+                    DB::raw('CAST(IF(ads.is_daily_grab = 1,
+                            (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
+                            SUM(total_grab)
+                        ) AS SIGNED) AS total_grab'),
+                    DB::raw('CAST(IF(ads.is_daily_grab = 1,
+                            ads.max_grab - (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
+                            ads.max_grab - SUM(total_grab)
+                        ) AS SIGNED) AS total_remaining'),
+                ])
+                ->leftJoin('summary_grabs', 'summary_grabs.ad_id', 'ads.id')
+                ->with(['cube', 'ad_category'])
+                ->where('ads.id', $id)
+                ->groupBy('ads.id')
+                ->first();
+
+            if (!$ad) {
+                return response(['message' => 'not found'], 404);
+            }
+
+            return response(['message' => 'success', 'data' => $ad], 200);
+        } catch (\Throwable $e) {
+            Log::error('AdController@show failed', [
+                'id' => $id,
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+            return response(['message' => 'Error: server side having problem!'], 500);
+        }
+    }
 }
-        

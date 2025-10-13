@@ -18,7 +18,7 @@ class AdController extends Controller
     // ## Display a listing of the resource.
     // ========================================>
     public function index(Request $request)
-    {   
+    {
         // ? Initial params
         $sortDirection = $request->get("sortDirection", "DESC");
         $sortby = $request->get("sortBy", "created_at");
@@ -93,16 +93,33 @@ class AdController extends Controller
             'title' => 'required|string|max:255',
             'description' => 'nullable|string',
             'max_grab' => 'nullable|numeric',
-            'is_daily_grab' => 'nullable|boolean',
+            'unlimited_grab' => 'nullable',
+            'is_daily_grab' => 'nullable',
             'status' => 'nullable|string',
             'type' => ['required', Rule::in(['general', 'voucher', 'huehuy', 'iklan'])],
             'promo_type' => ['required', Rule::in(['offline', 'online'])],
+            'validation_type' => ['nullable', 'string', Rule::in(['auto', 'manual'])],
+            'code' => [
+                'nullable',
+                'string',
+                'max:255',
+                'unique:ads,code',
+                'required_if:validation_type,manual'
+            ],
+            'target_type' => ['nullable', 'string', Rule::in(['all', 'user', 'community'])],
+            'target_user_ids' => 'nullable|array',
+            'target_user_ids.*' => 'numeric|exists:users,id',
+            'community_id' => 'nullable|numeric|exists:communities,id',
             'max_production_per_day' => 'nullable|numeric|min:0',
             'sell_per_day' => 'nullable|numeric|min:0',
             'level_umkm' => 'nullable|numeric|min:0',
             'start_validate' => 'nullable|date_format:d-m-Y',
-            'finish_validate' => 'nullable|date_format:d-m-Y',
-            'validation_time_limit' => 'nullable|date_format:H:i:s',
+            'finish_validate' => 'nullable|date_format:d-m-Y|after_or_equal:start_validate',
+            'validation_time_limit' => 'nullable|regex:/^\d{1,2}:\d{2}(:\d{2})?$/',
+            'jam_mulai' => 'nullable|regex:/^\d{1,2}:\d{2}(:\d{2})?$/',
+            'jam_berakhir' => 'nullable|regex:/^\d{1,2}:\d{2}(:\d{2})?$/',
+            'day_type' => ['nullable', 'string', Rule::in(['weekend', 'weekday', 'custom'])],
+            'custom_days' => 'nullable|array',
             'image' => 'nullable',
             'ads.image_1' => 'nullable',
             'ads.image_2' => 'nullable',
@@ -118,6 +135,42 @@ class AdController extends Controller
         // ? Dump data
         $model = $this->dump_field($request->all(), $model);
         $model->slug = StringHelper::uniqueSlug($request->title);
+
+        // Handle schedule fields with better boolean processing
+        $unlimited_grab = $request->input('unlimited_grab');
+        $model->unlimited_grab = in_array($unlimited_grab, [1, '1', true, 'true', 'on'], true);
+
+        $is_daily_grab = $request->input('is_daily_grab');
+        $model->is_daily_grab = in_array($is_daily_grab, [1, '1', true, 'true', 'on'], true);
+
+        // Handle time fields - ensure proper format conversion
+        $jam_mulai = $request->input('jam_mulai');
+        if ($jam_mulai && !preg_match('/^\d{2}:\d{2}:\d{2}$/', $jam_mulai)) {
+            $jam_mulai = strlen($jam_mulai) == 5 ? $jam_mulai . ':00' : $jam_mulai;
+        }
+        $model->jam_mulai = $jam_mulai;
+
+        $jam_berakhir = $request->input('jam_berakhir');
+        if ($jam_berakhir && !preg_match('/^\d{2}:\d{2}:\d{2}$/', $jam_berakhir)) {
+            $jam_berakhir = strlen($jam_berakhir) == 5 ? $jam_berakhir . ':00' : $jam_berakhir;
+        }
+        $model->jam_berakhir = $jam_berakhir;
+
+        $model->day_type = $request->input('day_type', 'custom');
+
+        // Handle custom days
+        $customDays = $request->input('custom_days', []);
+        if (is_array($customDays) && !empty($customDays)) {
+            $model->custom_days = $customDays;
+        } else {
+            $model->custom_days = null;
+        }
+
+        // Handle validation fields
+        $model->validation_type = $request->input('validation_type', 'auto');
+        $model->code = $request->input('code');
+        $model->target_type = $request->input('target_type', 'all');
+        $model->community_id = $request->input('community_id');
 
         // * Check if has upload file
         if ($request->hasFile('image')) {
@@ -136,8 +189,10 @@ class AdController extends Controller
         }
 
         // Update image timestamp for cache busting
-        if ($request->hasFile('image') || $request->hasFile('ads.image_1') || 
-            $request->hasFile('ads.image_2') || $request->hasFile('ads.image_3')) {
+        if (
+            $request->hasFile('image') || $request->hasFile('ads.image_1') ||
+            $request->hasFile('ads.image_2') || $request->hasFile('ads.image_3')
+        ) {
             $model->image_updated_at = now();
         }
 
@@ -148,9 +203,24 @@ class AdController extends Controller
         if ($request->finish_validate) {
             $model->finish_validate = Carbon::create($request->finish_validate)->format('Y-m-d');
         }
-        if ($request->validation_time_limit) {
-            $model->validation_time_limit = Carbon::create($request->validation_time_limit)->format('H:i:s');
+
+        // Handle validation_time_limit with proper format conversion
+        $validation_time_limit = $request->input('validation_time_limit');
+        if ($validation_time_limit && !preg_match('/^\d{2}:\d{2}:\d{2}$/', $validation_time_limit)) {
+            $validation_time_limit = strlen($validation_time_limit) == 5 ? $validation_time_limit . ':00' : $validation_time_limit;
         }
+        $model->validation_time_limit = $validation_time_limit;
+
+        // Log data untuk debugging
+        Log::info('AdController@store processing data', [
+            'unlimited_grab' => $model->unlimited_grab,
+            'jam_mulai' => $model->jam_mulai,
+            'jam_berakhir' => $model->jam_berakhir,
+            'day_type' => $model->day_type,
+            'custom_days' => $model->custom_days,
+            'validation_type' => $model->validation_type,
+            'code' => $model->code
+        ]);
 
         // ? Executing
         try {
@@ -161,6 +231,20 @@ class AdController extends Controller
                 "message" => "Error: failed to create ads",
                 'data' => $th
             ], 500);
+        }
+
+        // Process target users untuk voucher dengan target user tertentu
+        if ($model->type === 'voucher' && $model->target_type === 'user' && $request->has('target_user_ids')) {
+            try {
+                // Sync target users menggunakan tabel pivot
+                $model->target_users()->sync($request->input('target_user_ids', []));
+            } catch (\Throwable $th) {
+                Log::error('AdController@store sync target users failed', [
+                    'ad_id' => $model->id,
+                    'error' => $th->getMessage()
+                ]);
+                // Don't rollback for this, just log the error
+            }
         }
 
         /**
@@ -196,6 +280,18 @@ class AdController extends Controller
     // ============================================>
     public function update(Request $request, string $id)
     {
+        // Log incoming request for debugging
+        Log::info('AdController@update received request', [
+            'ad_id' => $id,
+            'method' => $request->method(),
+            'content_type' => $request->header('Content-Type'),
+            'all_data' => $request->all(),
+            'files' => array_keys($request->allFiles()),
+            'is_daily_grab_value' => $request->input('is_daily_grab'),
+            'jam_berakhir_value' => $request->input('jam_berakhir'),
+            'unlimited_grab_value' => $request->input('unlimited_grab'),
+        ]);
+
         // ? Initial
         DB::beginTransaction();
         $model = Ad::findOrFail($id);
@@ -204,34 +300,114 @@ class AdController extends Controller
         $oldImage2 = $model->image_2;
         $oldImage3 = $model->image_3;
 
-        // ? Validate request
+        // ? Validate request - Make most fields nullable for update
         $validation = $this->validation($request->all(), [
-            'cube_id' => 'required|numeric|exists:cubes,id',
-            'ad_category_id' => 'required|numeric|exists:ad_categories,id',
-            'title' => 'required|string|max:255',
+            'cube_id' => 'nullable|numeric|exists:cubes,id',
+            'ad_category_id' => 'nullable|numeric|exists:ad_categories,id',
+            'title' => 'nullable|string|max:255',
             'description' => 'nullable|string',
             'max_grab' => 'nullable|numeric',
-            'is_daily_grab' => 'nullable|boolean',
-            'type' => ['required', Rule::in(['general', 'voucher', 'huehuy', 'iklan'])],
-            'promo_type' => ['required', Rule::in(['offline', 'online'])],
+            'unlimited_grab' => 'nullable',
+            'is_daily_grab' => 'nullable',
+            'type' => ['nullable', Rule::in(['general', 'voucher', 'huehuy', 'iklan'])],
+            'promo_type' => ['nullable', Rule::in(['offline', 'online'])],
+            'validation_type' => ['nullable', 'string', Rule::in(['auto', 'manual'])],
+            'code' => [
+                'nullable',
+                'string',
+                'max:255',
+                function ($attribute, $value, $fail) use ($request, $id) {
+                    // Validasi unique untuk update (ignore current ad id)
+                    if ($value) {
+                        $exists = \App\Models\Ad::where('code', $value)
+                            ->where('id', '!=', $id)
+                            ->exists();
+
+                        if ($exists) {
+                            $fail('Kode ini sudah digunakan oleh ads lain.');
+                        }
+                    }
+                },
+                'required_if:validation_type,manual'
+            ],
+            'target_type' => ['nullable', 'string', Rule::in(['all', 'user', 'community'])],
+            'target_user_ids' => 'nullable|array',
+            'target_user_ids.*' => 'numeric|exists:users,id',
+            'community_id' => 'nullable|numeric|exists:communities,id',
             'max_production_per_day' => 'nullable|numeric|min:0',
             'sell_per_day' => 'nullable|numeric|min:0',
             'level_umkm' => 'nullable|numeric|min:0',
             'status' => 'nullable|string',
             'start_validate' => 'nullable|date_format:d-m-Y',
-            'finish_validate' => 'nullable|date_format:d-m-Y',
-            'validation_time_limit' => 'nullable|date_format:H:i:s',
+            'finish_validate' => 'nullable|date_format:d-m-Y|after_or_equal:start_validate',
+            'validation_time_limit' => 'nullable|regex:/^\d{1,2}:\d{2}(:\d{2})?$/',
+            'jam_mulai' => 'nullable|regex:/^\d{1,2}:\d{2}(:\d{2})?$/',
+            'jam_berakhir' => 'nullable|regex:/^\d{1,2}:\d{2}(:\d{2})?$/',
+            'day_type' => ['nullable', 'string', Rule::in(['weekend', 'weekday', 'custom'])],
+            'custom_days' => 'nullable|array',
             'image' => 'nullable',
             'ads.image_1' => 'nullable',
             'ads.image_2' => 'nullable',
             'ads.image_3' => 'nullable',
         ]);
 
-        if ($validation) return $validation;
+        if ($validation) {
+            Log::error('AdController@update validation failed', [
+                'ad_id' => $id,
+                'validation_errors' => $validation->getData(),
+                'request_data' => $request->all()
+            ]);
+            return $validation;
+        }
+
+        // Log request data untuk debugging
+        Log::info('AdController@update received data', [
+            'ad_id' => $id,
+            'all_request' => $request->all(),
+            'files' => array_keys($request->allFiles())
+        ]);
 
         // ? Dump data
         $model = $this->dump_field($request->all(), $model);
-        $model->slug = StringHelper::uniqueSlug($request->title);
+        if ($request->filled('title')) {
+            $model->slug = StringHelper::uniqueSlug($request->title);
+        }
+
+        // Handle schedule fields with better boolean processing  
+        $unlimited_grab = $request->input('unlimited_grab');
+        $model->unlimited_grab = in_array($unlimited_grab, [1, '1', true, 'true', 'on'], true);
+
+        $is_daily_grab = $request->input('is_daily_grab');
+        $model->is_daily_grab = in_array($is_daily_grab, [1, '1', true, 'true', 'on'], true);
+
+        // Handle time fields - ensure proper format conversion
+        $jam_mulai = $request->input('jam_mulai');
+        if ($jam_mulai && !preg_match('/^\d{2}:\d{2}:\d{2}$/', $jam_mulai)) {
+            $jam_mulai = strlen($jam_mulai) == 5 ? $jam_mulai . ':00' : $jam_mulai;
+        }
+        $model->jam_mulai = $jam_mulai;
+
+        $jam_berakhir = $request->input('jam_berakhir');
+        if ($jam_berakhir && !preg_match('/^\d{2}:\d{2}:\d{2}$/', $jam_berakhir)) {
+            $jam_berakhir = strlen($jam_berakhir) == 5 ? $jam_berakhir . ':00' : $jam_berakhir;
+        }
+        $model->jam_berakhir = $jam_berakhir;
+
+        $model->day_type = $request->input('day_type', 'custom');
+
+        // Handle custom days
+        $customDays = $request->input('custom_days', []);
+        if (is_array($customDays) && !empty($customDays)) {
+            $model->custom_days = $customDays;
+        } else {
+            $model->custom_days = null;
+        }
+
+        // Handle validation fields
+        $model->validation_type = $request->input('validation_type', 'auto');
+        $model->code = $request->input('code');
+        $model->target_type = $request->input('target_type', 'all');
+        $model->community_id = $request->input('community_id');
 
         if ($request->start_validate) {
             $model->start_validate = Carbon::create($request->start_validate)->format('Y-m-d');
@@ -239,9 +415,25 @@ class AdController extends Controller
         if ($request->finish_validate) {
             $model->finish_validate = Carbon::create($request->finish_validate)->format('Y-m-d');
         }
-        if ($request->validation_time_limit) {
-            $model->validation_time_limit = Carbon::create($request->validation_time_limit)->format('H:i:s');
+
+        // Handle validation_time_limit with proper format conversion
+        $validation_time_limit = $request->input('validation_time_limit');
+        if ($validation_time_limit && !preg_match('/^\d{2}:\d{2}:\d{2}$/', $validation_time_limit)) {
+            $validation_time_limit = strlen($validation_time_limit) == 5 ? $validation_time_limit . ':00' : $validation_time_limit;
         }
+        $model->validation_time_limit = $validation_time_limit;
+
+        // Log data untuk debugging
+        Log::info('AdController@update processing data', [
+            'ad_id' => $id,
+            'unlimited_grab' => $model->unlimited_grab,
+            'jam_mulai' => $model->jam_mulai,
+            'jam_berakhir' => $model->jam_berakhir,
+            'day_type' => $model->day_type,
+            'custom_days' => $model->custom_days,
+            'validation_type' => $model->validation_type,
+            'code' => $model->code
+        ]);
 
         // * Check if has upload file
         if ($request->hasFile('image')) {
@@ -273,8 +465,10 @@ class AdController extends Controller
         }
 
         // Update image timestamp for cache busting
-        if ($request->hasFile('image') || $request->hasFile('ads.image_1') || 
-            $request->hasFile('ads.image_2') || $request->hasFile('ads.image_3')) {
+        if (
+            $request->hasFile('image') || $request->hasFile('ads.image_1') ||
+            $request->hasFile('ads.image_2') || $request->hasFile('ads.image_3')
+        ) {
             $model->image_updated_at = now();
         }
 
@@ -287,6 +481,20 @@ class AdController extends Controller
                 "message" => "Error: server side having problem!",
                 'data' => $th
             ], 500);
+        }
+
+        // Process target users untuk voucher dengan target user tertentu
+        if ($model->type === 'voucher' && $model->target_type === 'user' && $request->has('target_user_ids')) {
+            try {
+                // Sync target users menggunakan tabel pivot
+                $model->target_users()->sync($request->input('target_user_ids', []));
+            } catch (\Throwable $th) {
+                Log::error('AdController@update sync target users failed', [
+                    'ad_id' => $model->id,
+                    'error' => $th->getMessage()
+                ]);
+                // Don't rollback for this, just log the error
+            }
         }
 
         if ($request->promo_type == 'online') {
@@ -364,16 +572,16 @@ class AdController extends Controller
     {
         try {
             $ad = \App\Models\Ad::select([
-                    'ads.*',
-                    DB::raw('CAST(IF(ads.is_daily_grab = 1,
+                'ads.*',
+                DB::raw('CAST(IF(ads.is_daily_grab = 1,
                             (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
                             SUM(total_grab)
                         ) AS SIGNED) AS total_grab'),
-                    DB::raw('CAST(IF(ads.is_daily_grab = 1,
+                DB::raw('CAST(IF(ads.is_daily_grab = 1,
                             ads.max_grab - (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
                             ads.max_grab - SUM(total_grab)
                         ) AS SIGNED) AS total_remaining'),
-                ])
+            ])
                 ->leftJoin('summary_grabs', 'summary_grabs.ad_id', 'ads.id')
                 ->with(['cube', 'ad_category'])
                 ->where('ads.id', $id)

@@ -138,6 +138,7 @@ class CubeController extends Controller
     {
         // Pastikan array ter-normalisasi
         $this->normalizeArrayInput($request);
+        Log::info('opening_hours raw', ['opening_hours' => $request->input('opening_hours')]);
 
         // * Debug log untuk melihat data yang diterima
         Log::info('CubeController@store received data', [
@@ -149,11 +150,19 @@ class CubeController extends Controller
         ]);
 
         // ? Validate request
+        $request->merge([
+            'owner_user_id' => $request->filled('owner_user_id') ? $request->owner_user_id : null,
+            'user_id'       => $request->filled('user_id')       ? $request->user_id       : null,
+            'corporate_id'  => $request->filled('corporate_id')  ? $request->corporate_id  : null,
+        ]);
+        // Skip validation untuk manager tenant jika kubus informasi
+        $isInformation = $request->boolean('is_information');
+
         $validation = $this->validation($request->all(), [
             'cube_type_id' => 'required|numeric',
             'parent_id'    => 'nullable|numeric|exists:cubes,id',
-            'user_id'      => 'nullable|numeric|exists:users,id',
-            'owner_user_id' => 'nullable|numeric|exists:users,id',
+            'user_id'      => $isInformation ? 'nullable|numeric|exists:users,id' : 'nullable|numeric|exists:users,id',
+            'owner_user_id' => $isInformation ? 'nullable|numeric|exists:users,id' : 'nullable|numeric|exists:users,id',
             'corporate_id' => 'nullable|numeric|exists:corporates,id',
             'world_id'     => 'nullable|numeric|exists:worlds,id',
             'color'        => 'nullable|string|max:255',
@@ -175,6 +184,7 @@ class CubeController extends Controller
             'ads.ad_category_id'         => 'nullable|numeric|exists:ad_categories,id',
             'ads.title'                  => 'nullable|string|max:255',
             'ads.max_grab'               => 'nullable|numeric',
+            'ads.unlimited_grab'         => 'nullable|boolean',
             'ads.is_daily_grab'          => 'nullable|boolean',
             'ads.status'                 => 'nullable|string',
             'ads.promo_type'             => ['nullable', 'string', Rule::in(['offline', 'online'])],
@@ -197,6 +207,10 @@ class CubeController extends Controller
             'ads.level_umkm'             => 'nullable|numeric|min:0',
             'ads.image'                  => 'nullable',
             'ads.validation_time_limit'  => 'nullable|date_format:H:i',
+            'ads.jam_mulai'              => 'nullable|date_format:H:i',
+            'ads.jam_berakhir'           => 'nullable|date_format:H:i',
+            'ads.day_type'               => ['nullable', 'string', Rule::in(['weekend', 'weekday', 'custom'])],
+            'ads.custom_days'            => 'nullable|array',
 
             'opening_hours.*'          => 'nullable',
             'opening_hours.*.day'      => ['required', 'string', Rule::in(['senin', 'selasa', 'rabu', 'kamis', 'jumat', 'sabtu', 'minggu'])],
@@ -218,28 +232,14 @@ class CubeController extends Controller
             ], 422);
         }
 
-        // * Validate Manager Tenant Assignment
-        if ($request->cube_type_id == 2) {
-            // Cube type 2 = Kubus Merah (Corporate)
-            if (!$request->corporate_id) {
-                return response([
-                    "message" => "Error: Unprocessable Entity!",
-                    "errors" => [
-                        "corporate_id" => ["Manager Tenant (Mitra) wajib dipilih untuk Kubus Merah"]
-                    ]
-                ], 422);
-            }
-        } else {
-            // Cube type lainnya = perlu user (Manager Tenant individu)
-            if (!$request->owner_user_id && !$request->user_id) {
-                return response([
-                    "message" => "Error: Unprocessable Entity!",
-                    "errors" => [
-                        "owner_user_id" => ["Manager Tenant wajib dipilih"]
-                    ]
-                ], 422);
-            }
-        }
+        // * Log info untuk debugging
+        Log::info('CubeController@store validation passed', [
+            'cube_type_id' => $request->cube_type_id,
+            'owner_user_id' => $request->owner_user_id,
+            'corporate_id' => $request->corporate_id,
+            'is_information' => $request->boolean('is_information'),
+            'cube_type_name' => $cubeType->name
+        ]);
 
         // ? Initial
         DB::beginTransaction();
@@ -248,12 +248,19 @@ class CubeController extends Controller
         // ? Dump data
         $model = $this->dump_field($request->all(), $model);
 
-        // * Handle owner_user_id mapping to user_id
+        // * Handle owner_user_id mapping to user_id (hanya jika diisi)
         if ($request->has('owner_user_id') && $request->owner_user_id) {
             $model->user_id = $request->owner_user_id;
             Log::info('CubeController@store mapping owner_user_id to user_id', [
                 'owner_user_id' => $request->owner_user_id,
                 'mapped_user_id' => $model->user_id
+            ]);
+        } else {
+            // Jika tidak ada manager tenant, set user_id ke null
+            $model->user_id = null;
+            Log::info('CubeController@store no manager tenant provided', [
+                'cube_type_id' => $request->cube_type_id,
+                'is_information' => $request->boolean('is_information')
             ]);
         }
 
@@ -331,6 +338,51 @@ class CubeController extends Controller
         // ? Process Ads
         try {
             $adsPayload = $request->input('ads');
+
+            // Also check for ads fields at root level (from frontend forms)
+            if (empty($adsPayload)) {
+                $adsPayload = [];
+                $adsFields = [
+                    'ad_category_id',
+                    'title',
+                    'description',
+                    'max_grab',
+                    'unlimited_grab',
+                    'is_daily_grab',
+                    'promo_type',
+                    'validation_type',
+                    'code',
+                    'target_type',
+                    'target_user_id',
+                    'community_id',
+                    'start_validate',
+                    'finish_validate',
+                    'max_production_per_day',
+                    'sell_per_day',
+                    'level_umkm',
+                    'validation_time_limit',
+                    'jam_mulai',
+                    'jam_berakhir',
+                    'day_type'
+                ];
+
+                foreach ($adsFields as $field) {
+                    $value = $request->input("ads.{$field}") ?: $request->input($field);
+                    if ($value !== null) {
+                        $adsPayload[$field] = $value;
+                    }
+                }
+
+                // Handle custom_days specially as it comes as array from frontend
+                $customDaysFromRequest = $request->input('custom_days') ?: $request->input('ads.custom_days', []);
+                if (!empty($customDaysFromRequest)) {
+                    $adsPayload['custom_days'] = $customDaysFromRequest;
+                }
+
+                // Log the payload for debugging
+                Log::info('CubeController@store ads payload', ['payload' => $adsPayload]);
+            }
+
             if (is_array($adsPayload) && !empty($adsPayload)) {
                 $ad = new Ad();
                 $ad->cube_id                 = $model->id;
@@ -340,18 +392,19 @@ class CubeController extends Controller
                 $ad->slug                    = $title ? StringHelper::uniqueSlug($title) : null;
                 $ad->description             = $adsPayload['description'] ?? null;
                 $ad->max_grab                = $adsPayload['max_grab'] ?? null;
-                $ad->is_daily_grab           = $adsPayload['is_daily_grab'] ?? false;
+                $ad->unlimited_grab          = ($adsPayload['unlimited_grab'] ?? $request->input('ads.unlimited_grab') ?? $request->input('unlimited_grab') ?? false) == 1;
+                $ad->is_daily_grab           = ($adsPayload['is_daily_grab'] ?? false) == 1;
                 $ad->promo_type              = $adsPayload['promo_type'] ?? null;
-                
+
                 // New validation fields
                 $ad->validation_type         = $adsPayload['validation_type'] ?? 'auto';
                 $ad->code                    = $adsPayload['code'] ?? null;
-                
+
                 // Target fields for voucher
                 $ad->target_type             = $adsPayload['target_type'] ?? 'all';
                 $ad->target_user_id          = $adsPayload['target_user_id'] ?? null;
                 $ad->community_id            = $adsPayload['community_id'] ?? null;
-                
+
                 // Date validation fields
                 if (!empty($adsPayload['start_validate'])) {
                     $ad->start_validate = Carbon::createFromFormat('d-m-Y', $adsPayload['start_validate'])->format('Y-m-d H:i:s');
@@ -359,11 +412,49 @@ class CubeController extends Controller
                 if (!empty($adsPayload['finish_validate'])) {
                     $ad->finish_validate = Carbon::createFromFormat('d-m-Y', $adsPayload['finish_validate'])->format('Y-m-d H:i:s');
                 }
-                
+
                 $ad->max_production_per_day  = $adsPayload['max_production_per_day'] ?? null;
                 $ad->sell_per_day            = $adsPayload['sell_per_day'] ?? null;
                 $ad->level_umkm              = $adsPayload['level_umkm'] ?? null;
                 $ad->validation_time_limit   = $adsPayload['validation_time_limit'] ?? null;
+
+                // Schedule fields for promo/voucher  
+                $ad->jam_mulai               = $adsPayload['jam_mulai'] ?? $request->input('jam_mulai') ?? null;
+                $ad->jam_berakhir            = $adsPayload['jam_berakhir'] ?? $request->input('jam_berakhir') ?? null;
+                $ad->day_type                = $adsPayload['day_type'] ?? $request->input('day_type') ?? 'custom';
+
+                // Handle custom days from frontend
+                $customDays = [];
+
+                // First try from ads payload
+                if (!empty($adsPayload['custom_days']) && is_array($adsPayload['custom_days'])) {
+                    $customDays = $adsPayload['custom_days'];
+                } else {
+                    // Check individual day fields from frontend (custom_days[monday], etc.)
+                    $dayNames = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+                    foreach ($dayNames as $day) {
+                        $dayValue = $request->input("custom_days[{$day}]") ?? $request->input("custom_days.{$day}");
+                        if ($dayValue && ($dayValue === true || $dayValue === 1 || $dayValue === '1' || $dayValue === 'true')) {
+                            $customDays[$day] = true;
+                        }
+                    }
+
+                    // Also check from top-level custom_days if it's an array
+                    $topLevelCustomDays = $request->input('custom_days');
+                    if (is_array($topLevelCustomDays)) {
+                        $customDays = array_merge($customDays, $topLevelCustomDays);
+                    }
+                }
+
+                $ad->custom_days = !empty($customDays) ? $customDays : null;
+
+                // Log custom days for debugging
+                Log::info('CubeController@store custom_days processing', [
+                    'custom_days_raw' => $request->input('custom_days'),
+                    'custom_days_processed' => $customDays,
+                    'custom_days_final' => $ad->custom_days
+                ]);
+
                 $ad->status                  = 'active';
 
                 $contentType = $request->input('content_type', 'promo');
@@ -400,7 +491,7 @@ class CubeController extends Controller
                 if ($ad->type === 'voucher' && $ad->target_type === 'user' && !empty($adsPayload['target_user_ids'])) {
                     // Sync target users menggunakan tabel pivot
                     $ad->target_users()->sync($adsPayload['target_user_ids']);
-                    
+
                     // Send notifications
                     $this->sendVoucherNotifications($ad, $adsPayload['target_user_ids']);
                 }
@@ -478,6 +569,14 @@ class CubeController extends Controller
         $oldPicture = $model->picture_source;
 
         // ? Validate request
+        $request->merge([
+            'owner_user_id' => $request->filled('owner_user_id') ? $request->owner_user_id : null,
+            'user_id'       => $request->filled('user_id')       ? $request->user_id       : null,
+            'corporate_id'  => $request->filled('corporate_id')  ? $request->corporate_id  : null,
+        ]);
+        // Skip validation untuk manager tenant jika kubus informasi
+        $isInformation = $request->boolean('is_information');
+
         $validation = $this->validation($request->all(), [
             'cube_type_id' => 'nullable|numeric|exists:cube_types,id',
             'parent_id'    => 'nullable|numeric|exists:cubes,id',
@@ -502,6 +601,13 @@ class CubeController extends Controller
 
             // Add validation for ads fields in update
             'ads.*'                      => 'nullable',
+            'ads.ad_category_id'         => 'nullable|numeric|exists:ad_categories,id',
+            'ads.title'                  => 'nullable|string|max:255',
+            'ads.max_grab'               => 'nullable|numeric',
+            'ads.unlimited_grab'         => 'nullable|boolean',
+            'ads.is_daily_grab'          => 'nullable|boolean',
+            'ads.status'                 => 'nullable|string',
+            'ads.promo_type'             => ['nullable', 'string', Rule::in(['offline', 'online'])],
             'ads.validation_type'        => ['nullable', 'string', Rule::in(['auto', 'manual'])],
             'ads.code'                   => [
                 'nullable',
@@ -516,7 +622,7 @@ class CubeController extends Controller
                                 return $query->where('id', '!=', $adId);
                             })
                             ->exists();
-                        
+
                         if ($exists) {
                             $fail('Kode ini sudah digunakan oleh ads lain.');
                         }
@@ -530,6 +636,10 @@ class CubeController extends Controller
             'ads.community_id'           => 'nullable|numeric|exists:communities,id',
             'ads.start_validate'         => 'nullable|date',
             'ads.finish_validate'        => 'nullable|date|after_or_equal:ads.start_validate',
+            'ads.jam_mulai'              => 'nullable|date_format:H:i',
+            'ads.jam_berakhir'           => 'nullable|date_format:H:i',
+            'ads.day_type'               => ['nullable', 'string', Rule::in(['weekend', 'weekday', 'custom'])],
+            'ads.custom_days'            => 'nullable|array',
         ]);
         if ($validation) return $validation;
 
@@ -543,13 +653,20 @@ class CubeController extends Controller
         // ? Dump data
         $model = $this->dump_field($request->all(), $model);
 
-        // * Handle owner_user_id mapping to user_id
+        // * Handle owner_user_id mapping to user_id (hanya jika diisi)
         if ($request->has('owner_user_id') && $request->owner_user_id) {
             $model->user_id = $request->owner_user_id;
             Log::info('CubeController@update mapping owner_user_id to user_id', [
                 'cube_id' => $model->id,
                 'owner_user_id' => $request->owner_user_id,
                 'mapped_user_id' => $model->user_id
+            ]);
+        } else {
+            // Jika tidak ada manager tenant, set user_id ke null
+            $model->user_id = null;
+            Log::info('CubeController@update no manager tenant provided', [
+                'cube_id' => $model->id,
+                'cube_type_id' => $request->cube_type_id
             ]);
         }
 
@@ -732,6 +849,14 @@ class CubeController extends Controller
         $this->normalizeArrayInput($request);
 
         // ? Validate request
+        $request->merge([
+            'owner_user_id' => $request->filled('owner_user_id') ? $request->owner_user_id : null,
+            'user_id'       => $request->filled('user_id')       ? $request->user_id       : null,
+            'corporate_id'  => $request->filled('corporate_id')  ? $request->corporate_id  : null,
+        ]);
+        // Skip validation untuk manager tenant jika kubus informasi
+        $isInformation = $request->boolean('is_information');
+
         $validation = $this->validation($request->all(), [
             'cube_type_id' => 'required|numeric',
             'parent_id'    => 'nullable|numeric|exists:cubes,id',
@@ -743,7 +868,6 @@ class CubeController extends Controller
             'address'      => 'nullable|string|max:255',
             'map_lat'      => 'nullable|numeric',
             'map_lng'      => 'nullable|numeric',
-            'image'        => 'nullable',
             'inactive_at'  => 'nullable|date_format:d-m-Y H:i:s',
             'is_information' => 'nullable|boolean',
             'total'          => 'required|numeric',
@@ -757,6 +881,7 @@ class CubeController extends Controller
             'ads.ad_category_id'         => 'nullable|numeric|exists:ad_categories,id',
             'ads.title'                  => 'nullable|string|max:255',
             'ads.max_grab'               => 'nullable|numeric',
+            'ads.unlimited_grab'         => 'nullable|boolean',
             'ads.is_daily_grab'          => 'nullable|boolean',
             'ads.status'                 => 'nullable|string',
             'ads.promo_type'             => ['nullable', 'string', Rule::in(['offline', 'online'])],
@@ -778,29 +903,6 @@ class CubeController extends Controller
             ], 422);
         }
 
-        // * Validate Manager Tenant Assignment for Gift Cubes
-        if ($request->cube_type_id == 2) {
-            // Cube type 2 = Kubus Merah (Corporate)
-            if (!$request->corporate_id) {
-                return response([
-                    "message" => "Error: Unprocessable Entity!",
-                    "errors" => [
-                        "corporate_id" => ["Manager Tenant (Mitra) wajib dipilih untuk Kubus Merah"]
-                    ]
-                ], 422);
-            }
-        } else {
-            // Cube type lainnya = perlu user (Manager Tenant individu)
-            if (!$request->owner_user_id && !$request->user_id) {
-                return response([
-                    "message" => "Error: Unprocessable Entity!",
-                    "errors" => [
-                        "owner_user_id" => ["Manager Tenant wajib dipilih"]
-                    ]
-                ], 422);
-            }
-        }
-
         // ? Initial
         DB::beginTransaction();
 
@@ -813,13 +915,20 @@ class CubeController extends Controller
                     // ? Dump data
                     $model = $this->dump_field($request->all(), $model);
 
-                    // * Handle owner_user_id mapping to user_id
+                    // * Handle owner_user_id mapping to user_id (hanya jika diisi)
                     if ($request->has('owner_user_id') && $request->owner_user_id) {
                         $model->user_id = $request->owner_user_id;
                         Log::info('CubeController@createGiftCube mapping owner_user_id to user_id', [
                             'iteration' => $i + 1,
                             'owner_user_id' => $request->owner_user_id,
                             'mapped_user_id' => $model->user_id
+                        ]);
+                    } else {
+                        // Jika tidak ada manager tenant, set user_id ke null
+                        $model->user_id = null;
+                        Log::info('CubeController@createGiftCube no manager tenant provided', [
+                            'iteration' => $i + 1,
+                            'cube_type_id' => $request->cube_type_id
                         ]);
                     }
 
@@ -878,11 +987,28 @@ class CubeController extends Controller
                         $ad->slug                   = $title ? StringHelper::uniqueSlug($title) : null;
                         $ad->description            = $adsPayload['description'] ?? null;
                         $ad->max_grab               = $adsPayload['max_grab'] ?? null;
+                        $ad->unlimited_grab         = ($adsPayload['unlimited_grab'] ?? false) == 1;
                         $ad->is_daily_grab          = $adsPayload['is_daily_grab'] ?? null;
                         $ad->promo_type             = $adsPayload['promo_type'] ?? null;
                         $ad->max_production_per_day = $adsPayload['max_production_per_day'] ?? null;
                         $ad->sell_per_day           = $adsPayload['sell_per_day'] ?? null;
                         $ad->level_umkm             = $adsPayload['level_umkm'] ?? null;
+
+                        // Schedule fields for promo/voucher
+                        $ad->jam_mulai              = $adsPayload['jam_mulai'] ?? null;
+                        $ad->jam_berakhir           = $adsPayload['jam_berakhir'] ?? null;
+                        $ad->day_type               = $adsPayload['day_type'] ?? 'custom';
+                        $ad->validation_type        = $adsPayload['validation_type'] ?? 'auto';
+                        $ad->code                   = $adsPayload['code'] ?? null;
+                        $ad->validation_time_limit  = $adsPayload['validation_time_limit'] ?? null;
+
+                        // Handle custom days
+                        $customDays = [];
+                        if (!empty($adsPayload['custom_days']) && is_array($adsPayload['custom_days'])) {
+                            $customDays = $adsPayload['custom_days'];
+                        }
+                        $ad->custom_days = !empty($customDays) ? $customDays : null;
+
                         $ad->status                 = 'active';
 
                         if ($request->hasFile('ads.image')) {
@@ -917,54 +1043,6 @@ class CubeController extends Controller
             "message" => "success",
             "data" => $cubeCreated
         ], 201);
-    }
-
-    // GET /api/admin/cubes/{id}
-    public function show(string $id)
-    {
-        try {
-            $cube = Cube::with([
-                'cube_type',
-                'user',
-                'corporate',
-                'world',
-                'opening_hours',
-                'tags',
-                'ads' => function ($query) {
-                    return $query->select([
-                        'ads.*',
-                        DB::raw('CAST(IF(ads.is_daily_grab = 1,
-                                (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
-                                SUM(total_grab)
-                            ) AS SIGNED) AS total_grab'),
-                        DB::raw('CAST(IF(ads.is_daily_grab = 1,
-                                ads.max_grab - (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
-                                ads.max_grab - SUM(total_grab)
-                            ) AS SIGNED) AS total_remaining'),
-                    ])
-                    ->leftJoin('summary_grabs', 'summary_grabs.ad_id', 'ads.id')
-                    ->groupBy('ads.id');
-                },
-                'ads.ad_category'
-            ])->find($id);
-
-            if (!$cube) {
-                return response(['message' => 'not found'], 404);
-            }
-
-            return response([
-                'message' => 'success',
-                'data' => $cube,
-            ], 200);
-        } catch (\Throwable $e) {
-            Log::error('CubeController@show failed', [
-                'id' => $id,
-                'error' => $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-            ]);
-            return response(['message' => 'Error: server side having problem!'], 500);
-        }
     }
 
     /**
@@ -1119,7 +1197,6 @@ class CubeController extends Controller
                     ]
                 ]
             ]);
-
         } catch (\Throwable $e) {
             Log::error('Ad code validation failed', [
                 'ad_id' => $adId,

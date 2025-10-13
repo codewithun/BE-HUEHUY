@@ -27,6 +27,7 @@ class Ad extends Model
         'image_3',
         'image_updated_at',
         'max_grab',
+        'unlimited_grab',
         'is_daily_grab',
         'type',
         'status',
@@ -43,7 +44,23 @@ class Ad extends Model
         'pre_order',
         'start_validate',
         'finish_validate',
-        'validation_time_limit'
+        'validation_time_limit',
+        'jam_mulai',
+        'jam_berakhir',
+        'day_type',
+        'custom_days'
+    ];
+
+    // =========================>
+    // ## Casts
+    // =========================>
+    protected $casts = [
+        'custom_days' => 'array',
+        'start_validate' => 'datetime',
+        'finish_validate' => 'datetime',
+        'image_updated_at' => 'datetime',
+        'is_daily_grab' => 'boolean',
+        'unlimited_grab' => 'boolean',
     ];
 
     // =========================>
@@ -70,6 +87,7 @@ class Ad extends Model
         'ads.image_3',
         'ads.image_updated_at',
         'ads.max_grab',
+        'ads.unlimited_grab',
         'ads.is_daily_grab',
         'ads.type',
         'ads.status',
@@ -87,12 +105,16 @@ class Ad extends Model
         'ads.start_validate',
         'ads.finish_validate',
         'ads.validation_time_limit',
+        'ads.jam_mulai',
+        'ads.jam_berakhir',
+        'ads.day_type',
+        'ads.custom_days',
     ];
 
     /**
      * * Relation to `AdCategory` model
      */
-    public function ad_category() : BelongsTo
+    public function ad_category(): BelongsTo
     {
         return $this->belongsTo(AdCategory::class, 'ad_category_id', 'id');
     }
@@ -100,7 +122,7 @@ class Ad extends Model
     /**
      * * Relation to `Cube` model
      */
-    public function cube() : BelongsTo
+    public function cube(): BelongsTo
     {
         return $this->belongsTo(Cube::class, 'cube_id', 'id');
     }
@@ -108,7 +130,7 @@ class Ad extends Model
     /**
      * * Relation to `Vocuher` model
      */
-    public function voucher() : HasOne
+    public function voucher(): HasOne
     {
         return $this->hasOne(Voucher::class, 'ad_id', 'id');
     }
@@ -116,7 +138,7 @@ class Ad extends Model
     /**
      * * Relation to `Community` model
      */
-    public function community() : BelongsTo
+    public function community(): BelongsTo
     {
         return $this->belongsTo(Community::class, 'community_id', 'id');
     }
@@ -124,7 +146,7 @@ class Ad extends Model
     /**
      * * Relation to `User` model (target user)
      */
-    public function target_user() : BelongsTo
+    public function target_user(): BelongsTo
     {
         return $this->belongsTo(User::class, 'target_user_id', 'id');
     }
@@ -132,16 +154,16 @@ class Ad extends Model
     /**
      * * Relation to `User` model (many-to-many for voucher targets)
      */
-    public function target_users() : \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    public function target_users(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
     {
         return $this->belongsToMany(User::class, 'ad_target_users', 'ad_id', 'user_id')
-                    ->withTimestamps();
+            ->withTimestamps();
     }
 
     /**
      * * Relation to `SummaryGrab` model
      */
-    public function summary_grabs() : HasMany
+    public function summary_grabs(): HasMany
     {
         return $this->hasMany(SummaryGrab::class, 'ad_id', 'id');
     }

@@ -124,6 +124,15 @@ class AdController extends Controller
             'ads.image_1' => 'nullable',
             'ads.image_2' => 'nullable',
             'ads.image_3' => 'nullable',
+            'ads[image_1]' => 'nullable',
+            'ads[image_2]' => 'nullable',
+            'ads[image_3]' => 'nullable',
+            'ads_image_1' => 'nullable',
+            'ads_image_2' => 'nullable',
+            'ads_image_3' => 'nullable',
+            'image_1' => 'nullable',
+            'image_2' => 'nullable',
+            'image_3' => 'nullable',
         ]);
 
         if ($validation) return $validation;
@@ -177,21 +186,64 @@ class AdController extends Controller
             $model->picture_source = $this->upload_file($request->file('image'), 'ads');
         }
 
-        // * Check for additional images (ads[image_1], ads[image_2], ads[image_3])
-        if ($request->hasFile('ads.image_1')) {
-            $model->image_1 = $this->upload_file($request->file('ads.image_1'), 'ads');
+        // * Check for additional images (support multiple formats: ads[image_1], ads.image_1, ads_image_1, image_1)
+        if ($request->hasFile('ads[image_1]') || $request->hasFile('ads.image_1') || $request->hasFile('ads_image_1') || $request->hasFile('image_1')) {
+            $file = null;
+            if ($request->hasFile('ads[image_1]')) {
+                $file = $request->file('ads[image_1]');
+            } elseif ($request->hasFile('ads.image_1')) {
+                $file = $request->file('ads.image_1');
+            } elseif ($request->hasFile('ads_image_1')) {
+                $file = $request->file('ads_image_1');
+            } elseif ($request->hasFile('image_1')) {
+                $file = $request->file('image_1');
+            }
+
+            if ($file) {
+                $model->image_1 = $this->upload_file($file, 'ads');
+            }
         }
-        if ($request->hasFile('ads.image_2')) {
-            $model->image_2 = $this->upload_file($request->file('ads.image_2'), 'ads');
+
+        if ($request->hasFile('ads[image_2]') || $request->hasFile('ads.image_2') || $request->hasFile('ads_image_2') || $request->hasFile('image_2')) {
+            $file = null;
+            if ($request->hasFile('ads[image_2]')) {
+                $file = $request->file('ads[image_2]');
+            } elseif ($request->hasFile('ads.image_2')) {
+                $file = $request->file('ads.image_2');
+            } elseif ($request->hasFile('ads_image_2')) {
+                $file = $request->file('ads_image_2');
+            } elseif ($request->hasFile('image_2')) {
+                $file = $request->file('image_2');
+            }
+
+            if ($file) {
+                $model->image_2 = $this->upload_file($file, 'ads');
+            }
         }
-        if ($request->hasFile('ads.image_3')) {
-            $model->image_3 = $this->upload_file($request->file('ads.image_3'), 'ads');
+
+        if ($request->hasFile('ads[image_3]') || $request->hasFile('ads.image_3') || $request->hasFile('ads_image_3') || $request->hasFile('image_3')) {
+            $file = null;
+            if ($request->hasFile('ads[image_3]')) {
+                $file = $request->file('ads[image_3]');
+            } elseif ($request->hasFile('ads.image_3')) {
+                $file = $request->file('ads.image_3');
+            } elseif ($request->hasFile('ads_image_3')) {
+                $file = $request->file('ads_image_3');
+            } elseif ($request->hasFile('image_3')) {
+                $file = $request->file('image_3');
+            }
+
+            if ($file) {
+                $model->image_3 = $this->upload_file($file, 'ads');
+            }
         }
 
         // Update image timestamp for cache busting
         if (
-            $request->hasFile('image') || $request->hasFile('ads.image_1') ||
-            $request->hasFile('ads.image_2') || $request->hasFile('ads.image_3')
+            $request->hasFile('image') ||
+            $request->hasFile('ads[image_1]') || $request->hasFile('ads.image_1') || $request->hasFile('ads_image_1') || $request->hasFile('image_1') ||
+            $request->hasFile('ads[image_2]') || $request->hasFile('ads.image_2') || $request->hasFile('ads_image_2') || $request->hasFile('image_2') ||
+            $request->hasFile('ads[image_3]') || $request->hasFile('ads.image_3') || $request->hasFile('ads_image_3') || $request->hasFile('image_3')
         ) {
             $model->image_updated_at = now();
         }
@@ -349,6 +401,15 @@ class AdController extends Controller
             'ads.image_1' => 'nullable',
             'ads.image_2' => 'nullable',
             'ads.image_3' => 'nullable',
+            'ads[image_1]' => 'nullable',
+            'ads[image_2]' => 'nullable',
+            'ads[image_3]' => 'nullable',
+            'ads_image_1' => 'nullable',
+            'ads_image_2' => 'nullable',
+            'ads_image_3' => 'nullable',
+            'image_1' => 'nullable',
+            'image_2' => 'nullable',
+            'image_3' => 'nullable',
         ]);
 
         if ($validation) {
@@ -364,7 +425,15 @@ class AdController extends Controller
         Log::info('AdController@update received data', [
             'ad_id' => $id,
             'all_request' => $request->all(),
-            'files' => array_keys($request->allFiles())
+            'files' => array_keys($request->allFiles()),
+            'has_ads_image_1_bracket' => $request->hasFile('ads[image_1]'),
+            'has_ads_image_1_dot' => $request->hasFile('ads.image_1'),
+            'existing_data' => [
+                'picture_source' => $model->picture_source,
+                'image_1' => $model->image_1,
+                'image_2' => $model->image_2,
+                'image_3' => $model->image_3,
+            ]
         ]);
 
         // ? Dump data
@@ -444,30 +513,145 @@ class AdController extends Controller
             }
         }
 
-        // * Check for additional images (ads[image_1], ads[image_2], ads[image_3])
-        if ($request->hasFile('ads.image_1')) {
-            $model->image_1 = $this->upload_file($request->file('ads.image_1'), 'ads');
-            if ($oldImage1) {
-                $this->delete_file($oldImage1);
+        // * Check for additional images (support multiple formats: ads[image_1], ads.image_1, ads_image_1, image_1)
+        // Handle image_1
+        if ($request->hasFile('ads[image_1]') || $request->hasFile('ads.image_1') || $request->hasFile('ads_image_1') || $request->hasFile('image_1')) {
+            $file = null;
+            if ($request->hasFile('ads[image_1]')) {
+                $file = $request->file('ads[image_1]');
+            } elseif ($request->hasFile('ads.image_1')) {
+                $file = $request->file('ads.image_1');
+            } elseif ($request->hasFile('ads_image_1')) {
+                $file = $request->file('ads_image_1');
+            } elseif ($request->hasFile('image_1')) {
+                $file = $request->file('image_1');
+            }
+
+            if ($file) {
+                $model->image_1 = $this->upload_file($file, 'ads');
+                if ($oldImage1) {
+                    $this->delete_file($oldImage1);
+                }
+            }
+        } else {
+            // Preserve existing image_1 if no new file but URL exists in request
+            $existingImage1 = $request->input('ads_image_1') ?:
+                $request->input('image_1') ?:
+                $request->input('ads.image_1') ?:
+                $request->input('ads[image_1]');
+
+            if ($existingImage1 && is_string($existingImage1)) {
+                // Convert URL back to storage path
+                if (strpos($existingImage1, '/storage/') !== false) {
+                    $model->image_1 = str_replace('/storage/', '', parse_url($existingImage1, PHP_URL_PATH));
+                } elseif (strpos($existingImage1, 'storage/') === 0) {
+                    $model->image_1 = substr($existingImage1, 8); // Remove 'storage/' prefix
+                } else {
+                    $model->image_1 = $existingImage1;
+                }
+
+                Log::info('AdController@update preserved existing image_1', [
+                    'ad_id' => $id,
+                    'original_url' => $existingImage1,
+                    'converted_path' => $model->image_1
+                ]);
             }
         }
-        if ($request->hasFile('ads.image_2')) {
-            $model->image_2 = $this->upload_file($request->file('ads.image_2'), 'ads');
-            if ($oldImage2) {
-                $this->delete_file($oldImage2);
+
+        // Handle image_2
+        if ($request->hasFile('ads[image_2]') || $request->hasFile('ads.image_2') || $request->hasFile('ads_image_2') || $request->hasFile('image_2')) {
+            $file = null;
+            if ($request->hasFile('ads[image_2]')) {
+                $file = $request->file('ads[image_2]');
+            } elseif ($request->hasFile('ads.image_2')) {
+                $file = $request->file('ads.image_2');
+            } elseif ($request->hasFile('ads_image_2')) {
+                $file = $request->file('ads_image_2');
+            } elseif ($request->hasFile('image_2')) {
+                $file = $request->file('image_2');
+            }
+
+            if ($file) {
+                $model->image_2 = $this->upload_file($file, 'ads');
+                if ($oldImage2) {
+                    $this->delete_file($oldImage2);
+                }
+            }
+        } else {
+            // Preserve existing image_2 if no new file but URL exists in request
+            $existingImage2 = $request->input('ads_image_2') ?:
+                $request->input('image_2') ?:
+                $request->input('ads.image_2') ?:
+                $request->input('ads[image_2]');
+
+            if ($existingImage2 && is_string($existingImage2)) {
+                // Convert URL back to storage path
+                if (strpos($existingImage2, '/storage/') !== false) {
+                    $model->image_2 = str_replace('/storage/', '', parse_url($existingImage2, PHP_URL_PATH));
+                } elseif (strpos($existingImage2, 'storage/') === 0) {
+                    $model->image_2 = substr($existingImage2, 8); // Remove 'storage/' prefix
+                } else {
+                    $model->image_2 = $existingImage2;
+                }
+
+                Log::info('AdController@update preserved existing image_2', [
+                    'ad_id' => $id,
+                    'original_url' => $existingImage2,
+                    'converted_path' => $model->image_2
+                ]);
             }
         }
-        if ($request->hasFile('ads.image_3')) {
-            $model->image_3 = $this->upload_file($request->file('ads.image_3'), 'ads');
-            if ($oldImage3) {
-                $this->delete_file($oldImage3);
+
+        // Handle image_3
+        if ($request->hasFile('ads[image_3]') || $request->hasFile('ads.image_3') || $request->hasFile('ads_image_3') || $request->hasFile('image_3')) {
+            $file = null;
+            if ($request->hasFile('ads[image_3]')) {
+                $file = $request->file('ads[image_3]');
+            } elseif ($request->hasFile('ads.image_3')) {
+                $file = $request->file('ads.image_3');
+            } elseif ($request->hasFile('ads_image_3')) {
+                $file = $request->file('ads_image_3');
+            } elseif ($request->hasFile('image_3')) {
+                $file = $request->file('image_3');
+            }
+
+            if ($file) {
+                $model->image_3 = $this->upload_file($file, 'ads');
+                if ($oldImage3) {
+                    $this->delete_file($oldImage3);
+                }
+            }
+        } else {
+            // Preserve existing image_3 if no new file but URL exists in request
+            $existingImage3 = $request->input('ads_image_3') ?:
+                $request->input('image_3') ?:
+                $request->input('ads.image_3') ?:
+                $request->input('ads[image_3]');
+
+            if ($existingImage3 && is_string($existingImage3)) {
+                // Convert URL back to storage path
+                if (strpos($existingImage3, '/storage/') !== false) {
+                    $model->image_3 = str_replace('/storage/', '', parse_url($existingImage3, PHP_URL_PATH));
+                } elseif (strpos($existingImage3, 'storage/') === 0) {
+                    $model->image_3 = substr($existingImage3, 8); // Remove 'storage/' prefix
+                } else {
+                    $model->image_3 = $existingImage3;
+                }
+
+                Log::info('AdController@update preserved existing image_3', [
+                    'ad_id' => $id,
+                    'original_url' => $existingImage3,
+                    'converted_path' => $model->image_3
+                ]);
             }
         }
 
         // Update image timestamp for cache busting
         if (
-            $request->hasFile('image') || $request->hasFile('ads.image_1') ||
-            $request->hasFile('ads.image_2') || $request->hasFile('ads.image_3')
+            $request->hasFile('image') ||
+            $request->hasFile('ads[image_1]') || $request->hasFile('ads.image_1') || $request->hasFile('ads_image_1') || $request->hasFile('image_1') ||
+            $request->hasFile('ads[image_2]') || $request->hasFile('ads.image_2') || $request->hasFile('ads_image_2') || $request->hasFile('image_2') ||
+            $request->hasFile('ads[image_3]') || $request->hasFile('ads.image_3') || $request->hasFile('ads_image_3') || $request->hasFile('image_3')
         ) {
             $model->image_updated_at = now();
         }

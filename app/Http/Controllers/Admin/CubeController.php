@@ -206,6 +206,17 @@ class CubeController extends Controller
             'ads.sell_per_day'           => 'nullable|numeric|min:0',
             'ads.level_umkm'             => 'nullable|numeric|min:0',
             'ads.image'                  => 'nullable',
+            'ads[image]'                 => 'nullable',
+            'ads[image_1]'               => 'nullable',
+            'ads[image_2]'               => 'nullable',
+            'ads[image_3]'               => 'nullable',
+            'ads_image'                  => 'nullable',
+            'ads_image_1'                => 'nullable',
+            'ads_image_2'                => 'nullable',
+            'ads_image_3'                => 'nullable',
+            'image_1'                    => 'nullable',
+            'image_2'                    => 'nullable',
+            'image_3'                    => 'nullable',
             'ads.validation_time_limit'  => 'nullable|date_format:H:i',
             'ads.jam_mulai'              => 'nullable|date_format:H:i',
             'ads.jam_berakhir'           => 'nullable|date_format:H:i',
@@ -466,24 +477,88 @@ class CubeController extends Controller
                     $ad->type = 'general'; // promo & lainnya
                 }
 
-                // * ads image (field: ads.image)
+                // * Debug log for image files
+                Log::info('CubeController@store checking image files', [
+                    'has_ads_image' => $request->hasFile('ads.image'),
+                    'has_ads_image_bracket' => $request->hasFile('ads[image]'),
+                    'has_ads_image_underscore' => $request->hasFile('ads_image'),
+                    'has_ads_image_1' => $request->hasFile('ads.image_1'),
+                    'has_ads_image_1_bracket' => $request->hasFile('ads[image_1]'),
+                    'has_ads_image_1_underscore' => $request->hasFile('ads_image_1'),
+                    'has_image_1' => $request->hasFile('image_1'),
+                    'has_ads_image_2' => $request->hasFile('ads.image_2'),
+                    'has_ads_image_2_bracket' => $request->hasFile('ads[image_2]'),
+                    'has_ads_image_2_underscore' => $request->hasFile('ads_image_2'),
+                    'has_image_2' => $request->hasFile('image_2'),
+                    'has_ads_image_3' => $request->hasFile('ads.image_3'),
+                    'has_ads_image_3_bracket' => $request->hasFile('ads[image_3]'),
+                    'has_ads_image_3_underscore' => $request->hasFile('ads_image_3'),
+                    'has_image_3' => $request->hasFile('image_3'),
+                    'all_files' => array_keys($request->allFiles())
+                ]);
+
+                // * ads image (field: ads.image, ads[image], ads_image)
+                $mainImageFile = null;
+                $mainImageSource = '';
+
                 if ($request->hasFile('ads.image')) {
-                    $ad->picture_source = $this->upload_file($request->file('ads.image'), 'ads');
+                    $mainImageFile = $request->file('ads.image');
+                    $mainImageSource = 'ads.image';
+                } elseif ($request->hasFile('ads[image]')) {
+                    $mainImageFile = $request->file('ads[image]');
+                    $mainImageSource = 'ads[image]';
+                } elseif ($request->hasFile('ads_image')) {
+                    $mainImageFile = $request->file('ads_image');
+                    $mainImageSource = 'ads_image';
                 }
 
-                // * ads additional images
-                if ($request->hasFile('ads.image_1')) {
-                    $ad->image_1 = $this->upload_file($request->file('ads.image_1'), 'ads');
-                }
-                if ($request->hasFile('ads.image_2')) {
-                    $ad->image_2 = $this->upload_file($request->file('ads.image_2'), 'ads');
-                }
-                if ($request->hasFile('ads.image_3')) {
-                    $ad->image_3 = $this->upload_file($request->file('ads.image_3'), 'ads');
+                if ($mainImageFile && $mainImageFile->isValid()) {
+                    $uploadPath = $this->upload_file($mainImageFile, 'ads');
+                    $ad->picture_source = $uploadPath;
+                    Log::info('CubeController@store uploaded ads main image', [
+                        'file_name' => $mainImageFile->getClientOriginalName(),
+                        'upload_path' => $uploadPath,
+                        'source_field' => $mainImageSource
+                    ]);
                 }
 
-                // Update image timestamp for cache busting
-                $ad->image_updated_at = now();
+                // * ads additional images (support all formats: ads.image_1, ads[image_1], ads_image_1, image_1)
+                $imageFields = ['image_1', 'image_2', 'image_3'];
+                foreach ($imageFields as $imageField) {
+                    $file = null;
+                    $sourceField = '';
+
+                    // Check multiple possible field names
+                    $possibleKeys = [
+                        "ads.{$imageField}",
+                        "ads[{$imageField}]",
+                        "ads_{$imageField}",
+                        $imageField
+                    ];
+
+                    foreach ($possibleKeys as $key) {
+                        if ($request->hasFile($key)) {
+                            $file = $request->file($key);
+                            $sourceField = $key;
+                            break;
+                        }
+                    }
+
+                    if ($file && $file->isValid()) {
+                        $uploadPath = $this->upload_file($file, 'ads');
+                        $ad->{$imageField} = $uploadPath;
+                        Log::info("CubeController@store uploaded ads {$imageField}", [
+                            'file_name' => $file->getClientOriginalName(),
+                            'upload_path' => $uploadPath,
+                            'source_field' => $sourceField
+                        ]);
+                    }
+                }
+
+                // Update image timestamp for cache busting only if we have images
+                if ($ad->picture_source || $ad->image_1 || $ad->image_2 || $ad->image_3) {
+                    $ad->image_updated_at = now();
+                }
 
                 $ad->save();
 
@@ -640,6 +715,17 @@ class CubeController extends Controller
             'ads.jam_berakhir'           => 'nullable|date_format:H:i',
             'ads.day_type'               => ['nullable', 'string', Rule::in(['weekend', 'weekday', 'custom'])],
             'ads.custom_days'            => 'nullable|array',
+            'ads[image]'                 => 'nullable',
+            'ads[image_1]'               => 'nullable',
+            'ads[image_2]'               => 'nullable',
+            'ads[image_3]'               => 'nullable',
+            'ads_image'                  => 'nullable',
+            'ads_image_1'                => 'nullable',
+            'ads_image_2'                => 'nullable',
+            'ads_image_3'                => 'nullable',
+            'image_1'                    => 'nullable',
+            'image_2'                    => 'nullable',
+            'image_3'                    => 'nullable',
         ]);
         if ($validation) return $validation;
 

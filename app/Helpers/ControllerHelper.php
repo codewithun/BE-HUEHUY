@@ -4,6 +4,7 @@ namespace App\Helpers;
 
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Log;
 
 trait ControllerHelper
 {
@@ -142,17 +143,17 @@ trait ControllerHelper
                     foreach ($tables as $key => $table) {
                         $expTable = explode(':', $table);
 
-                        $last_letter_table = strtolower($expTable[0][strlen($expTable[0])-1]);
+                        $last_letter_table = strtolower($expTable[0][strlen($expTable[0]) - 1]);
                         $table_name = '';
-                        switch($last_letter_table) {
+                        switch ($last_letter_table) {
                             case 'y':
-                                $table_name = substr($expTable[0],0,-1).'ies';
+                                $table_name = substr($expTable[0], 0, -1) . 'ies';
                                 break;
                             case 's':
-                                $table_name = $expTable[0].'es';
+                                $table_name = $expTable[0] . 'es';
                                 break;
                             default:
-                                $table_name = $expTable[0].'s';
+                                $table_name = $expTable[0] . 's';
                                 break;
                         }
 
@@ -195,7 +196,57 @@ trait ControllerHelper
         \Illuminate\Http\UploadedFile $file,  //? file
         string $folder = ''                   //? storage folder name
     ) {
-        return Storage::disk('public')->put($folder, $file);
+        Log::info('ControllerHelper@upload_file called', [
+            'original_name' => $file->getClientOriginalName(),
+            'folder' => $folder,
+            'size' => $file->getSize(),
+            'mime' => $file->getMimeType(),
+            'temp_path' => $file->getPathname(),
+            'is_valid' => $file->isValid(),
+        ]);
+
+        try {
+            // Generate a unique filename
+            $originalName = $file->getClientOriginalName();
+            $extension = $file->getClientOriginalExtension();
+            $filename = pathinfo($originalName, PATHINFO_FILENAME) . '_' . time() . '_' . uniqid() . '.' . $extension;
+
+            // Create full path with folder
+            $fullPath = $folder ? $folder . '/' . $filename : $filename;
+
+            // Store the file with specific name
+            $stored = $file->storeAs($folder, $filename, 'public');
+
+            Log::info('ControllerHelper@upload_file completed', [
+                'original_name' => $originalName,
+                'folder' => $folder,
+                'filename' => $filename,
+                'stored_path' => $stored,
+                'full_path' => storage_path('app/public/' . $stored),
+                'exists' => Storage::disk('public')->exists($stored),
+                'is_temp_path' => strpos($stored, 'Temp') !== false || strpos($stored, 'tmp') !== false
+            ]);
+
+            // Validate that we didn't get a temporary path
+            if (strpos($stored, 'Temp') !== false || strpos($stored, 'tmp') !== false) {
+                Log::error('ControllerHelper@upload_file received temporary path', [
+                    'stored_path' => $stored,
+                    'expected_path' => $fullPath
+                ]);
+                throw new \Exception('File upload failed: received temporary path instead of storage path');
+            }
+
+            return $stored;
+        } catch (\Throwable $e) {
+            Log::error('ControllerHelper@upload_file failed', [
+                'original_name' => $file->getClientOriginalName(),
+                'folder' => $folder,
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+            throw $e;
+        }
     }
 
     // =========================>

@@ -7,6 +7,7 @@ use App\Models\AdCategory;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log; // tambahkan
 
 class AdCategoryController extends Controller
 {
@@ -43,6 +44,11 @@ class AdCategoryController extends Controller
             }
         }
 
+        // Filter opsional berdasarkan community (tampilkan global + spesifik jika tidak diisi)
+        if ($request->filled('community_id') && $request->community_id !== 'null') {
+            $query->where('community_id', $request->community_id);
+        }
+
         // ? Sort & executing with pagination
         $query = $query->orderBy($this->remark_column($sortby, $columnAliases), $sortDirection)
             ->select($model->selectable)->paginate($paginate);
@@ -68,47 +74,57 @@ class AdCategoryController extends Controller
     // =============================================>
     public function store(Request $request)
     {
-        // ? Validate request
+        // Normalisasi checkbox (array -> 1/0) dan parent_id (array -> scalar)
+        $request->merge([
+            'is_primary_parent' => $this->normalizeBoolean($request->input('is_primary_parent')),
+            'is_home_display'   => $this->normalizeBoolean($request->input('is_home_display')),
+            'parent_id'         => $this->normalizeScalar($request->input('parent_id')),
+        ]);
+
         $validation = $this->validation($request->all(), [
             'name' => 'required|string|max:255',
             'image' => 'nullable|image|mimes:jpg,jpeg,png,webp,avif|max:4096',
             'parent_id' => 'nullable|exists:ad_categories,id',
             'is_primary_parent' => 'nullable|boolean',
             'is_home_display' => 'nullable|boolean',
+            'community_id' => 'nullable|numeric|exists:communities,id',
         ]);
-
         if ($validation) return $validation;
 
-        // ? Initial
         DB::beginTransaction();
         $model = new AdCategory();
 
-        // ? Dump data
-        $model = $this->dump_field($request->all(), $model);
-        $model->is_primary_parent = !!$request->is_primary_parent;
-        $model->is_home_display = !!$request->is_home_display;
+        // Batasi field yang di-dump (hindari 'image' & field liar)
+        $payload = $request->only([
+            'name',
+            'parent_id',
+            'is_primary_parent',
+            'is_home_display',
+            'community_id',
+        ]);
 
-        // * Check if has upload file
+        $model = $this->dump_field($payload, $model);
+        $model->is_primary_parent = $request->input('is_primary_parent') ? 1 : 0;
+        $model->is_home_display = $request->input('is_home_display') ? 1 : 0;
+
         if ($request->hasFile('image')) {
             $model->picture_source = $request->file('image')->store('ad-category', 'public');
+            $model->image_updated_at = now();
         }
 
-        // ? Executing
         try {
             $model->save();
+            DB::commit();
+            return response([ "message" => "success", "data" => $model ], 201);
         } catch (\Throwable $th) {
             DB::rollBack();
-            return response([
-                "message" => "Error: server side having problem!",
-            ], 500);
+            Log::error('AdCategory store failed', [
+                'error' => $th->getMessage(),
+                'trace' => $th->getTraceAsString(),
+                'payload' => $payload,
+            ]);
+            return response([ "message" => "Error: server side having problem! - ".$th->getMessage() ], 500);
         }
-
-        DB::commit();
-
-        return response([
-            "message" => "success",
-            "data" => $model
-        ], 201);
     }
 
     // ============================================>
@@ -116,52 +132,62 @@ class AdCategoryController extends Controller
     // ============================================>
     public function update(Request $request, string $id)
     {
-        // ? Initial
         DB::beginTransaction();
         $model = AdCategory::findOrFail($id);
         $oldPicture = $model->picture_source;
 
-        // ? Validate request
+        // Normalisasi sebelum validasi
+        $request->merge([
+            'is_primary_parent' => $this->normalizeBoolean($request->input('is_primary_parent')),
+            'is_home_display'   => $this->normalizeBoolean($request->input('is_home_display')),
+            'parent_id'         => $this->normalizeScalar($request->input('parent_id')),
+        ]);
+
         $validation = $this->validation($request->all(), [
             'name' => 'required|string|max:255',
             'image' => 'nullable|image|mimes:jpg,jpeg,png,webp,avif|max:4096',
             'parent_id' => 'nullable|exists:ad_categories,id',
             'is_primary_parent' => 'nullable|boolean',
             'is_home_display' => 'nullable|boolean',
+            'community_id' => 'nullable|numeric|exists:communities,id',
         ]);
-
         if ($validation) return $validation;
 
-        // ? Dump data
-        $model = $this->dump_field($request->all(), $model);
-        $model->is_primary_parent = !!$request->is_primary_parent;
-        $model->is_home_display = !!$request->is_home_display;
+        // Batasi field yang di-dump
+        $payload = $request->only([
+            'name',
+            'parent_id',
+            'is_primary_parent',
+            'is_home_display',
+            'community_id',
+        ]);
 
-        // * Check if has upload file
+        $model = $this->dump_field($payload, $model);
+        $model->is_primary_parent = $request->input('is_primary_parent') ? 1 : 0;
+        $model->is_home_display = $request->input('is_home_display') ? 1 : 0;
+
         if ($request->hasFile('image')) {
             $model->picture_source = $request->file('image')->store('ad-category', 'public');
             if ($oldPicture) {
                 Storage::disk('public')->delete($oldPicture);
             }
-            $model->image_updated_at = now(); // Add cache-busting timestamp
+            $model->image_updated_at = now();
         }
 
-        // ? Executing
         try {
             $model->save();
+            DB::commit();
+            return response([ "message" => "success", "data" => $model ]);
         } catch (\Throwable $th) {
             DB::rollBack();
-            return response([
-                "message" => "Error: server side having problem!",
-            ], 500);
+            Log::error('AdCategory update failed', [
+                'error' => $th->getMessage(),
+                'trace' => $th->getTraceAsString(),
+                'payload' => $payload,
+                'id' => $id,
+            ]);
+            return response([ "message" => "Error: server side having problem! - ".$th->getMessage() ], 500);
         }
-
-        DB::commit();
-
-        return response([
-            "message" => "success",
-            "data" => $model
-        ]);
     }
 
     // ===============================================>
@@ -186,6 +212,14 @@ class AdCategoryController extends Controller
 
         if ($request->filled('parent_only')) {
             $q->whereNull('parent_id'); // for top-level
+        }
+
+        // Tambahan: filter by community agar konsisten dengan create/update
+        if ($request->filled('community_id') && $request->community_id !== 'null') {
+            $q->where(function ($qq) use ($request) {
+                $qq->whereNull('community_id')
+                   ->orWhere('community_id', $request->community_id);
+            });
         }
 
         if ($request->filled('search')) {
@@ -224,5 +258,26 @@ class AdCategoryController extends Controller
             "message" => "Success",
             "data" => $model
         ]);
+    }
+
+    // Helper untuk normalisasi checkbox
+    private function normalizeBoolean($value)
+    {
+        if (is_array($value)) {
+            return count($value) > 0 ? 1 : 0;
+        }
+        if ($value === '' || is_null($value)) {
+            return null;
+        }
+        return filter_var($value, FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
+    }
+
+    // Helper untuk normalisasi value yang mungkin array
+    private function normalizeScalar($value)
+    {
+        if (is_array($value)) {
+            return count($value) ? reset($value) : null;
+        }
+        return $value !== '' ? $value : null;
     }
 }

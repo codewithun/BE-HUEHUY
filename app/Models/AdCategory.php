@@ -20,6 +20,7 @@ class AdCategory extends Model
         'image_updated_at',
         'is_primary_parent',
         'is_home_display',
+        'community_id',
     ];
 
     // =========================>
@@ -34,22 +35,33 @@ class AdCategory extends Model
     // =========================>
     public $selectable = [
         'ad_categories.id',
-        'ad_categories.parent_id',
         'ad_categories.name',
         'ad_categories.picture_source',
-        'ad_categories.image_updated_at',
+        'ad_categories.parent_id',
         'ad_categories.is_primary_parent',
         'ad_categories.is_home_display',
+        'ad_categories.community_id',
+        'ad_categories.image_updated_at',
+        'ad_categories.created_at',
+        'ad_categories.updated_at',
+    ];
+
+    protected $casts = [
+        'is_primary_parent' => 'boolean',
+        'is_home_display' => 'boolean',
+        'community_id' => 'integer',
+        'image_updated_at' => 'datetime',
     ];
 
     public function toArray()
     {
         $toArray = parent::toArray();
 
-        if(isset($toArray['picture_source'])) {
-            $cacheBuster = $this->image_updated_at ? '?v=' . strtotime($this->image_updated_at) : '';
-            $toArray['picture_source'] = $this->picture_source 
-                ? asset('storage/' . $this->picture_source) . $cacheBuster 
+        if (isset($toArray['picture_source'])) {
+            $imgUpdatedAt = $toArray['image_updated_at'] ?? null;
+            $cacheBuster = $imgUpdatedAt ? '?v=' . strtotime($imgUpdatedAt) : '';
+            $toArray['picture_source'] = $this->picture_source
+                ? asset('storage/' . $this->picture_source) . $cacheBuster
                 : null;
         }
 

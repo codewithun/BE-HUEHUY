@@ -345,8 +345,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/ad-categories/{id}', [AdCategoryController::class, 'destroy'])->whereNumber('id');
 
         // For parent select options in FE
-        Route::get('/options/ad-category', [AdCategoryController::class, 'options']);
+        // Standardized: use OptionController for ad-category options (includes image + wrapper)
+        Route::get('/options/ad-category', [\App\Http\Controllers\Admin\OptionController::class, 'adCategory']);
+
+        // Preserve AdCategoryController options on a distinct path for internal/admin selects
+        Route::get('/ad-categories/options', [AdCategoryController::class, 'options']);
     });
+
+    
+    // Removed duplicate route for admin/options/ad-category to avoid ambiguity
 
     // Admin/Corporate/Integration bundle
     require __DIR__.'/api/admin.php';
@@ -362,6 +369,9 @@ Route::middleware('auth:sanctum')->group(function () {
 if (app()->environment('local', 'development')) {
     require __DIR__.'/test_validation.php';
 }
+
+
+
 
 /**
  * Fallback 404

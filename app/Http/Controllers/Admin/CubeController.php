@@ -17,6 +17,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\Storage;
 
 class CubeController extends Controller
 {
@@ -1294,6 +1295,31 @@ class CubeController extends Controller
                 'success' => false,
                 'message' => 'Terjadi kesalahan saat validasi'
             ], 500);
+        }
+    }
+
+    // GET /api/admin/cubes/{id}
+    public function show(string $id)
+    {
+        try {
+            $cube = \App\Models\Cube::with([
+                'user:id,name,phone',
+                'corporate:id,name,phone',
+                'tags:id,cube_id,address,map_lat,map_lng,link',
+                'ads' => function ($q) {
+                    $q->select('ads.*')->orderByDesc('created_at');
+                },
+                'ads.ad_category:id,name',
+            ])->find($id);
+
+            if (!$cube) {
+                return response(['message' => 'not found'], 404);
+            }
+
+            return response(['message' => 'success', 'data' => $cube], 200);
+        } catch (\Throwable $e) {
+            Log::error('CubeController@show failed', ['id' => $id, 'error' => $e->getMessage()]);
+            return response(['message' => 'Error: server side having problem!'], 500);
         }
     }
 }

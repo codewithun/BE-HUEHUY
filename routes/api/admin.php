@@ -28,6 +28,7 @@ use App\Http\Controllers\Admin\WorldAffiliateController;
 use App\Http\Controllers\Admin\WorldController;
 use App\Http\Controllers\AppConfigController;
 use App\Http\Controllers\PicklistController;
+use App\Http\Controllers\Admin\OptionController;
 use App\Http\Controllers\Admin\PromoController;
 use App\Http\Controllers\Admin\PromoItemController;
 use App\Http\Controllers\Admin\CommunityController;
@@ -40,7 +41,8 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::get('/role', [PicklistController::class, 'role']);
         Route::get('/cube-type', [PicklistController::class, 'cubeType']);
         Route::get('/cube', [PicklistController::class, 'cube']);
-        Route::get('/ad-category', [PicklistController::class, 'adCategory']);
+        // Standardize: ad-category options served by OptionController (with image + wrapper)
+        Route::get('/ad-category', [OptionController::class, 'adCategory']);
         Route::get('/corporate', [PicklistController::class, 'corporate']);
         Route::get('/world', [PicklistController::class, 'world']);
         Route::get('/user', [PicklistController::class, 'user']);

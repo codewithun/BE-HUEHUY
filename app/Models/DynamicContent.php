@@ -23,6 +23,7 @@ class DynamicContent extends Model
         'is_active',
         'community_id',
         'size',
+        'ad_category_id',
     ];
 
     // =========================>
@@ -54,5 +55,10 @@ class DynamicContent extends Model
     public function dynamic_content_cubes(): HasMany
     {
         return $this->hasMany(DynamicContentCube::class, 'dynamic_content_id', 'id');
+    }
+
+    public function ad_category()
+    {
+        return $this->belongsTo(\App\Models\AdCategory::class, 'ad_category_id', 'id');
     }
 }

@@ -12,6 +12,8 @@ use App\Models\CubeType;
 use App\Models\OpeningHour;
 use App\Models\Voucher;
 use App\Models\Notification;
+use App\Models\User;
+use App\Models\CommunityMembership;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -159,7 +161,8 @@ class CubeController extends Controller
         // Skip validation untuk manager tenant jika kubus informasi
         $isInformation = $request->boolean('is_information');
 
-        $validation = $this->validation($request->all(), [
+        // Base validation rules
+        $rules = [
             'cube_type_id' => 'required|numeric',
             'parent_id'    => 'nullable|numeric|exists:cubes,id',
             'user_id'      => $isInformation ? 'nullable|numeric|exists:users,id' : 'nullable|numeric|exists:users,id',
@@ -188,6 +191,8 @@ class CubeController extends Controller
             'ads.unlimited_grab'         => 'nullable|boolean',
             'ads.is_daily_grab'          => 'nullable|boolean',
             'ads.status'                 => 'nullable|string',
+            // promo_type: akan diwajibkan jika content_type === 'promo' (iklan/promo biasa),
+            // sedangkan untuk voucher boleh kosong dan akan di-default-kan ke 'offline' di bawah.
             'ads.promo_type'             => ['nullable', 'string', Rule::in(['offline', 'online'])],
             'ads.validation_type'        => ['nullable', 'string', Rule::in(['auto', 'manual'])],
             'ads.code'                   => [
@@ -230,7 +235,15 @@ class CubeController extends Controller
             'opening_hours.*.close'    => 'nullable|date_format:H:i',
             'opening_hours.*.is_24hour' => 'nullable|boolean',
             'opening_hours.*.is_closed' => 'nullable|boolean',
-        ]);
+        ];
+
+        // Conditionally require promo_type only for content_type === 'promo'
+        $contentTypeForValidation = $request->input('content_type', 'promo');
+        if ($contentTypeForValidation === 'promo') {
+            $rules['ads.promo_type'] = ['required', 'string', Rule::in(['offline', 'online'])];
+        }
+
+        $validation = $this->validation($request->all(), $rules);
         if ($validation) return $validation;
 
         // * Validate Cube Type
@@ -478,6 +491,11 @@ class CubeController extends Controller
                     $ad->type = 'general'; // promo & lainnya
                 }
 
+                // Hardening: default-kan promo_type untuk voucher jika tidak diisi agar tidak trigger error DB NOT NULL
+                if ($ad->type === 'voucher' && empty($ad->promo_type)) {
+                    $ad->promo_type = 'offline';
+                }
+
                 // * Debug log for image files
                 Log::info('CubeController@store checking image files', [
                     'has_ads_image' => $request->hasFile('ads.image'),
@@ -563,13 +581,33 @@ class CubeController extends Controller
 
                 $ad->save();
 
-                // Process target users untuk voucher dengan target user tertentu
-                if ($ad->type === 'voucher' && $ad->target_type === 'user' && !empty($adsPayload['target_user_ids'])) {
-                    // Sync target users menggunakan tabel pivot
-                    $ad->target_users()->sync($adsPayload['target_user_ids']);
-
-                    // Send notifications
-                    $this->sendVoucherNotifications($ad, $adsPayload['target_user_ids']);
+                // Kirim notifikasi voucher sesuai target_type
+                if ($ad->type === 'voucher') {
+                    if ($ad->target_type === 'user' && !empty($adsPayload['target_user_ids'])) {
+                        // Target: user tertentu
+                        $ad->target_users()->sync($adsPayload['target_user_ids']);
+                        $this->sendVoucherNotifications($ad, $adsPayload['target_user_ids']);
+                    } elseif ($ad->target_type === 'community' && !empty($ad->community_id)) {
+                        // Target: member komunitas tertentu
+                        CommunityMembership::where('community_id', $ad->community_id)
+                            ->select('user_id')
+                            ->chunkById(1000, function ($chunk) use ($ad) {
+                                $this->sendVoucherNotifications($ad, $chunk->pluck('user_id')->all());
+                            });
+                    } elseif ($ad->target_type === 'all') {
+                        // Target: semua user (hanya role user).
+                        // Catatan: jika aplikasi memiliki mapping role lain, sesuaikan filter ini.
+                        User::query()
+                            // ->where('role_id', 3) // contoh jika role user = 3
+                            // Jika ingin mengecualikan admin saja:
+                            ->where(function ($q) {
+                                $q->whereNull('role_id')->orWhere('role_id', '!=', 1);
+                            })
+                            ->select('id')
+                            ->chunkById(1000, function ($users) use ($ad) {
+                                $this->sendVoucherNotifications($ad, $users->pluck('id')->all());
+                            });
+                    }
                 }
 
                 // ? Process Voucher (only online)

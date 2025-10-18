@@ -689,7 +689,35 @@ class CubeController extends Controller
             'corporate_id'  => $request->filled('corporate_id')  ? $request->corporate_id  : null,
         ]);
         // Skip validation untuk manager tenant jika kubus informasi
-        $isInformation = $request->boolean('is_information');
+        // Tentukan flag berdasarkan request apabila ada, jika tidak gunakan nilai di DB
+        $isInformationFlag = $request->has('is_information')
+            ? $request->boolean('is_information')
+            : (bool) $model->is_information;
+
+        // Cari iklan terbaru untuk fallback promo_type bila tidak dikirim oleh FE
+        $latestAd = Ad::where('cube_id', $model->id)->latest()->first();
+
+        // Ambil promo_type (prioritas: ads.promo_type -> promo_type -> dari DB)
+        $promoTypeFromRequest = $request->input('ads.promo_type')
+            ?? $request->input('promo_type');
+        $promoType = $promoTypeFromRequest ?? ($latestAd->promo_type ?? null);
+
+        // Hormati flag update_location (default false = tidak mengubah lokasi)
+        $updateLocation = $request->boolean('update_location', false);
+
+        // Longgarkan kewajiban lokasi apabila:
+        // - kubus informasi, atau
+        // - promo/iklan/voucher online
+        $relaxLocation = $isInformationFlag || ($promoType === 'online');
+
+        // Wajibkan lokasi hanya jika tidak relax dan memang ingin update lokasi,
+        // atau jika data lokasi di DB masih kosong (untuk menjaga konsistensi data)
+        $dbLocationEmpty = (is_null($model->map_lat) || is_null($model->map_lng) || empty($model->address));
+        $requireLocation = !$relaxLocation && ($updateLocation || $dbLocationEmpty);
+
+        $addressRule = $requireLocation ? 'required|string|max:255' : 'nullable|string|max:255';
+        $mapLatRule  = $requireLocation ? 'required|numeric'       : 'nullable|numeric';
+        $mapLngRule  = $requireLocation ? 'required|numeric'       : 'nullable|numeric';
 
         $validation = $this->validation($request->all(), [
             'cube_type_id' => 'nullable|numeric|exists:cube_types,id',
@@ -699,9 +727,9 @@ class CubeController extends Controller
             'corporate_id' => 'nullable|numeric|exists:corporates,id',
             'world_id'     => 'nullable|numeric|exists:worlds,id',
             'color'        => 'nullable|string|max:255',
-            'address'      => 'required|string|max:255',
-            'map_lat'      => 'required|numeric',
-            'map_lng'      => 'required|numeric',
+            'address'      => $addressRule,
+            'map_lat'      => $mapLatRule,
+            'map_lng'      => $mapLngRule,
             'status'       => ['required', Rule::in(['active', 'inactive'])],
             'is_recommendation' => 'nullable|boolean',
             'is_information'    => 'nullable|boolean',
@@ -779,19 +807,12 @@ class CubeController extends Controller
         $model = $this->dump_field($request->all(), $model);
 
         // * Handle owner_user_id mapping to user_id (hanya jika diisi)
-        if ($request->has('owner_user_id') && $request->owner_user_id) {
-            $model->user_id = $request->owner_user_id;
-            Log::info('CubeController@update mapping owner_user_id to user_id', [
+        if ($request->has('owner_user_id')) {
+            $model->user_id = $request->owner_user_id ?: null;
+            Log::info('CubeController@update owner_user_id processed', [
                 'cube_id' => $model->id,
                 'owner_user_id' => $request->owner_user_id,
                 'mapped_user_id' => $model->user_id
-            ]);
-        } else {
-            // Jika tidak ada manager tenant, set user_id ke null
-            $model->user_id = null;
-            Log::info('CubeController@update no manager tenant provided', [
-                'cube_id' => $model->id,
-                'cube_type_id' => $request->cube_type_id
             ]);
         }
 
@@ -860,6 +881,16 @@ class CubeController extends Controller
         }
 
         DB::commit();
+
+        $model->load([
+            'ads' => function ($q) {
+                $q->select('ads.*')->orderByDesc('created_at');
+            },
+            'ads.ad_category:id,name',
+            'tags:id,cube_id,address,map_lat,map_lng,link',
+            'user:id,name,phone,picture_source',
+            'corporate:id,name,phone,picture_source',
+        ]);
 
         return response([
             "message" => "success",
@@ -1229,42 +1260,39 @@ class CubeController extends Controller
         try {
             $ad = Ad::with(['cube', 'community', 'target_users'])->findOrFail($adId);
 
-            // Cek apakah ad memiliki validation_type manual
-            if ($ad->validation_type !== 'manual') {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Ads ini tidak menggunakan validasi manual'
-                ], 422);
-            }
-
-            // Verifikasi kode
-            if (!hash_equals((string)$ad->code, (string)$data['code'])) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Kode tidak valid'
-                ], 422);
+            // Jika tipe validasi manual, pastikan kode cocok
+            if ($ad->validation_type === 'manual') {
+                if (!hash_equals((string)($ad->code ?? ''), (string)$data['code'])) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Kode tidak valid'
+                    ], 422);
+                }
             }
 
             // Cek validitas tanggal
             $now = now();
-            if ($ad->start_validate && $now->lt($ad->start_validate)) {
+            if ($ad->start_validate && $now->lt(Carbon::parse($ad->start_validate))) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Promo/voucher belum dimulai'
                 ], 422);
             }
 
-            if ($ad->finish_validate && $now->gt($ad->finish_validate)) {
+            if ($ad->finish_validate && $now->gt(Carbon::parse($ad->finish_validate))) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Promo/voucher sudah berakhir'
                 ], 422);
             }
 
-            // Cek jam validasi
+            // Cek jam validasi (batas waktu per hari)
             if ($ad->validation_time_limit) {
                 $currentTime = $now->format('H:i:s');
-                if ($currentTime > $ad->validation_time_limit) {
+                $limit = strlen($ad->validation_time_limit) === 5
+                    ? $ad->validation_time_limit . ':00'
+                    : $ad->validation_time_limit;
+                if ($currentTime > $limit) {
                     return response()->json([
                         'success' => false,
                         'message' => 'Waktu validasi sudah berakhir untuk hari ini'
@@ -1285,7 +1313,6 @@ class CubeController extends Controller
 
             // Cek target community untuk voucher
             if ($ad->type === 'voucher' && $ad->target_type === 'community' && $ad->community_id) {
-                // Cek apakah user adalah member dari community
                 $isMember = \App\Models\CommunityMembership::where('user_id', $user->id)
                     ->where('community_id', $ad->community_id)
                     ->exists();

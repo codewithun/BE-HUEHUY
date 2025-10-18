@@ -767,7 +767,7 @@ class AdController extends Controller
                         ) AS SIGNED) AS total_remaining'),
             ])
                 ->leftJoin('summary_grabs', 'summary_grabs.ad_id', 'ads.id')
-                ->with(['cube.tags','cube.user','cube.corporate','ad_category'])
+                ->with(['cube.tags', 'cube.user', 'cube.corporate', 'ad_category'])
                 ->where('ads.id', $id)
                 ->groupBy('ads.id')
                 ->first();

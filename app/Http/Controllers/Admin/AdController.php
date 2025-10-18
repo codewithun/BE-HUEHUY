@@ -14,6 +14,43 @@ use Illuminate\Validation\Rule;
 
 class AdController extends Controller
 {
+    /**
+     * Normalize various date string formats to 'Y-m-d'.
+     * Supports:
+     * - d-m-Y (e.g., 17-10-2025)
+     * - Y-m-d (e.g., 2025-10-17)
+     * - ISO strings (e.g., 2025-10-17T00:00:00.000000Z)
+     * Returns null if cannot be parsed.
+     */
+    private function toYmdDate($value): ?string
+    {
+        try {
+            if (!$value) return null;
+            if ($value instanceof \DateTimeInterface) {
+                return Carbon::instance($value)->format('Y-m-d');
+            }
+
+            $str = is_string($value) ? trim($value) : (string) $value;
+            if ($str === '') return null;
+
+            if (preg_match('/^\d{2}-\d{2}-\d{4}$/', $str)) {
+                $dt = Carbon::createFromFormat('d-m-Y', $str);
+            } elseif (preg_match('/^\d{4}-\d{2}-\d{2}$/', $str)) {
+                $dt = Carbon::createFromFormat('Y-m-d', $str);
+            } else {
+                $dt = Carbon::parse($str);
+            }
+
+            return $dt->format('Y-m-d');
+        } catch (\Throwable $e) {
+            Log::warning('AdController date normalization failed', [
+                'raw' => $value,
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+    }
+
     // ========================================>
     // ## Display a listing of the resource.
     // ========================================>
@@ -86,6 +123,14 @@ class AdController extends Controller
     // =============================================>
     public function store(Request $request)
     {
+        // Normalize empty date strings to null to pass 'nullable|date' rule
+        if ($request->has('start_validate') && $request->input('start_validate') === '') {
+            $request->merge(['start_validate' => null]);
+        }
+        if ($request->has('finish_validate') && $request->input('finish_validate') === '') {
+            $request->merge(['finish_validate' => null]);
+        }
+
         // ? Validate request
         $validation = $this->validation($request->all(), [
             'cube_id' => 'required|numeric|exists:cubes,id',
@@ -113,8 +158,8 @@ class AdController extends Controller
             'max_production_per_day' => 'nullable|numeric|min:0',
             'sell_per_day' => 'nullable|numeric|min:0',
             'level_umkm' => 'nullable|numeric|min:0',
-            'start_validate' => 'nullable|date_format:d-m-Y',
-            'finish_validate' => 'nullable|date_format:d-m-Y|after_or_equal:start_validate',
+            'start_validate' => 'nullable|date',
+            'finish_validate' => 'nullable|date|after_or_equal:start_validate',
             'validation_time_limit' => 'nullable|regex:/^\d{1,2}:\d{2}(:\d{2})?$/',
             'jam_mulai' => 'nullable|regex:/^\d{1,2}:\d{2}(:\d{2})?$/',
             'jam_berakhir' => 'nullable|regex:/^\d{1,2}:\d{2}(:\d{2})?$/',
@@ -250,10 +295,16 @@ class AdController extends Controller
 
         // * If start or finish validate filled
         if ($request->start_validate) {
-            $model->start_validate = Carbon::create($request->start_validate)->format('Y-m-d');
+            $normalized = $this->toYmdDate($request->start_validate);
+            if ($normalized) {
+                $model->start_validate = $normalized;
+            }
         }
         if ($request->finish_validate) {
-            $model->finish_validate = Carbon::create($request->finish_validate)->format('Y-m-d');
+            $normalized = $this->toYmdDate($request->finish_validate);
+            if ($normalized) {
+                $model->finish_validate = $normalized;
+            }
         }
 
         // Handle validation_time_limit with proper format conversion
@@ -344,6 +395,14 @@ class AdController extends Controller
             'unlimited_grab_value' => $request->input('unlimited_grab'),
         ]);
 
+        // Convert empty date strings to null so 'nullable|date' passes
+        if ($request->has('start_validate') && $request->input('start_validate') === '') {
+            $request->merge(['start_validate' => null]);
+        }
+        if ($request->has('finish_validate') && $request->input('finish_validate') === '') {
+            $request->merge(['finish_validate' => null]);
+        }
+
         // ? Initial
         DB::beginTransaction();
         $model = Ad::findOrFail($id);
@@ -390,8 +449,8 @@ class AdController extends Controller
             'sell_per_day' => 'nullable|numeric|min:0',
             'level_umkm' => 'nullable|numeric|min:0',
             'status' => 'nullable|string',
-            'start_validate' => 'nullable|date_format:d-m-Y',
-            'finish_validate' => 'nullable|date_format:d-m-Y|after_or_equal:start_validate',
+            'start_validate' => 'nullable|date',
+            'finish_validate' => 'nullable|date|after_or_equal:start_validate',
             'validation_time_limit' => 'nullable|regex:/^\d{1,2}:\d{2}(:\d{2})?$/',
             'jam_mulai' => 'nullable|regex:/^\d{1,2}:\d{2}(:\d{2})?$/',
             'jam_berakhir' => 'nullable|regex:/^\d{1,2}:\d{2}(:\d{2})?$/',
@@ -436,61 +495,125 @@ class AdController extends Controller
             ]
         ]);
 
-        // ? Dump data
-        $model = $this->dump_field($request->all(), $model);
-        if ($request->filled('title')) {
-            $model->slug = StringHelper::uniqueSlug($request->title);
+        // ? Manual field assignment instead of dump_field for better control
+        if ($request->has('title')) {
+            $newTitle = $request->input('title');
+            // Only update slug if the title actually changed to avoid regenerating on no-op updates
+            $titleChanged = $model->getOriginal('title') !== $newTitle;
+            $model->title = $newTitle;
+            if ($titleChanged) {
+                $model->slug = StringHelper::uniqueSlug($newTitle);
+            }
+        }
+        if ($request->has('description')) {
+            $model->description = $request->input('description');
+        }
+        if ($request->has('ad_category_id')) {
+            $adCategoryId = $request->input('ad_category_id');
+            // Handle empty string or null
+            $model->ad_category_id = ($adCategoryId === '' || $adCategoryId === 'null') ? null : $adCategoryId;
+        }
+        if ($request->has('promo_type')) {
+            $model->promo_type = $request->input('promo_type');
+        }
+        if ($request->has('validation_type')) {
+            $model->validation_type = $request->input('validation_type', 'auto');
+        }
+        if ($request->has('code')) {
+            $model->code = $request->input('code');
+        }
+        if ($request->has('target_type')) {
+            $model->target_type = $request->input('target_type', 'all');
+        }
+        if ($request->has('community_id')) {
+            $model->community_id = $request->input('community_id');
+        }
+        if ($request->has('max_grab')) {
+            $model->max_grab = $request->input('max_grab');
+        }
+        if ($request->has('status')) {
+            $model->status = $request->input('status');
         }
 
         // Handle schedule fields with better boolean processing  
-        $unlimited_grab = $request->input('unlimited_grab');
-        $model->unlimited_grab = in_array($unlimited_grab, [1, '1', true, 'true', 'on'], true);
+        if ($request->has('unlimited_grab')) {
+            $unlimited_grab = $request->input('unlimited_grab');
+            $model->unlimited_grab = in_array($unlimited_grab, [1, '1', true, 'true', 'on'], true);
+        }
 
-        $is_daily_grab = $request->input('is_daily_grab');
-        $model->is_daily_grab = in_array($is_daily_grab, [1, '1', true, 'true', 'on'], true);
+        if ($request->has('is_daily_grab')) {
+            $is_daily_grab = $request->input('is_daily_grab');
+            $model->is_daily_grab = in_array($is_daily_grab, [1, '1', true, 'true', 'on'], true);
+        }
 
         // Handle time fields - ensure proper format conversion
-        $jam_mulai = $request->input('jam_mulai');
-        if ($jam_mulai && !preg_match('/^\d{2}:\d{2}:\d{2}$/', $jam_mulai)) {
-            $jam_mulai = strlen($jam_mulai) == 5 ? $jam_mulai . ':00' : $jam_mulai;
+        if ($request->has('jam_mulai')) {
+            $jam_mulai = $request->input('jam_mulai');
+            if ($jam_mulai && !preg_match('/^\d{2}:\d{2}:\d{2}$/', $jam_mulai)) {
+                $jam_mulai = strlen($jam_mulai) == 5 ? $jam_mulai . ':00' : $jam_mulai;
+            }
+            $model->jam_mulai = $jam_mulai;
         }
-        $model->jam_mulai = $jam_mulai;
 
-        $jam_berakhir = $request->input('jam_berakhir');
-        if ($jam_berakhir && !preg_match('/^\d{2}:\d{2}:\d{2}$/', $jam_berakhir)) {
-            $jam_berakhir = strlen($jam_berakhir) == 5 ? $jam_berakhir . ':00' : $jam_berakhir;
+        if ($request->has('jam_berakhir')) {
+            $jam_berakhir = $request->input('jam_berakhir');
+            if ($jam_berakhir && !preg_match('/^\d{2}:\d{2}:\d{2}$/', $jam_berakhir)) {
+                $jam_berakhir = strlen($jam_berakhir) == 5 ? $jam_berakhir . ':00' : $jam_berakhir;
+            }
+            $model->jam_berakhir = $jam_berakhir;
         }
-        $model->jam_berakhir = $jam_berakhir;
 
-        $model->day_type = $request->input('day_type', 'custom');
+        if ($request->has('day_type')) {
+            $model->day_type = $request->input('day_type', 'custom');
+        }
 
-        // Handle custom days
-        $customDays = $request->input('custom_days', []);
-        if (is_array($customDays) && !empty($customDays)) {
-            $model->custom_days = $customDays;
-        } else {
-            $model->custom_days = null;
+        // Handle custom days - support both empty array and object
+        if ($request->has('custom_days')) {
+            $customDays = $request->input('custom_days', []);
+            if (is_array($customDays)) {
+                // Convert empty array to empty object for JSON storage
+                $model->custom_days = empty($customDays) ? (object)[] : $customDays;
+            } else {
+                $model->custom_days = null;
+            }
         }
 
         // Handle validation fields
-        $model->validation_type = $request->input('validation_type', 'auto');
-        $model->code = $request->input('code');
-        $model->target_type = $request->input('target_type', 'all');
-        $model->community_id = $request->input('community_id');
-
-        if ($request->start_validate) {
-            $model->start_validate = Carbon::create($request->start_validate)->format('Y-m-d');
+        if ($request->has('validation_type')) {
+            $model->validation_type = $request->input('validation_type', 'auto');
         }
-        if ($request->finish_validate) {
-            $model->finish_validate = Carbon::create($request->finish_validate)->format('Y-m-d');
+        if ($request->has('code')) {
+            $model->code = $request->input('code');
+        }
+        if ($request->has('target_type')) {
+            $model->target_type = $request->input('target_type', 'all');
+        }
+        if ($request->has('community_id')) {
+            $model->community_id = $request->input('community_id');
+        }
+
+        // Handle date fields with normalization
+        if ($request->has('start_validate')) {
+            $normalized = $this->toYmdDate($request->start_validate);
+            if ($normalized) {
+                $model->start_validate = $normalized;
+            }
+        }
+        if ($request->has('finish_validate')) {
+            $normalized = $this->toYmdDate($request->finish_validate);
+            if ($normalized) {
+                $model->finish_validate = $normalized;
+            }
         }
 
         // Handle validation_time_limit with proper format conversion
-        $validation_time_limit = $request->input('validation_time_limit');
-        if ($validation_time_limit && !preg_match('/^\d{2}:\d{2}:\d{2}$/', $validation_time_limit)) {
-            $validation_time_limit = strlen($validation_time_limit) == 5 ? $validation_time_limit . ':00' : $validation_time_limit;
+        if ($request->has('validation_time_limit')) {
+            $validation_time_limit = $request->input('validation_time_limit');
+            if ($validation_time_limit && !preg_match('/^\d{2}:\d{2}:\d{2}$/', $validation_time_limit)) {
+                $validation_time_limit = strlen($validation_time_limit) == 5 ? $validation_time_limit . ':00' : $validation_time_limit;
+            }
+            $model->validation_time_limit = $validation_time_limit;
         }
-        $model->validation_time_limit = $validation_time_limit;
 
         // Log data untuk debugging
         Log::info('AdController@update processing data', [
@@ -501,7 +624,17 @@ class AdController extends Controller
             'day_type' => $model->day_type,
             'custom_days' => $model->custom_days,
             'validation_type' => $model->validation_type,
-            'code' => $model->code
+            'code' => $model->code,
+            'title' => $model->title,
+            'description' => $model->description,
+            'promo_type' => $model->promo_type,
+            'start_validate' => $model->start_validate,
+            'finish_validate' => $model->finish_validate,
+            'original_title' => $model->getOriginal('title'),
+            'original_description' => $model->getOriginal('description'),
+            'request_title' => $request->input('title'),
+            'request_description' => $request->input('description'),
+            'dirty_fields' => $model->getDirty(),
         ]);
 
         // * Check if has upload file
@@ -705,6 +838,9 @@ class AdController extends Controller
         }
 
         DB::commit();
+
+        // Refresh model to get latest data including relationships
+        $model->refresh();
 
         return response([
             "message" => "success",

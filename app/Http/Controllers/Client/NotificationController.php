@@ -4,10 +4,14 @@ namespace App\Http\Controllers\Client;
 
 use App\Http\Controllers\Controller;
 use App\Models\Notification;
-use App\Models\Voucher; // TAMBAH: Import model Voucher
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Database\Eloquent\Relations\MorphTo;
+use App\Models\Ad;
+use App\Models\Promo;
+use App\Models\Voucher;
+use App\Models\Grab;
 
 class NotificationController extends Controller
 {
@@ -37,11 +41,11 @@ class NotificationController extends Controller
      * - sortDirection: ASC|DESC (default: DESC)
      * - paginate: 1..100 (default: 10)
      */
-   public function index(Request $request)
+    public function index(Request $request)
     {
         $sortDirection = strtoupper($request->get('sortDirection', 'DESC')) === 'ASC' ? 'ASC' : 'DESC';
 
-        $allowedSort = ['created_at','id','read_at','type','title'];
+        $allowedSort = ['created_at', 'id', 'read_at', 'type', 'title'];
         $sortBy = $request->get('sortBy', 'created_at');
         if (!in_array($sortBy, $allowedSort, true)) {
             $sortBy = 'created_at';
@@ -77,7 +81,17 @@ class NotificationController extends Controller
         ]);
 
         $query = Notification::query()
-            ->where('user_id', $user->id);
+            ->where('user_id', $user->id)
+            ->with([
+                'target' => function (MorphTo $morphTo) {
+                    $morphTo->morphWith([
+                        Ad::class      => [],
+                        Promo::class   => ['ad'],
+                        Voucher::class => ['ad'],
+                        Grab::class    => ['ad'],
+                    ]);
+                },
+            ]);
 
         // ====== FILTER TAB / TYPE ======
         $typesFromTab = $this->mapTabTypes($tab);
@@ -147,7 +161,6 @@ class NotificationController extends Controller
             }
 
             return response()->json($responseData)->header('Cache-Control', 'no-store');
-
         } catch (\Throwable $e) {
             Log::error('NotificationController@index error: ' . $e->getMessage(), [
                 'user_id' => $user->id,
@@ -166,135 +179,92 @@ class NotificationController extends Controller
     /**
      * TAMBAH: Method untuk inject status live voucher ke notifikasi
      */
-    private function injectLiveVoucherStatus($items)
+    public function injectLiveVoucherStatus($notifications)
     {
         try {
-            if ($items->isEmpty()) {
-                return $items;
-            }
-
             Log::info('🔍 Starting live voucher status injection', [
-                'total_items' => $items->count()
+                'total_items' => count($notifications)
             ]);
 
-            // Ambil semua voucher_id dari notifikasi type=voucher
-            $voucherIds = $items->where('type', 'voucher')
-                ->where('target_type', 'voucher')
-                ->pluck('target_id')
-                ->filter()
-                ->unique()
-                ->values();
+            // Ambil hanya notifikasi voucher
+            $voucherNotifications = $notifications->filter(fn($n) => $n->type === 'voucher');
+            if ($voucherNotifications->isEmpty()) return $notifications;
 
-            Log::info('🎯 Found voucher notifications', [
-                'voucher_ids' => $voucherIds->toArray()
+            $voucherIds = $voucherNotifications->pluck('target_id')->unique()->values();
+            Log::info('🎯 Found voucher notifications', ['voucher_ids' => $voucherIds]);
+
+            // Ambil data dari tabel ADS (bukan voucher)
+            $ads = \App\Models\Ad::whereIn('id', $voucherIds)
+                ->select([
+                    'id',
+                    'title',
+                    'image_1',
+                    'image_updated_at',
+                    'finish_validate',
+                    'max_grab',      // 🔥 pakai ini ganti 'stock'
+                    'is_daily_grab',
+                    'unlimited_grab',
+                    'status'
+                ])
+                ->get()
+                ->keyBy('id');
+
+            Log::info('📊 Vouchers fetched from database', [
+                'requested_ids' => $voucherIds,
+                'found_vouchers' => $ads->keys()
             ]);
 
-            if ($voucherIds->isEmpty()) {
-                Log::info('✅ No voucher notifications found, skipping injection');
-                return $items;
-            }
-
-            // PERBAIKAN: Hanya ambil kolom yang pasti ada
-            try {
-                $vouchers = Voucher::whereIn('id', $voucherIds)
-                    ->select(['id', 'valid_until', 'stock', 'name']) // HAPUS 'status' yang tidak ada
-                    ->get()
-                    ->keyBy('id');
-
-                Log::info('📊 Vouchers fetched from database', [
-                    'requested_ids' => $voucherIds->toArray(),
-                    'found_vouchers' => $vouchers->keys()->toArray()
-                ]);
-            } catch (\Throwable $e) {
-                Log::error('❌ Failed to fetch vouchers', [
-                    'error' => $e->getMessage(),
-                    'voucher_ids' => $voucherIds->toArray()
-                ]);
-                // Return original items jika gagal fetch voucher
-                return $items;
-            }
-
-            // Inject field live_* ke setiap notifikasi voucher
-            $items = $items->map(function ($notification) use ($vouchers) {
+            foreach ($voucherNotifications as $notif) {
                 try {
-                    // Hanya proses notifikasi voucher
-                    if ($notification->type !== 'voucher' || 
-                        $notification->target_type !== 'voucher' || 
-                        !$notification->target_id) {
-                        return $notification;
+                    $ad = $ads->get($notif->target_id);
+                    if (!$ad) continue;
+
+                    // Waktu validasi
+                    $validUntil = $ad->finish_validate ?? null;
+                    $expired = $validUntil ? now('Asia/Jakarta')->greaterThan($validUntil) : false;
+
+                    // Image handling
+                    $imageUrl = null;
+                    if ($ad->image_1) {
+                        $imageUrl = \Illuminate\Support\Facades\Storage::url($ad->image_1);
+                        if ($ad->image_updated_at) {
+                            $imageUrl .= '?v=' . \Carbon\Carbon::parse($ad->image_updated_at)->timestamp;
+                        }
                     }
 
-                    // Ambil data voucher live
-                    $voucher = $vouchers->get($notification->target_id);
-                    if (!$voucher) {
-                        // Voucher sudah dihapus
-                        $notification->live_expired = true;
-                        $notification->live_available = false;
-                        $notification->live_stock = 0;
-                        $notification->live_status = 'deleted';
-                        return $notification;
-                    }
-
-                    // Cek status kadaluwarsa
-                    $validUntil = $voucher->valid_until;
-                    $expired = $validUntil ? now()->greaterThan($validUntil) : false;
-
-                    // Cek stok
-                    $stock = $voucher->stock ?? 0;
-                    $outOfStock = !is_null($voucher->stock) && $stock <= 0;
-
-                    // PERBAIKAN: Default status 'active' karena kolom status tidak ada
-                    $status = 'active'; // Semua voucher yang ada dianggap aktif
-                    $inactive = false;  // Tidak ada status inactive jika kolom tidak ada
-
-                    // Inject field live ke notifikasi
-                    $notification->live_valid_until = $validUntil;
-                    $notification->live_expired = $expired;
-                    $notification->live_stock = $stock;
-                    $notification->live_status = $status;
-                    $notification->live_out_of_stock = $outOfStock;
-                    $notification->live_inactive = $inactive;
-                    $notification->live_available = !$expired && !$outOfStock && !$inactive;
-                    $notification->live_voucher_name = $voucher->name;
-
-                    // Log untuk debugging hanya jika tidak tersedia
-                    if ($expired || $outOfStock) {
-                        Log::info('🔴 Voucher not available in live status', [
-                            'notification_id' => $notification->id,
-                            'voucher_id' => $notification->target_id,
-                            'expired' => $expired,
-                            'out_of_stock' => $outOfStock,
-                            'valid_until' => $validUntil,
-                            'stock' => $stock,
-                        ]);
-                    }
-
-                    return $notification;
+                    // Inject data baru ke notifikasi
+                    $notif->live_status = [
+                        'ad_id'        => $ad->id,
+                        'title'        => $ad->title,
+                        'image_url'    => $imageUrl,
+                        'max_grab'     => $ad->max_grab,
+                        'is_unlimited' => (bool)$ad->unlimited_grab,
+                        'is_expired'   => $expired,
+                        'valid_until'  => $ad->finish_validate,
+                        'status'       => $ad->status,
+                    ];
                 } catch (\Throwable $e) {
                     Log::error('❌ Error processing notification for live status', [
-                        'notification_id' => $notification->id ?? 'unknown',
-                        'error' => $e->getMessage()
+                        'notification_id' => $notif->id,
+                        'error' => $e->getMessage(),
                     ]);
-                    return $notification;
                 }
-            });
+            }
 
             Log::info('✅ Injected live voucher status successfully', [
-                'total_notifications' => $items->count(),
-                'voucher_notifications' => $voucherIds->count(),
-                'vouchers_found' => $vouchers->count(),
+                'total_notifications' => count($notifications),
+                'voucher_notifications' => $voucherNotifications->count(),
+                'vouchers_found' => $ads->count(),
             ]);
 
-            return $items;
-
+            return $notifications;
         } catch (\Throwable $e) {
-            Log::error('❌ Critical error in injectLiveVoucherStatus', [
+            Log::error('💥 injectLiveVoucherStatus fatal error', [
                 'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+                'line'  => $e->getLine(),
+                'file'  => $e->getFile(),
             ]);
-            
-            // Return original items untuk mencegah crash
-            return $items;
+            return $notifications;
         }
     }
 
@@ -322,9 +292,8 @@ class NotificationController extends Controller
                 'message' => 'Notification marked as read',
                 'data'    => $notification,
             ], 200);
-
         } catch (\Throwable $e) {
-            Log::error('NotificationController@markAsRead error: '.$e->getMessage());
+            Log::error('NotificationController@markAsRead error: ' . $e->getMessage());
             return response()->json(['success' => false, 'message' => 'Failed to mark notification as read'], 500);
         }
     }
@@ -347,9 +316,8 @@ class NotificationController extends Controller
                 'message' => "Marked {$count} notifications as read",
                 'count'   => $count,
             ], 200);
-
         } catch (\Throwable $e) {
-            Log::error('NotificationController@markAllAsRead error: '.$e->getMessage());
+            Log::error('NotificationController@markAllAsRead error: ' . $e->getMessage());
             return response()->json(['success' => false, 'message' => 'Failed to mark all notifications as read'], 500);
         }
     }
@@ -368,9 +336,8 @@ class NotificationController extends Controller
                 ->count();
 
             return response()->json(['success' => true, 'unread_count' => $count], 200);
-
         } catch (\Throwable $e) {
-            Log::error('NotificationController@unreadCount error: '.$e->getMessage());
+            Log::error('NotificationController@unreadCount error: ' . $e->getMessage());
             return response()->json(['success' => false, 'message' => 'Failed to get unread count'], 500);
         }
     }

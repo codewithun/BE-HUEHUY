@@ -72,9 +72,18 @@ class Notification extends Model
     /**
      * Legacy relationships (opsional; JANGAN eager-load kalau kolom FK tidak ada)
      */
-    public function cube(): BelongsTo   { return $this->belongsTo(Cube::class); }
-    public function ad(): BelongsTo     { return $this->belongsTo(Ad::class); }
-    public function grab(): BelongsTo   { return $this->belongsTo(Grab::class); }
+    public function cube(): BelongsTo
+    {
+        return $this->belongsTo(Cube::class);
+    }
+    public function ad(): BelongsTo
+    {
+        return $this->belongsTo(Ad::class);
+    }
+    public function grab(): BelongsTo
+    {
+        return $this->belongsTo(Grab::class);
+    }
 
     // ================= Scopes =================
 
@@ -91,14 +100,35 @@ class Notification extends Model
         return $query;
     }
 
-    public function scopeUnread($query) { return $query->whereNull('read_at'); }
-    public function scopeRead($query)   { return $query->whereNotNull('read_at'); }
+    public function scopeUnread($query)
+    {
+        return $query->whereNull('read_at');
+    }
+    public function scopeRead($query)
+    {
+        return $query->whereNotNull('read_at');
+    }
 
-    public function scopeHunter($query)   { return $query->where('type', 'hunter'); }
-    public function scopeMerchant($query) { return $query->where('type', 'merchant'); }
-    public function scopeVoucher($query)  { return $query->where('type', 'voucher'); }
-    public function scopePromo($query)    { return $query->where('type', 'promo'); }
-    public function scopeSystem($query)   { return $query->where('type', 'system'); }
+    public function scopeHunter($query)
+    {
+        return $query->where('type', 'hunter');
+    }
+    public function scopeMerchant($query)
+    {
+        return $query->where('type', 'merchant');
+    }
+    public function scopeVoucher($query)
+    {
+        return $query->where('type', 'voucher');
+    }
+    public function scopePromo($query)
+    {
+        return $query->where('type', 'promo');
+    }
+    public function scopeSystem($query)
+    {
+        return $query->where('type', 'system');
+    }
 
     public function scopeTargetType($query, string $targetType)
     {
@@ -122,7 +152,7 @@ class Notification extends Model
         $icons = [
             'voucher'  => '🎫',
             'promo'    => '🏷️',
-            'community'=> '👥',
+            'community' => '👥',
             'system'   => '🔔',
             'merchant' => '🏪',
             'hunter'   => '🎯',
@@ -137,7 +167,7 @@ class Notification extends Model
         $colors = [
             'voucher'  => 'bg-purple-100 text-purple-800',
             'promo'    => 'bg-orange-100 text-orange-800',
-            'community'=> 'bg-blue-100 text-blue-800',
+            'community' => 'bg-blue-100 text-blue-800',
             'system'   => 'bg-gray-100 text-gray-800',
             'merchant' => 'bg-green-100 text-green-800',
             'hunter'   => 'bg-red-100 text-red-800',
@@ -289,5 +319,84 @@ class Notification extends Model
                 'target_id'   => $notification->target_id,
             ]);
         });
+    }
+
+    // ================= Custom Accessors untuk Ads =================
+
+    /**
+     * Resolve Ad dari target (bisa dari promo, voucher, grab, ad langsung)
+     */
+    public function resolveAd(): ?Ad
+    {
+        if ($this->target_type === 'ad') {
+            return Ad::find($this->target_id);
+        }
+        if ($this->target_type === 'voucher') {
+            $voucher = Voucher::with('ad')->find($this->target_id);
+            return $voucher?->ad;
+        }
+        return null;
+    }
+
+    /**
+     * Normalisasi path ke URL publik
+     */
+    protected function toPublicUrl(?string $path): ?string
+    {
+        if (!$path) return null;
+        if (preg_match('~^https?://~i', $path)) return $path;
+        $clean = ltrim($path, '/');
+        if (str_starts_with($clean, 'storage/')) {
+            $clean = substr($clean, strlen('storage/'));
+        }
+        return Storage::disk('public')->exists($clean)
+            ? Storage::url($clean)
+            : null;
+    }
+
+    /**
+     * Ambil gambar utama dari Ads — prioritas: image_1 → image_2 → image_3 → picture_source
+     */
+    public function getAdPictureAttribute(): ?string
+    {
+        $ad = $this->resolveAd();
+        if (!$ad) return null;
+
+        $candidate = $ad->image_1
+            ?? $ad->image_2
+            ?? $ad->image_3
+            ?? $ad->picture_source
+            ?? null;
+
+        $url = $this->toPublicUrl($candidate);
+
+        if ($url && !empty($ad->image_updated_at)) {
+            $qs = http_build_query(['v' => \Carbon\Carbon::parse($ad->image_updated_at)->timestamp]);
+            $url .= (str_contains($url, '?') ? '&' : '?') . $qs;
+        }
+
+        return $url;
+    }
+
+    public function getAdStartValidateAttribute(): ?string
+    {
+        $ad = $this->resolveAd();
+        return $ad && $ad->start_validate
+            ? \Carbon\Carbon::parse($ad->start_validate)->format('Y-m-d')
+            : null;
+    }
+
+    public function getAdFinishValidateAttribute(): ?string
+    {
+        $ad = $this->resolveAd();
+        return $ad && $ad->finish_validate
+            ? \Carbon\Carbon::parse($ad->finish_validate)->format('Y-m-d')
+            : null;
+    }
+
+    public function getAdTitleAttribute(): ?string
+    {
+        $ad = $this->resolveAd();
+        return $ad->title ?? $this->title ?? null;
     }
 }

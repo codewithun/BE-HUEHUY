@@ -1220,7 +1220,7 @@ class CubeController extends Controller
                     'type' => 'voucher',
                     'title' => $title,
                     'message' => $message,
-                    'target_type' => 'voucher',
+                    'target_type' => 'ad',
                     'target_id' => $ad->id,
                     'meta' => json_encode([
                         'cube_id' => $ad->cube_id,

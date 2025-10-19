@@ -615,6 +615,33 @@ class AdController extends Controller
             $model->validation_time_limit = $validation_time_limit;
         }
 
+        // Handle UMKM fields - ADD THIS CODE
+        if ($request->has('level_umkm')) {
+            $levelUmkm = $request->input('level_umkm');
+            $model->level_umkm = ($levelUmkm === '' || $levelUmkm === 'null') ? null : $levelUmkm;
+        }
+
+        if ($request->has('max_production_per_day')) {
+            $maxProduction = $request->input('max_production_per_day');
+            $model->max_production_per_day = ($maxProduction === '' || $maxProduction === 'null') ? null : $maxProduction;
+        }
+
+        if ($request->has('sell_per_day')) {
+            $sellPerDay = $request->input('sell_per_day');
+            $model->sell_per_day = ($sellPerDay === '' || $sellPerDay === 'null') ? null : $sellPerDay;
+        }
+
+        // Log untuk debugging
+        Log::info('AdController@update UMKM fields updated', [
+            'ad_id' => $id,
+            'level_umkm' => $model->level_umkm,
+            'max_production_per_day' => $model->max_production_per_day,
+            'sell_per_day' => $model->sell_per_day,
+            'request_level_umkm' => $request->input('level_umkm'),
+            'request_max_production' => $request->input('max_production_per_day'),
+            'request_sell_per_day' => $request->input('sell_per_day'),
+        ]);
+
         // Log data untuk debugging
         Log::info('AdController@update processing data', [
             'ad_id' => $id,

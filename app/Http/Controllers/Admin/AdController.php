@@ -6,6 +6,7 @@ use App\Helpers\StringHelper;
 use App\Http\Controllers\Controller;
 use App\Models\Ad;
 use App\Models\Voucher;
+use App\Models\VoucherItem;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -350,27 +351,39 @@ class AdController extends Controller
             }
         }
 
+        DB::commit();
+
+
         /**
          * * Create Voucher
          */
-        if ($request->promo_type == 'online') {
-
+        // Setelah iklan berhasil dibuat, buat voucher jika tipe-nya voucher
+        if ($model->type === 'voucher') {
             try {
-                Voucher::create([
+                // Gunakan updateOrCreate agar aman dari duplikasi ad_id
+                Voucher::updateOrCreate(
+                    ['ad_id' => $model->id],
+                    [
+                        'name' => $model->title,
+                        'code' => (new \App\Models\Voucher())->generateVoucherCode(),
+                        'stock' => 0,
+                        'validation_type' => 'auto',
+                        'target_type' => 'all',
+                    ]
+                );
+
+                Log::info('✅ Voucher auto-created from AdController', [
                     'ad_id' => $model->id,
-                    'name' => $model->title,
-                    'code' => (new Voucher())->generateVoucherCode(),
+                    'title' => $model->title,
                 ]);
             } catch (\Throwable $th) {
-                DB::rollBack();
-                return response([
-                    "message" => "Error: failed to create new voucher",
-                    'data' => $th
-                ], 500);
+                Log::error('❌ Failed to auto-create voucher from ad', [
+                    'ad_id' => $model->id,
+                    'error' => $th->getMessage(),
+                ]);
             }
         }
 
-        DB::commit();
 
         return response([
             "message" => "success",
@@ -615,33 +628,6 @@ class AdController extends Controller
             $model->validation_time_limit = $validation_time_limit;
         }
 
-        // Handle UMKM fields - ADD THIS CODE
-        if ($request->has('level_umkm')) {
-            $levelUmkm = $request->input('level_umkm');
-            $model->level_umkm = ($levelUmkm === '' || $levelUmkm === 'null') ? null : $levelUmkm;
-        }
-
-        if ($request->has('max_production_per_day')) {
-            $maxProduction = $request->input('max_production_per_day');
-            $model->max_production_per_day = ($maxProduction === '' || $maxProduction === 'null') ? null : $maxProduction;
-        }
-
-        if ($request->has('sell_per_day')) {
-            $sellPerDay = $request->input('sell_per_day');
-            $model->sell_per_day = ($sellPerDay === '' || $sellPerDay === 'null') ? null : $sellPerDay;
-        }
-
-        // Log untuk debugging
-        Log::info('AdController@update UMKM fields updated', [
-            'ad_id' => $id,
-            'level_umkm' => $model->level_umkm,
-            'max_production_per_day' => $model->max_production_per_day,
-            'sell_per_day' => $model->sell_per_day,
-            'request_level_umkm' => $request->input('level_umkm'),
-            'request_max_production' => $request->input('max_production_per_day'),
-            'request_sell_per_day' => $request->input('sell_per_day'),
-        ]);
-
         // Log data untuk debugging
         Log::info('AdController@update processing data', [
             'ad_id' => $id,
@@ -841,8 +827,7 @@ class AdController extends Controller
             }
         }
 
-        if ($request->promo_type == 'online') {
-
+        if ($model->type === 'voucher') {
             $voucher = Voucher::where('ad_id', $model->id)
                 ->first();
 
@@ -948,6 +933,115 @@ class AdController extends Controller
                 'line' => $e->getLine(),
             ]);
             return response(['message' => 'Error: server side having problem!'], 500);
+        }
+    }
+
+    public function claim(Request $request, $id)
+    {
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['success' => false, 'message' => 'Unauthenticated'], 401);
+        }
+
+        try {
+            $ad = \App\Models\Ad::find($id);
+            if (!$ad) {
+                return response()->json(['success' => false, 'message' => 'Voucher tidak ditemukan'], 404);
+            }
+
+            // 🗓️ Validasi masa berlaku
+            $now = now('Asia/Jakarta');
+            if ($ad->start_validate && $now->lt(\Carbon\Carbon::parse($ad->start_validate))) {
+                return response()->json(['success' => false, 'message' => 'Voucher belum dimulai'], 422);
+            }
+            if ($ad->finish_validate && $now->gt(\Carbon\Carbon::parse($ad->finish_validate))) {
+                return response()->json(['success' => false, 'message' => 'Voucher sudah berakhir'], 422);
+            }
+
+            // 👥 Validasi target user
+            if ($ad->target_type === 'user') {
+                $allowedIds = $ad->target_users()->pluck('user_id')->toArray();
+                if (!in_array($user->id, $allowedIds)) {
+                    return response()->json(['success' => false, 'message' => 'Anda tidak memiliki akses ke voucher ini'], 403);
+                }
+            }
+
+            // 👥 Validasi komunitas
+            if ($ad->target_type === 'community' && $ad->community_id) {
+                $isMember = \App\Models\CommunityMembership::where('user_id', $user->id)
+                    ->where('community_id', $ad->community_id)
+                    ->exists();
+                if (!$isMember) {
+                    return response()->json(['success' => false, 'message' => 'Anda bukan member komunitas target'], 403);
+                }
+            }
+
+            // 📦 Cek stok
+            $totalGrab = DB::table('summary_grabs')
+                ->where('ad_id', $ad->id)
+                ->when($ad->is_daily_grab, fn($q) => $q->whereDate('date', now('Asia/Jakarta')->toDateString()))
+                ->sum('total_grab');
+
+            $remaining = $ad->unlimited_grab ? null : ($ad->max_grab - $totalGrab);
+            if (!$ad->unlimited_grab && $remaining <= 0) {
+                return response()->json(['success' => false, 'message' => 'Voucher sudah habis'], 422);
+            }
+
+            // 📝 Cegah double claim
+            $alreadyClaimed = DB::table('summary_grabs')
+                ->where('ad_id', $ad->id)
+                ->where('user_id', $user->id)
+                ->when($ad->is_daily_grab, fn($q) => $q->whereDate('date', now('Asia/Jakarta')->toDateString()))
+                ->exists();
+
+            if ($alreadyClaimed) {
+                return response()->json(['success' => false, 'message' => 'Anda sudah klaim voucher ini sebelumnya'], 409);
+            }
+
+            DB::beginTransaction();
+
+            // ✅ Simpan klaim ke summary_grabs
+            DB::table('summary_grabs')->insert([
+                'ad_id' => $ad->id,
+                'user_id' => $user->id,
+                'date' => now('Asia/Jakarta')->toDateString(),
+                'total_grab' => 1,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            // 🪄 Buat entri voucher_items
+            $voucher = Voucher::where('ad_id', $ad->id)->first();
+            if ($voucher) {
+                $voucherItem = new VoucherItem();
+                $voucherItem->user_id = $user->id;
+                $voucherItem->voucher_id = $voucher->id;
+                $voucherItem->code = $voucherItem->generateCode(); // pakai method dari model
+                $voucherItem->used_at = null;
+                $voucherItem->save();
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Voucher berhasil diklaim!',
+                'data' => [
+                    'ad_id' => $ad->id,
+                    'title' => $ad->title,
+                    'remaining' => $remaining !== null ? max(0, $remaining - 1) : null,
+                    'expired_at' => $ad->finish_validate,
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            Log::error('AdController@claim error', [
+                'ad_id' => $id,
+                'user_id' => $user->id ?? null,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return response()->json(['success' => false, 'message' => 'Terjadi kesalahan server'], 500);
         }
     }
 }

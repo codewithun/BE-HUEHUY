@@ -581,6 +581,35 @@ class CubeController extends Controller
 
                 $ad->save();
 
+                // =====================================
+                // ✅ Auto-create Voucher untuk offline
+                // =====================================
+                if ($ad->type === 'voucher' && $ad->promo_type === 'offline') {
+                    try {
+                        Voucher::updateOrCreate(
+                            ['ad_id' => $ad->id],
+                            [
+                                'name' => $ad->title,
+                                'code' => (new \App\Models\Voucher())->generateVoucherCode(),
+                                'stock' => 0,
+                                'validation_type' => $ad->validation_type ?? 'auto',
+                                'target_type' => $ad->target_type ?? 'all',
+                            ]
+                        );
+
+                        Log::info('✅ Voucher auto-created from CubeController', [
+                            'ad_id' => $ad->id,
+                            'title' => $ad->title,
+                        ]);
+                    } catch (\Throwable $th) {
+                        Log::error('❌ Failed to auto-create voucher from CubeController', [
+                            'ad_id' => $ad->id,
+                            'error' => $th->getMessage(),
+                        ]);
+                    }
+                }
+
+
                 // Kirim notifikasi voucher sesuai target_type
                 if ($ad->type === 'voucher') {
                     if ($ad->target_type === 'user' && !empty($adsPayload['target_user_ids'])) {

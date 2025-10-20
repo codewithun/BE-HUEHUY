@@ -352,6 +352,13 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/ad-categories/options', [AdCategoryController::class, 'options']);
     });
 
+
+
+    Route::post('/ads/{id}/claim', [\App\Http\Controllers\Admin\AdController::class, 'claim']);
+    Route::get('/ads/{id}', [\App\Http\Controllers\Admin\AdController::class, 'show']);
+
+
+
     
     // Removed duplicate route for admin/options/ad-category to avoid ambiguity
 

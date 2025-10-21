@@ -29,6 +29,11 @@ class PromoItem extends Model
     {
         return $this->belongsTo(Promo::class);
     }
+    
+    public function ad()
+    {
+        return $this->belongsTo(Ad::class, 'promo_id', 'id');
+    }
 
     public function user()
     {

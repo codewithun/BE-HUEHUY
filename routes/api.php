@@ -281,6 +281,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::post('/{promo}/items', [PromoItemController::class, 'storeForPromo'])
             ->whereNumber('promo');
+        Route::post('/{promo}/claim', [PromoItemController::class, 'claim'])->whereNumber('promo');
     });
 
     Route::prefix('vouchers')->group(function () {
@@ -295,6 +296,15 @@ Route::middleware('auth:sanctum')->group(function () {
     // === Voucher Items (claim) ===
     Route::post('/vouchers/{voucher}/claim', [VoucherItemController::class, 'claim'])->whereNumber('voucher');
     Route::post('/admin/voucher-items/{id}/redeem', [VoucherItemController::class, 'redeem'])->whereNumber('id');
+
+    // === Promo Items (claim & management) ===
+    Route::get('/admin/promo-items', [PromoItemController::class, 'index']);
+    Route::post('/admin/promo-items', [PromoItemController::class, 'claimDirect']);
+    Route::get('/admin/promo-items/{id}', [PromoItemController::class, 'show'])->whereNumber('id');
+    Route::put('/admin/promo-items/{id}', [PromoItemController::class, 'update'])->whereNumber('id');
+    Route::delete('/admin/promo-items/{id}', [PromoItemController::class, 'destroy'])->whereNumber('id');
+    Route::post('/admin/promo-items/{id}/redeem', [PromoItemController::class, 'redeem'])->whereNumber('id');
+    Route::post('/admin/promos/{id}/items', [PromoItemController::class, 'claim'])->whereNumber('id');
 
     // User Activity
     Route::prefix('user')->group(function () {

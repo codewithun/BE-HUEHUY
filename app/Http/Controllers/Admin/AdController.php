@@ -7,10 +7,12 @@ use App\Http\Controllers\Controller;
 use App\Models\Ad;
 use App\Models\Voucher;
 use App\Models\VoucherItem;
+use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
 class AdController extends Controller
@@ -50,6 +52,128 @@ class AdController extends Controller
             ]);
             return null;
         }
+    }
+
+    // ========================================>
+    // ## Helper Methods for Voucher Sync
+    // ========================================>
+
+    /**
+     * Handle voucher sync untuk create/update ads
+     */
+    private function handleVoucherSync(Request $request, Ad $ad, $isUpdate = false)
+    {
+        // Cek flag sync voucher dari frontend
+        if (
+            !$request->input('_sync_to_voucher_management') ||
+            !$request->has('_voucher_sync_data') ||
+            $request->input('content_type') !== 'voucher'
+        ) {
+            return;
+        }
+
+        $voucherSyncData = $request->input('_voucher_sync_data', []);
+
+        Log::info('Voucher sync triggered', [
+            'ad_id' => $ad->id,
+            'is_update' => $isUpdate,
+            'sync_data' => $voucherSyncData
+        ]);
+
+        try {
+            if ($isUpdate) {
+                // Update voucher yang terkait dengan ad_id
+                $voucher = Voucher::where('ad_id', $ad->id)->first();
+
+                if ($voucher) {
+                    $this->updateVoucherFromSyncData($voucher, $voucherSyncData);
+                } else {
+                    // Buat voucher baru jika belum ada
+                    $this->createVoucherFromSyncData($ad, $voucherSyncData);
+                }
+            } else {
+                // Create voucher baru
+                $this->createVoucherFromSyncData($ad, $voucherSyncData);
+            }
+
+            Log::info('Voucher sync completed successfully', ['ad_id' => $ad->id]);
+        } catch (\Throwable $e) {
+            Log::error('Voucher sync failed', [
+                'ad_id' => $ad->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * Create voucher dari sync data
+     */
+    private function createVoucherFromSyncData(Ad $ad, array $voucherSyncData)
+    {
+        // Set ad_id setelah ads dibuat
+        $voucherSyncData['ad_id'] = $ad->id;
+
+        // Resolve owner info jika perlu
+        $voucherSyncData = $this->resolveOwnerInfo($voucherSyncData);
+
+        // Generate code jika auto dan kosong
+        if (($voucherSyncData['validation_type'] ?? 'auto') === 'auto' && empty($voucherSyncData['code'])) {
+            $voucherSyncData['code'] = 'VCR-' . strtoupper(Str::random(8));
+        }
+
+        // Hapus field yang tidak ada di tabel vouchers
+        unset($voucherSyncData['owner_user_id'], $voucherSyncData['cube_id']);
+
+        // Pastikan required fields ada
+        $voucherSyncData['type'] = $voucherSyncData['type'] ?? 'voucher';
+        $voucherSyncData['validation_type'] = $voucherSyncData['validation_type'] ?? 'auto';
+
+        // Create voucher
+        Voucher::create($voucherSyncData);
+    }
+
+    /**
+     * Update voucher dari sync data
+     */
+    private function updateVoucherFromSyncData(Voucher $voucher, array $voucherSyncData)
+    {
+        // Resolve owner info jika perlu
+        $voucherSyncData = $this->resolveOwnerInfo($voucherSyncData);
+
+        // Hapus field yang tidak ada di tabel vouchers atau tidak boleh diupdate
+        unset($voucherSyncData['owner_user_id'], $voucherSyncData['ad_id'], $voucherSyncData['cube_id']);
+
+        // Update voucher
+        $voucher->update($voucherSyncData);
+    }
+
+    /**
+     * Resolve owner info dari owner_user_id jika ada
+     */
+    private function resolveOwnerInfo(array $voucherSyncData)
+    {
+        $ownerUserId = $voucherSyncData['owner_user_id'] ?? null;
+
+        if (
+            $ownerUserId &&
+            (($voucherSyncData['owner_name'] ?? '') === 'TO_BE_RESOLVED' ||
+                ($voucherSyncData['owner_phone'] ?? '') === 'TO_BE_RESOLVED')
+        ) {
+
+            $user = User::find($ownerUserId);
+            if ($user) {
+                if (($voucherSyncData['owner_name'] ?? '') === 'TO_BE_RESOLVED') {
+                    $voucherSyncData['owner_name'] = $user->name ?? $user->email ?? 'User #' . $user->id;
+                }
+                if (($voucherSyncData['owner_phone'] ?? '') === 'TO_BE_RESOLVED') {
+                    $voucherSyncData['owner_phone'] = $user->phone ?? null;
+                }
+            }
+        }
+
+        return $voucherSyncData;
     }
 
     // ========================================>
@@ -353,12 +477,29 @@ class AdController extends Controller
 
         DB::commit();
 
-
         /**
-         * * Create Voucher
+         * * Handle Voucher Sync (PERBAIKAN)
          */
-        // Setelah iklan berhasil dibuat, buat voucher jika tipe-nya voucher
-        if ($model->type === 'voucher') {
+        if ($request->input('_sync_to_voucher_management') && $request->input('content_type') === 'voucher') {
+            // Gunakan helper method untuk voucher sync lengkap
+            try {
+                $this->handleVoucherSync($request, $model, false);
+                Log::info('✅ Voucher synced successfully from frontend data', [
+                    'ad_id' => $model->id,
+                    'title' => $model->title,
+                ]);
+            } catch (\Throwable $th) {
+                Log::error('❌ Voucher sync failed', [
+                    'ad_id' => $model->id,
+                    'error' => $th->getMessage(),
+                ]);
+                // Tidak rollback karena ads sudah berhasil dibuat
+            }
+        }
+        /**
+         * * Create Voucher (Legacy - tetap support untuk backward compatibility)
+         */
+        elseif ($model->type === 'voucher') {
             try {
                 // Gunakan updateOrCreate agar aman dari duplikasi ad_id
                 Voucher::updateOrCreate(
@@ -372,7 +513,7 @@ class AdController extends Controller
                     ]
                 );
 
-                Log::info('✅ Voucher auto-created from AdController', [
+                Log::info('✅ Voucher auto-created from AdController (legacy)', [
                     'ad_id' => $model->id,
                     'title' => $model->title,
                 ]);
@@ -827,9 +968,30 @@ class AdController extends Controller
             }
         }
 
-        if ($model->type === 'voucher') {
-            $voucher = Voucher::where('ad_id', $model->id)
-                ->first();
+        /**
+         * * Handle Voucher Sync (PERBAIKAN)
+         */
+        if ($request->input('_sync_to_voucher_management') && $request->input('content_type') === 'voucher') {
+            // Gunakan helper method untuk voucher sync lengkap
+            try {
+                $this->handleVoucherSync($request, $model, true);
+                Log::info('✅ Voucher synced successfully from frontend data (update)', [
+                    'ad_id' => $model->id,
+                    'title' => $model->title,
+                ]);
+            } catch (\Throwable $th) {
+                Log::error('❌ Voucher sync failed (update)', [
+                    'ad_id' => $model->id,
+                    'error' => $th->getMessage(),
+                ]);
+                // Tidak rollback karena ads sudah berhasil diupdate
+            }
+        }
+        /**
+         * * Update/Create Voucher (Legacy - tetap support untuk backward compatibility)
+         */
+        elseif ($model->type === 'voucher') {
+            $voucher = Voucher::where('ad_id', $model->id)->first();
 
             if (!$voucher) {
                 try {
@@ -839,12 +1001,33 @@ class AdController extends Controller
                     $voucher->code = $voucher->generateVoucherCode();
 
                     $voucher->save();
+                    Log::info('✅ Voucher auto-created from AdController (legacy update)', [
+                        'ad_id' => $model->id,
+                        'title' => $model->title,
+                    ]);
                 } catch (\Throwable $th) {
-                    DB::rollBack();
-                    return response([
-                        "message" => "Error: failed to create new voucher",
-                        'data' => $th
-                    ], 500);
+                    Log::error('❌ Failed to auto-create voucher from ad (update)', [
+                        'ad_id' => $model->id,
+                        'error' => $th->getMessage(),
+                    ]);
+                    // Tidak rollback karena ads sudah berhasil diupdate
+                }
+            } else {
+                // Update voucher name jika ada perubahan title
+                if ($voucher->name !== $model->title) {
+                    try {
+                        $voucher->update(['name' => $model->title]);
+                        Log::info('✅ Voucher name updated from AdController (legacy)', [
+                            'ad_id' => $model->id,
+                            'old_name' => $voucher->name,
+                            'new_name' => $model->title,
+                        ]);
+                    } catch (\Throwable $th) {
+                        Log::error('❌ Failed to update voucher name', [
+                            'ad_id' => $model->id,
+                            'error' => $th->getMessage(),
+                        ]);
+                    }
                 }
             }
         }
@@ -882,6 +1065,27 @@ class AdController extends Controller
         }
         if ($model->image_3) {
             $this->delete_file($model->image_3);
+        }
+
+        // * Remove related voucher if exists (PERBAIKAN)
+        try {
+            $relatedVoucher = Voucher::where('ad_id', $id)->first();
+            if ($relatedVoucher) {
+                // Hapus voucher items dulu
+                VoucherItem::where('voucher_id', $relatedVoucher->id)->delete();
+                // Hapus voucher
+                $relatedVoucher->delete();
+                Log::info('✅ Related voucher deleted successfully', [
+                    'ad_id' => $id,
+                    'voucher_id' => $relatedVoucher->id
+                ]);
+            }
+        } catch (\Throwable $th) {
+            Log::error('❌ Failed to delete related voucher', [
+                'ad_id' => $id,
+                'error' => $th->getMessage()
+            ]);
+            // Lanjutkan proses delete ad meskipun voucher gagal dihapus
         }
 
         // ? Executing

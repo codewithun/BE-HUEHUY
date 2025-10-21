@@ -11,6 +11,7 @@ use App\Models\CubeTag;
 use App\Models\CubeType;
 use App\Models\OpeningHour;
 use App\Models\Voucher;
+use App\Models\VoucherItem;
 use App\Models\Notification;
 use App\Models\User;
 use App\Models\CommunityMembership;
@@ -18,6 +19,7 @@ use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Support\Facades\Storage;
 
@@ -37,6 +39,199 @@ class CubeController extends Controller
                 }
             }
         }
+    }
+
+    // ========================================>
+    // ## Helper Methods for Voucher Sync
+    // ========================================>
+
+    /**
+     * Handle voucher sync untuk create/update ads dari kubus
+     */
+    private function handleVoucherSyncFromCube(Request $request, Ad $ad, $isUpdate = false)
+    {
+        // Cek flag sync voucher dari frontend
+        if (
+            !$request->input('_sync_to_voucher_management') ||
+            !$request->has('_voucher_sync_data') ||
+            $request->input('content_type') !== 'voucher'
+        ) {
+            return;
+        }
+
+        // ✅ PERBAIKAN: Handle jika _voucher_sync_data adalah JSON string
+        $voucherSyncData = $request->input('_voucher_sync_data', []);
+
+        if (is_string($voucherSyncData)) {
+            $voucherSyncData = json_decode($voucherSyncData, true) ?? [];
+            Log::info('CubeController converted voucher sync data from JSON string to array');
+        }
+
+        Log::info('Voucher sync triggered from CubeController', [
+            'ad_id' => $ad->id,
+            'cube_id' => $ad->cube_id,
+            'is_update' => $isUpdate,
+            'sync_data' => $voucherSyncData,
+            'sync_data_type' => gettype($voucherSyncData)
+        ]);
+
+        try {
+            if ($isUpdate) {
+                // Update voucher yang terkait dengan ad_id
+                $voucher = Voucher::where('ad_id', $ad->id)->first();
+
+                if ($voucher) {
+                    $this->updateVoucherFromSyncDataCube($voucher, $voucherSyncData);
+                } else {
+                    // Buat voucher baru jika belum ada
+                    $this->createVoucherFromSyncDataCube($ad, $voucherSyncData);
+                }
+            } else {
+                // Create voucher baru
+                $this->createVoucherFromSyncDataCube($ad, $voucherSyncData);
+            }
+
+            Log::info('Voucher sync completed successfully from CubeController', ['ad_id' => $ad->id]);
+        } catch (\Throwable $e) {
+            Log::error('Voucher sync failed from CubeController', [
+                'ad_id' => $ad->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * Create voucher dari sync data (dari kubus)
+     */
+    private function createVoucherFromSyncDataCube(Ad $ad, array $voucherSyncData)
+    {
+        // Set ad_id setelah ads dibuat
+        $voucherSyncData['ad_id'] = $ad->id;
+
+        // Resolve owner info jika perlu
+        $voucherSyncData = $this->resolveOwnerInfoCube($voucherSyncData);
+
+        // ✅ PERBAIKAN: Handle kode berdasarkan validation_type
+        $validationType = $voucherSyncData['validation_type'] ?? 'auto';
+
+        if ($validationType === 'manual') {
+            // Untuk manual, gunakan kode yang sama dengan ads (user input)
+            $voucherSyncData['code'] = $ad->code;
+            Log::info('CubeController voucher sync using manual code from user', [
+                'ads_code' => $ad->code,
+                'validation_type' => $validationType
+            ]);
+        } elseif ($validationType === 'auto' && empty($voucherSyncData['code'])) {
+            // Untuk auto, generate kode baru jika belum ada
+            $voucherSyncData['code'] = 'VCR-' . strtoupper(Str::random(8));
+            Log::info('CubeController voucher sync generating auto code', [
+                'generated_code' => $voucherSyncData['code'],
+                'validation_type' => $validationType
+            ]);
+        }
+
+        // ✅ PERBAIKAN: Handle image copy dari ads sebelum exclude fields
+        if (
+            isset($voucherSyncData['_copy_image_from_ads']) &&
+            $voucherSyncData['_copy_image_from_ads'] === true &&
+            isset($voucherSyncData['_image_source_field'])
+        ) {
+            $sourceField = $voucherSyncData['_image_source_field']; // contoh: "image_1"
+            $adImagePath = $ad->{$sourceField} ?? null; // ambil dari ad->image_1
+
+            if ($adImagePath) {
+                // Copy path image dari ad ke voucher
+                $voucherSyncData['image'] = $adImagePath;
+                $voucherSyncData['image_updated_at'] = now();
+
+                Log::info('CubeController copying image from ad to voucher', [
+                    'source_field' => $sourceField,
+                    'ad_image_path' => $adImagePath,
+                    'voucher_image_path' => $adImagePath
+                ]);
+            }
+        }
+
+        // ✅ PERBAIKAN: Hapus field yang tidak ada di tabel vouchers dan tidak diperlukan
+        $excludedFields = [
+            'owner_user_id',
+            'cube_id',
+            'target_user_ids', // bukan field tabel
+            'created_at',
+            'updated_at', // sistem field, auto-managed
+            '_copy_image_from_ads',
+            '_image_source_field',
+            '_debug_source',
+            '_frontend_version' // frontend debug field
+        ];
+
+        foreach ($excludedFields as $field) {
+            unset($voucherSyncData[$field]);
+        }
+
+        // Pastikan required fields ada
+        $voucherSyncData['type'] = $voucherSyncData['type'] ?? 'voucher';
+        $voucherSyncData['validation_type'] = $validationType;
+
+        Log::info('CubeController creating voucher with data', [
+            'voucher_data' => $voucherSyncData,
+            'ad_id' => $ad->id
+        ]);
+
+        // Create voucher
+        $voucher = Voucher::create($voucherSyncData);
+
+        Log::info('✅ Voucher created successfully', [
+            'voucher_id' => $voucher->id,
+            'voucher_code' => $voucher->code,
+            'ad_id' => $ad->id
+        ]);
+
+        return $voucher;
+    }
+
+    /**
+     * Update voucher dari sync data (dari kubus)
+     */
+    private function updateVoucherFromSyncDataCube(Voucher $voucher, array $voucherSyncData)
+    {
+        // Resolve owner info jika perlu
+        $voucherSyncData = $this->resolveOwnerInfoCube($voucherSyncData);
+
+        // Hapus field yang tidak ada di tabel vouchers atau tidak boleh diupdate
+        unset($voucherSyncData['owner_user_id'], $voucherSyncData['ad_id'], $voucherSyncData['cube_id']);
+
+        // Update voucher
+        $voucher->update($voucherSyncData);
+    }
+
+    /**
+     * Resolve owner info dari owner_user_id jika ada (dari kubus)
+     */
+    private function resolveOwnerInfoCube(array $voucherSyncData)
+    {
+        $ownerUserId = $voucherSyncData['owner_user_id'] ?? null;
+
+        if (
+            $ownerUserId &&
+            (($voucherSyncData['owner_name'] ?? '') === 'TO_BE_RESOLVED' ||
+                ($voucherSyncData['owner_phone'] ?? '') === 'TO_BE_RESOLVED')
+        ) {
+
+            $user = User::find($ownerUserId);
+            if ($user) {
+                if (($voucherSyncData['owner_name'] ?? '') === 'TO_BE_RESOLVED') {
+                    $voucherSyncData['owner_name'] = $user->name ?? $user->email ?? 'User #' . $user->id;
+                }
+                if (($voucherSyncData['owner_phone'] ?? '') === 'TO_BE_RESOLVED') {
+                    $voucherSyncData['owner_phone'] = $user->phone ?? null;
+                }
+            }
+        }
+
+        return $voucherSyncData;
     }
 
     // ========================================>
@@ -149,8 +344,85 @@ class CubeController extends Controller
             'owner_user_id' => $request->owner_user_id,
             'user_id' => $request->user_id,
             'corporate_id' => $request->corporate_id,
+            'content_type' => $request->input('content_type'),
+            '_sync_to_voucher_management' => $request->input('_sync_to_voucher_management'),
+            'ads_code' => $request->input('ads.code'),
+            'root_code' => $request->input('code'),
             'all_request' => $request->all()
         ]);
+
+        // ✨ PERBAIKAN: Handle voucher sync validation BEFORE validation
+        if ($request->input('_sync_to_voucher_management') && $request->input('content_type') === 'voucher') {
+            $voucherSyncData = $request->input('_voucher_sync_data', []);
+
+            // Handle jika _voucher_sync_data adalah JSON string
+            if (is_string($voucherSyncData)) {
+                $voucherSyncData = json_decode($voucherSyncData, true) ?? [];
+            }
+
+            $validationType = $voucherSyncData['validation_type'] ?? 'auto';
+
+            Log::info('CubeController@store voucher sync detected', [
+                'validation_type' => $validationType,
+                'ads_code' => $request->input('ads.code'),
+                'voucher_code_from_sync' => $voucherSyncData['code'] ?? null,
+                'generated_code' => $request->input('code')
+            ]);
+
+            // Hanya remove ads.code jika validation_type adalah auto
+            // Untuk manual, preserve kode dari user input
+            if ($validationType === 'auto') {
+                Log::info('CubeController@store removing ads.code for auto validation type');
+
+                $requestData = $request->all();
+
+                // Handle jika ads adalah JSON string
+                if (isset($requestData['ads']) && is_string($requestData['ads'])) {
+                    $adsData = json_decode($requestData['ads'], true);
+                    if ($adsData && isset($adsData['code'])) {
+                        unset($adsData['code']);
+                        $requestData['ads'] = json_encode($adsData);
+                    }
+                }
+                // Handle jika ads adalah array
+                elseif (isset($requestData['ads']) && is_array($requestData['ads']) && isset($requestData['ads']['code'])) {
+                    unset($requestData['ads']['code']);
+                }
+
+                // Remove ads.code dari flat structure juga untuk auto
+                if (isset($requestData['ads.code'])) {
+                    unset($requestData['ads.code']);
+                }
+
+                // Remove ads.validation_type untuk auto validation
+                if (isset($requestData['ads.validation_type'])) {
+                    unset($requestData['ads.validation_type']);
+                }
+
+                $request->replace($requestData);
+
+                Log::info('CubeController@store code conflict resolved for auto validation');
+            } else {
+                Log::info('CubeController@store preserving manual code for manual validation', [
+                    'manual_code_from_voucher_sync' => $voucherSyncData['code'] ?? null,
+                    'manual_code_from_ads' => $request->input('ads.code'),
+                    'validation_type' => $validationType
+                ]);
+
+                // Untuk manual validation, pastikan kode dari voucher sync data tersedia di ads
+                $requestData = $request->all();
+
+                // Jika ada kode dari voucher sync data, gunakan itu untuk ads
+                if (!empty($voucherSyncData['code'])) {
+                    $requestData['ads.code'] = $voucherSyncData['code'];
+                    $request->replace($requestData);
+
+                    Log::info('CubeController@store using voucher sync manual code', [
+                        'voucher_sync_code' => $voucherSyncData['code']
+                    ]);
+                }
+            }
+        }
 
         // ? Validate request
         $request->merge([
@@ -199,8 +471,43 @@ class CubeController extends Controller
                 'nullable',
                 'string',
                 'max:255',
-                'unique:ads,code',
-                'required_if:ads.validation_type,manual'
+                function ($attribute, $value, $fail) use ($request) {
+                    // Skip unique validation if voucher sync is active (will use generated code)
+                    if ($request->input('_sync_to_voucher_management') && $request->input('content_type') === 'voucher') {
+                        return;
+                    }
+
+                    // Check uniqueness for manual codes only
+                    if ($value && Ad::where('code', $value)->exists()) {
+                        $fail('The ads.code has already been taken.');
+                    }
+                },
+                // ✅ PERBAIKAN: Custom required validation yang aware voucher sync
+                function ($attribute, $value, $fail) use ($request) {
+                    // Skip required validation jika voucher sync aktif
+                    if ($request->input('_sync_to_voucher_management') && $request->input('content_type') === 'voucher') {
+                        return;
+                    }
+
+                    // Required hanya untuk validation_type manual (non-voucher sync)
+                    $validationType = $request->input('ads.validation_type');
+                    if ($validationType === 'manual' && empty($value)) {
+                        $fail('The ads.code field is required when ads.validation_type is manual.');
+                    }
+                }
+            ],
+            'code'                       => [
+                'nullable',
+                'string',
+                'max:255',
+                function ($attribute, $value, $fail) use ($request) {
+                    // Only validate uniqueness for voucher sync codes
+                    if ($request->input('_sync_to_voucher_management') && $request->input('content_type') === 'voucher') {
+                        if ($value && Ad::where('code', $value)->exists()) {
+                            $fail('The generated voucher code has already been taken.');
+                        }
+                    }
+                }
             ],
             'ads.target_type'            => ['nullable', 'string', Rule::in(['all', 'user', 'community'])],
             'ads.target_user_ids'        => 'nullable|array',
@@ -423,7 +730,37 @@ class CubeController extends Controller
 
                 // New validation fields
                 $ad->validation_type         = $adsPayload['validation_type'] ?? 'auto';
-                $ad->code                    = $adsPayload['code'] ?? null;
+
+                // ✅ PERBAIKAN: Handle code berdasarkan validation_type
+                if ($request->input('_sync_to_voucher_management') && $request->input('content_type') === 'voucher') {
+                    $voucherSyncData = $request->input('_voucher_sync_data', []);
+
+                    // Handle jika _voucher_sync_data adalah JSON string
+                    if (is_string($voucherSyncData)) {
+                        $voucherSyncData = json_decode($voucherSyncData, true) ?? [];
+                    }
+                    $validationType = $voucherSyncData['validation_type'] ?? $ad->validation_type ?? 'auto';
+
+                    if ($validationType === 'manual') {
+                        // Untuk manual, HARUS pakai kode dari user input di ads payload
+                        $ad->code = $adsPayload['code'] ?? null;
+                        Log::info('CubeController@store using MANUAL code from user input', [
+                            'user_input_code' => $adsPayload['code'],
+                            'validation_type' => $validationType
+                        ]);
+                    } else {
+                        // Untuk auto, pakai generated code dari root level
+                        $ad->code = $request->input('code') ?? null;
+                        Log::info('CubeController@store using AUTO generated code', [
+                            'generated_code' => $request->input('code'),
+                            'validation_type' => $validationType
+                        ]);
+                    }
+                } else {
+                    // Non-voucher sync, pakai manual code dari ads payload
+                    $ad->code = $adsPayload['code'] ?? null;
+                    Log::info('CubeController@store using non-sync manual code', ['code' => $ad->code]);
+                }
 
                 // Target fields for voucher
                 $ad->target_type             = $adsPayload['target_type'] ?? 'all';
@@ -582,9 +919,30 @@ class CubeController extends Controller
                 $ad->save();
 
                 // =====================================
-                // ✅ Auto-create Voucher untuk offline
+                // ✅ Handle Voucher Sync (PERBAIKAN)
                 // =====================================
-                if ($ad->type === 'voucher' && $ad->promo_type === 'offline') {
+                if ($request->input('_sync_to_voucher_management') && $request->input('content_type') === 'voucher') {
+                    // Gunakan helper method untuk voucher sync lengkap
+                    try {
+                        $this->handleVoucherSyncFromCube($request, $ad, false);
+                        Log::info('✅ Voucher synced successfully from CubeController', [
+                            'ad_id' => $ad->id,
+                            'cube_id' => $model->id,
+                            'title' => $ad->title,
+                        ]);
+                    } catch (\Throwable $th) {
+                        Log::error('❌ Voucher sync failed from CubeController', [
+                            'ad_id' => $ad->id,
+                            'cube_id' => $model->id,
+                            'error' => $th->getMessage(),
+                        ]);
+                        // Tidak rollback karena ads sudah berhasil dibuat
+                    }
+                }
+                // =====================================
+                // ✅ Auto-create Voucher (Legacy)
+                // =====================================
+                elseif ($ad->type === 'voucher' && $ad->promo_type === 'offline') {
                     try {
                         Voucher::updateOrCreate(
                             ['ad_id' => $ad->id],
@@ -597,12 +955,33 @@ class CubeController extends Controller
                             ]
                         );
 
-                        Log::info('✅ Voucher auto-created from CubeController', [
+                        Log::info('✅ Voucher auto-created from CubeController (legacy)', [
                             'ad_id' => $ad->id,
                             'title' => $ad->title,
                         ]);
                     } catch (\Throwable $th) {
                         Log::error('❌ Failed to auto-create voucher from CubeController', [
+                            'ad_id' => $ad->id,
+                            'error' => $th->getMessage(),
+                        ]);
+                    }
+                }
+                // =====================================
+                // ✅ Legacy Online Voucher Creation
+                // =====================================
+                elseif ($ad->promo_type === 'online') {
+                    try {
+                        Voucher::create([
+                            'ad_id' => $ad->id,
+                            'name'  => $ad->title ?? ('Voucher-' . $ad->id),
+                            'code'  => (new Voucher())->generateVoucherCode(),
+                        ]);
+                        Log::info('✅ Online voucher auto-created from CubeController (legacy)', [
+                            'ad_id' => $ad->id,
+                            'title' => $ad->title,
+                        ]);
+                    } catch (\Throwable $th) {
+                        Log::error('❌ Failed to auto-create online voucher from CubeController', [
                             'ad_id' => $ad->id,
                             'error' => $th->getMessage(),
                         ]);
@@ -637,15 +1016,6 @@ class CubeController extends Controller
                                 $this->sendVoucherNotifications($ad, $users->pluck('id')->all());
                             });
                     }
-                }
-
-                // ? Process Voucher (only online)
-                if ($ad->promo_type === 'online') {
-                    Voucher::create([
-                        'ad_id' => $ad->id,
-                        'name'  => $ad->title ?? ('Voucher-' . $ad->id),
-                        'code'  => (new Voucher())->generateVoucherCode(),
-                    ]);
                 }
             }
         } catch (\Throwable $th) {
@@ -946,6 +1316,31 @@ class CubeController extends Controller
                 'file'  => $th->getFile(),
                 'line'  => $th->getLine(),
             ]);
+        }
+
+        // * Remove related vouchers if exist (PERBAIKAN)
+        try {
+            $relatedAds = Ad::where('cube_id', $id)->get();
+            foreach ($relatedAds as $ad) {
+                $relatedVoucher = Voucher::where('ad_id', $ad->id)->first();
+                if ($relatedVoucher) {
+                    // Hapus voucher items dulu
+                    VoucherItem::where('voucher_id', $relatedVoucher->id)->delete();
+                    // Hapus voucher
+                    $relatedVoucher->delete();
+                    Log::info('✅ Related voucher deleted successfully from CubeController', [
+                        'cube_id' => $id,
+                        'ad_id' => $ad->id,
+                        'voucher_id' => $relatedVoucher->id
+                    ]);
+                }
+            }
+        } catch (\Throwable $th) {
+            Log::error('❌ Failed to delete related vouchers from CubeController', [
+                'cube_id' => $id,
+                'error' => $th->getMessage()
+            ]);
+            // Lanjutkan proses delete cube meskipun voucher gagal dihapus
         }
 
         // ? Executing

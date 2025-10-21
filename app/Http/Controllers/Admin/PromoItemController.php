@@ -16,10 +16,26 @@ class PromoItemController extends Controller
 {
     public function index(Request $request)
     {
-        $query = PromoItem::with(['promo', 'user']);
+        $query = PromoItem::with([
+            'promo',
+            'ad.cube.user',
+            'ad.cube.corporate',
+            'ad.cube.tags',
+            'user'
+        ]);
 
-        // TAMBAHKAN FILTER INI - hanya tampilkan promo items milik user yang login
-        $query->where('user_id', Auth::id());
+        // Filter berdasarkan user_scope untuk API frontend
+        if ($request->has('user_scope') && $request->boolean('user_scope')) {
+            $query->where('user_id', Auth::id());
+        } else {
+            // Untuk admin, tampilkan semua atau filter berdasarkan user_id jika ada
+            if ($request->has('user_id')) {
+                $query->where('user_id', $request->input('user_id'));
+            } else {
+                // Untuk keamanan, selalu tampilkan milik user sendiri jika bukan admin request
+                $query->where('user_id', Auth::id());
+            }
+        }
 
         if ($request->has('promo_id')) {
             $query->where('promo_id', $request->input('promo_id'));
@@ -29,20 +45,28 @@ class PromoItemController extends Controller
             $query->where('status', $request->input('status'));
         }
 
-        $items = $query->get();
+        $items = $query->orderBy('created_at', 'desc')->get();
 
         return response()->json(['success' => true, 'data' => $items]);
     }
 
     public function indexByPromo($promoId)
     {
-        $items = PromoItem::with('user')->where('promo_id', $promoId)->get();
+        $items = PromoItem::with([
+                'promo',
+                'ad.cube.user',
+                'ad.cube.corporate',
+                'ad.cube.tags',
+                'user'
+            ])
+            ->where('promo_id', $promoId)
+            ->get();
         return response()->json(['success' => true, 'data' => $items]);
     }
 
     public function show($id)
     {
-        $item = PromoItem::with(['promo', 'user'])->find($id);
+        $item = PromoItem::with(['promo', 'ad', 'user'])->find($id);
         if (! $item) {
             return response()->json(['success' => false, 'message' => 'Promo item not found'], 404);
         }
@@ -52,7 +76,18 @@ class PromoItemController extends Controller
     public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'promo_id' => 'required|exists:promos,id',
+            // Terima id dari promos ATAU ads
+            'promo_id' => [
+                'required',
+                'integer',
+                function ($attribute, $value, $fail) {
+                    $existsInPromos = \App\Models\Promo::where('id', $value)->exists();
+                    $existsInAds    = \App\Models\Ad::where('id', $value)->exists();
+                    if (! $existsInPromos && ! $existsInAds) {
+                        $fail('The selected promo id is invalid.');
+                    }
+                },
+            ],
             'user_id' => 'nullable|exists:users,id',
             'code' => 'nullable|string|unique:promo_items,code',
             'status' => 'nullable|in:available,reserved,redeemed,expired',
@@ -71,8 +106,26 @@ class PromoItemController extends Controller
         $authUserId = Auth::id();
         $data['user_id'] = $request->input('user_id', $authUserId);
 
-        // load promo to decide code and status
+        // load promo/ad to decide code and status
         $promo = Promo::find($data['promo_id']);
+        $ad = null;
+        
+        // If promo not found, try finding it as an Ad (since promos can be stored as ads)
+        if (!$promo) {
+            $ad = \App\Models\Ad::find($data['promo_id']);
+            if ($ad) {
+                // Convert Ad to Promo-like object for consistency
+                $promo = (object) [
+                    'id' => $ad->id,
+                    'code' => $ad->code,
+                    'start_date' => $ad->start_validate,
+                    'end_date' => $ad->finish_validate,
+                    'always_available' => false,
+                    'stock' => $ad->max_grab,
+                    'unlimited_grab' => $ad->unlimited_grab,
+                ];
+            }
+        }
 
         // determine promo active state
         $isActive = false;
@@ -123,13 +176,24 @@ class PromoItemController extends Controller
             }
         }
 
-        $result = DB::transaction(function () use ($promo, $requestedStatus, $isClaimAction, $authUserId, &$data, $isActive) {
+        $result = DB::transaction(function () use ($promo, &$ad, $requestedStatus, $isClaimAction, $authUserId, &$data, $isActive) {
             if ($requestedStatus === 'redeemed') {
                 // redeem saat create -> kurangi stok jika dikelola
-                if ($promo && !is_null($promo->stock)) {
-                    $affected = Promo::where('id', $promo->id)
-                        ->where('stock', '>', 0)
-                        ->decrement('stock');
+                if ($promo && !is_null($promo->stock) && !$promo->unlimited_grab) {
+                    // Try to decrement from Promo table first
+                    $affected = 0;
+                    if (isset($promo->id) && \App\Models\Promo::where('id', $promo->id)->exists()) {
+                        $affected = \App\Models\Promo::where('id', $promo->id)
+                            ->where('stock', '>', 0)
+                            ->decrement('stock');
+                    }
+                    
+                    // If no Promo record, try Ad table
+                    if ($affected === 0 && $ad && !$ad->unlimited_grab) {
+                        $affected = \App\Models\Ad::where('id', $ad->id)
+                            ->where('max_grab', '>', 0)
+                            ->decrement('max_grab');
+                    }
 
                     if ($affected === 0) {
                         return ['ok' => false, 'reason' => 'Stok promo habis'];
@@ -143,10 +207,21 @@ class PromoItemController extends Controller
             } elseif ($isClaimAction && $authUserId) {
                 // treat as a claim action coming from FE (e.g. { claim: true })
                 // Kurangi stok promo saat di-claim (reserved)
-                if ($promo && !is_null($promo->stock)) {
-                    $affected = Promo::where('id', $promo->id)
-                        ->where('stock', '>', 0)
-                        ->decrement('stock');
+                if ($promo && !is_null($promo->stock) && !$promo->unlimited_grab) {
+                    // Try to decrement from Promo table first
+                    $affected = 0;
+                    if (isset($promo->id) && \App\Models\Promo::where('id', $promo->id)->exists()) {
+                        $affected = \App\Models\Promo::where('id', $promo->id)
+                            ->where('stock', '>', 0)
+                            ->decrement('stock');
+                    }
+                    
+                    // If no Promo record, try Ad table
+                    if ($affected === 0 && $ad && !$ad->unlimited_grab) {
+                        $affected = \App\Models\Ad::where('id', $ad->id)
+                            ->where('max_grab', '>', 0)
+                            ->decrement('max_grab');
+                    }
 
                     if ($affected === 0) {
                         return ['ok' => false, 'reason' => 'Stok promo habis'];
@@ -261,15 +336,35 @@ class PromoItemController extends Controller
         }
 
         $promo = Promo::find($item->promo_id);
+        $ad = null;
+        
+        // If promo not found, try finding it as an Ad
+        if (!$promo) {
+            $ad = \App\Models\Ad::find($item->promo_id);
+        }
 
-        $result = DB::transaction(function () use ($request, $item, $promo) {
+        $result = DB::transaction(function () use ($request, &$item, $promo, &$ad) {
             // Only reduce stock if the item wasn't already reserved (to prevent double reduction)
-            if ($promo && !is_null($promo->stock) && $item->status !== 'reserved') {
-                $affected = Promo::where('id', $promo->id)
-                    ->where('stock', '>', 0)
-                    ->decrement('stock');
+            $shouldReduceStock = $item->status !== 'reserved';
+            
+            if ($shouldReduceStock) {
+                $affected = 0;
+                
+                // Try Promo table first
+                if ($promo && !is_null($promo->stock)) {
+                    $affected = \App\Models\Promo::where('id', $promo->id)
+                        ->where('stock', '>', 0)
+                        ->decrement('stock');
+                }
+                
+                // If no Promo record or no stock affected, try Ad table
+                if ($affected === 0 && $ad && !$ad->unlimited_grab) {
+                    $affected = \App\Models\Ad::where('id', $ad->id)
+                        ->where('max_grab', '>', 0)
+                        ->decrement('max_grab');
+                }
 
-                if ($affected === 0) {
+                if ($affected === 0 && (($promo && !is_null($promo->stock)) || ($ad && !$ad->unlimited_grab))) {
                     return ['ok' => false, 'reason' => 'Stok promo habis'];
                 }
             }
@@ -289,5 +384,49 @@ class PromoItemController extends Controller
         }
 
         return response()->json(['success' => true, 'data' => $result['item']]);
+    }
+
+    /**
+     * Claim a promo (create promo item for authenticated user).
+     * POST /admin/promos/{id}/claim atau POST /admin/promos/{id}/items
+     */
+    public function claim(Request $request, $promoId)
+    {
+        $validator = Validator::make($request->all(), [
+            'claim' => 'nullable|boolean',
+            'expires_at' => 'nullable|date',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'message' => 'Validation failed', 'errors' => $validator->errors()], 422);
+        }
+
+        // Merge promo_id dan set claim=true
+        $request->merge([
+            'promo_id' => $promoId,
+            'claim' => true,
+            'user_id' => Auth::id()
+        ]);
+
+        // Gunakan method store yang sudah ada
+        return $this->store($request);
+    }
+
+    /**
+     * Alternative claim endpoint that matches frontend expectation
+     * POST /admin/promo-items dengan payload promo_id dan claim=true
+     */
+    public function claimDirect(Request $request)
+    {
+        // Pastikan ada promo_id dan claim=true
+        if (!$request->has('promo_id') || !$request->boolean('claim')) {
+            return response()->json(['success' => false, 'message' => 'Missing promo_id or claim flag'], 422);
+        }
+
+        // Set user_id ke authenticated user
+        $request->merge(['user_id' => Auth::id()]);
+
+        // Gunakan method store yang sudah ada
+        return $this->store($request);
     }
 }

@@ -1150,23 +1150,26 @@ class AdController extends Controller
         try {
             $ad = \App\Models\Ad::find($id);
             if (!$ad) {
-                return response()->json(['success' => false, 'message' => 'Voucher tidak ditemukan'], 404);
+                return response()->json(['success' => false, 'message' => 'Promo/Voucher tidak ditemukan'], 404);
             }
+
+            // Tentukan apakah ini promo atau voucher
+            $itemType = ($ad->type === 'voucher') ? 'voucher' : 'promo';
 
             // 🗓️ Validasi masa berlaku
             $now = now('Asia/Jakarta');
             if ($ad->start_validate && $now->lt(\Carbon\Carbon::parse($ad->start_validate))) {
-                return response()->json(['success' => false, 'message' => 'Voucher belum dimulai'], 422);
+                return response()->json(['success' => false, 'message' => ucfirst($itemType) . ' belum dimulai'], 422);
             }
             if ($ad->finish_validate && $now->gt(\Carbon\Carbon::parse($ad->finish_validate))) {
-                return response()->json(['success' => false, 'message' => 'Voucher sudah berakhir'], 422);
+                return response()->json(['success' => false, 'message' => ucfirst($itemType) . ' sudah berakhir'], 422);
             }
 
             // 👥 Validasi target user
             if ($ad->target_type === 'user') {
                 $allowedIds = $ad->target_users()->pluck('user_id')->toArray();
                 if (!in_array($user->id, $allowedIds)) {
-                    return response()->json(['success' => false, 'message' => 'Anda tidak memiliki akses ke voucher ini'], 403);
+                    return response()->json(['success' => false, 'message' => 'Anda tidak memiliki akses ke ' . $itemType . ' ini'], 403);
                 }
             }
 
@@ -1188,7 +1191,7 @@ class AdController extends Controller
 
             $remaining = $ad->unlimited_grab ? null : ($ad->max_grab - $totalGrab);
             if (!$ad->unlimited_grab && $remaining <= 0) {
-                return response()->json(['success' => false, 'message' => 'Voucher sudah habis'], 422);
+                return response()->json(['success' => false, 'message' => ucfirst($itemType) . ' sudah habis'], 422);
             }
 
             // 📝 Cegah double claim
@@ -1199,7 +1202,7 @@ class AdController extends Controller
                 ->exists();
 
             if ($alreadyClaimed) {
-                return response()->json(['success' => false, 'message' => 'Anda sudah klaim voucher ini sebelumnya'], 409);
+                return response()->json(['success' => false, 'message' => 'Anda sudah klaim ' . $itemType . ' ini sebelumnya'], 409);
             }
 
             DB::beginTransaction();
@@ -1214,25 +1217,49 @@ class AdController extends Controller
                 'updated_at' => now(),
             ]);
 
-            // 🪄 Buat entri voucher_items
-            $voucher = Voucher::where('ad_id', $ad->id)->first();
-            if ($voucher) {
-                $voucherItem = new VoucherItem();
-                $voucherItem->user_id = $user->id;
-                $voucherItem->voucher_id = $voucher->id;
-                $voucherItem->code = $voucherItem->generateCode(); // pakai method dari model
-                $voucherItem->used_at = null;
-                $voucherItem->save();
+            // 🪄 Buat entri berdasarkan tipe
+            if ($ad->type === 'voucher') {
+                // Buat voucher_item
+                $voucher = Voucher::where('ad_id', $ad->id)->first();
+                if ($voucher) {
+                    $voucherItem = new VoucherItem();
+                    $voucherItem->user_id = $user->id;
+                    $voucherItem->voucher_id = $voucher->id;
+                    $voucherItem->code = $voucherItem->generateCode(); // pakai method dari model
+                    $voucherItem->used_at = null;
+                    $voucherItem->save();
+                }
+            } else {
+                // Buat promo_item via PromoItemController
+                $promoItemController = new \App\Http\Controllers\Admin\PromoItemController();
+                $claimRequest = new \Illuminate\Http\Request([
+                    'promo_id' => $ad->id, // gunakan ad.id sebagai promo_id
+                    'user_id' => $user->id,
+                    'claim' => true,
+                    'expires_at' => $ad->finish_validate,
+                ]);
+                $claimRequest->setUserResolver(function () use ($user) {
+                    return $user;
+                });
+                
+                $promoResult = $promoItemController->store($claimRequest);
+                $promoData = $promoResult->getData(true);
+                
+                if (!$promoData['success']) {
+                    DB::rollBack();
+                    return response()->json($promoData, 422);
+                }
             }
 
             DB::commit();
 
             return response()->json([
                 'success' => true,
-                'message' => 'Voucher berhasil diklaim!',
+                'message' => ucfirst($itemType) . ' berhasil diklaim!',
                 'data' => [
                     'ad_id' => $ad->id,
                     'title' => $ad->title,
+                    'type' => $itemType,
                     'remaining' => $remaining !== null ? max(0, $remaining - 1) : null,
                     'expired_at' => $ad->finish_validate,
                 ],

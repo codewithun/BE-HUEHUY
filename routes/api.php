@@ -9,7 +9,6 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\QrEntryController;
 use App\Http\Controllers\EmailVerificationController;
 use App\Http\Controllers\Client\AdController;
-use App\Http\Controllers\Client\ChatController;
 use App\Http\Controllers\Client\CubeController;
 use App\Http\Controllers\Client\GrabController;
 use App\Http\Controllers\Client\HomeController;
@@ -28,11 +27,12 @@ use App\Http\Controllers\Admin\VoucherItemController;
 use App\Http\Controllers\Admin\UserController as AdminUserController;
 use App\Http\Controllers\Admin\PromoItemController;
 use App\Http\Controllers\Admin\AdCategoryController;
+use App\Http\Controllers\Admin\ChatController;
 
 /**
  * Unauthorized helper
  */
-Route::get('/unauthorized', fn () => response()->json([
+Route::get('/unauthorized', fn() => response()->json([
     'error' => 'Unauthorize',
     'message' => 'Please login'
 ], 401))->name('unauthorized');
@@ -40,7 +40,7 @@ Route::get('/unauthorized', fn () => response()->json([
 /**
  * Health check
  */
-Route::get('/healthz', fn () => ['ok' => true]);
+Route::get('/healthz', fn() => ['ok' => true]);
 
 /**
  * Script / Cron hooks
@@ -213,13 +213,6 @@ Route::middleware('auth:sanctum')->group(function () {
     // === Reports ===
     Route::apiResource('/report-content-ticket', ReportContentTicketController::class)->only(['index', 'store']);
 
-    // === Chat ===
-    Route::prefix('chat')->group(function () {
-        Route::get('/rooms', [ChatController::class, 'index']);
-        Route::post('/rooms', [ChatController::class, 'store']);
-        Route::get('/rooms/{id}', [ChatController::class, 'show'])->whereNumber('id');
-        Route::post('/messages', [ChatController::class, 'createMessage']);
-    });
 
     // === Huehuy Ads ===
     Route::prefix('huehuy-ads')->group(function () {
@@ -245,40 +238,40 @@ Route::middleware('auth:sanctum')->group(function () {
         ->whereNumber('communityId')
         ->group(function () {
 
-        // === Events per community (FE: /communities/{id}/events)
-        Route::get('/events', [EventController::class, 'indexByCommunity']);
+            // === Events per community (FE: /communities/{id}/events)
+            Route::get('/events', [EventController::class, 'indexByCommunity']);
 
-        // === Alias promo-categories -> pakai controller categories index
-        Route::get('/promo-categories', [CommunityWidgetController::class, 'index']);
+            // === Alias promo-categories -> pakai controller categories index
+            Route::get('/promo-categories', [CommunityWidgetController::class, 'index']);
 
-        // Categories
-        Route::prefix('categories')->group(function () {
-            Route::get('/', [CommunityWidgetController::class, 'index']);
-            Route::post('/', [CommunityWidgetController::class, 'store']);
-            Route::post('/{id}/attach', [CommunityWidgetController::class, 'attachExisting'])->whereNumber('id');
-            Route::get('/{id}', [CommunityWidgetController::class, 'showCategory'])->whereNumber('id');
-            Route::put('/{id}', [CommunityWidgetController::class, 'update'])->whereNumber('id');
-            Route::delete('/{id}', [CommunityWidgetController::class, 'destroy'])->whereNumber('id');
+            // Categories
+            Route::prefix('categories')->group(function () {
+                Route::get('/', [CommunityWidgetController::class, 'index']);
+                Route::post('/', [CommunityWidgetController::class, 'store']);
+                Route::post('/{id}/attach', [CommunityWidgetController::class, 'attachExisting'])->whereNumber('id');
+                Route::get('/{id}', [CommunityWidgetController::class, 'showCategory'])->whereNumber('id');
+                Route::put('/{id}', [CommunityWidgetController::class, 'update'])->whereNumber('id');
+                Route::delete('/{id}', [CommunityWidgetController::class, 'destroy'])->whereNumber('id');
+            });
+
+            // Promos
+            Route::prefix('promos')->group(function () {
+                Route::get('/', [PromoController::class, 'indexByCommunity']);
+                Route::post('/', [PromoController::class, 'storeForCommunity']);
+                Route::get('/{id}', [PromoController::class, 'showForCommunity'])->whereNumber('id');
+                Route::put('/{id}', [PromoController::class, 'update'])->whereNumber('id');
+                Route::delete('/{id}', [PromoController::class, 'destroy'])->whereNumber('id');
+            });
+
+            // Vouchers
+            Route::prefix('vouchers')->group(function () {
+                Route::get('/', [VoucherController::class, 'indexByCommunity']);
+                Route::post('/', [VoucherController::class, 'storeForCommunity']);
+                Route::get('/{id}', [VoucherController::class, 'showForCommunity'])->whereNumber('id');
+                Route::put('/{id}', [VoucherController::class, 'update'])->whereNumber('id');
+                Route::delete('/{id}', [VoucherController::class, 'destroy'])->whereNumber('id');
+            });
         });
-
-        // Promos
-        Route::prefix('promos')->group(function () {
-            Route::get('/', [PromoController::class, 'indexByCommunity']);
-            Route::post('/', [PromoController::class, 'storeForCommunity']);
-            Route::get('/{id}', [PromoController::class, 'showForCommunity'])->whereNumber('id');
-            Route::put('/{id}', [PromoController::class, 'update'])->whereNumber('id');
-            Route::delete('/{id}', [PromoController::class, 'destroy'])->whereNumber('id');
-        });
-
-        // Vouchers
-        Route::prefix('vouchers')->group(function () {
-            Route::get('/', [VoucherController::class, 'indexByCommunity']);
-            Route::post('/', [VoucherController::class, 'storeForCommunity']);
-            Route::get('/{id}', [VoucherController::class, 'showForCommunity'])->whereNumber('id');
-            Route::put('/{id}', [VoucherController::class, 'update'])->whereNumber('id');
-            Route::delete('/{id}', [VoucherController::class, 'destroy'])->whereNumber('id');
-        });
-    });
 
     // Promos & Vouchers history
     Route::prefix('promos')->group(function () {
@@ -288,13 +281,14 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::post('/{promo}/items', [PromoItemController::class, 'storeForPromo'])
             ->whereNumber('promo');
+        Route::post('/{promo}/claim', [PromoItemController::class, 'claim'])->whereNumber('promo');
     });
 
     Route::prefix('vouchers')->group(function () {
         Route::post('/validate', [VoucherController::class, 'validateCode']);
         Route::get('/{voucher}/history', [VoucherController::class, 'history'])->whereNumber('voucher');
         Route::get('/voucher-items', [VoucherController::class, 'voucherItems']);
-        
+
         Route::get('/lookup-by-code/{code}', [VoucherController::class, 'lookupByCode']);
         Route::get('/user-voucher-items/{userId}', [VoucherController::class, 'getUserVoucherItems'])->whereNumber('userId');
     });
@@ -302,6 +296,15 @@ Route::middleware('auth:sanctum')->group(function () {
     // === Voucher Items (claim) ===
     Route::post('/vouchers/{voucher}/claim', [VoucherItemController::class, 'claim'])->whereNumber('voucher');
     Route::post('/admin/voucher-items/{id}/redeem', [VoucherItemController::class, 'redeem'])->whereNumber('id');
+
+    // === Promo Items (claim & management) ===
+    Route::get('/admin/promo-items', [PromoItemController::class, 'index']);
+    Route::post('/admin/promo-items', [PromoItemController::class, 'claimDirect']);
+    Route::get('/admin/promo-items/{id}', [PromoItemController::class, 'show'])->whereNumber('id');
+    Route::put('/admin/promo-items/{id}', [PromoItemController::class, 'update'])->whereNumber('id');
+    Route::delete('/admin/promo-items/{id}', [PromoItemController::class, 'destroy'])->whereNumber('id');
+    Route::post('/admin/promo-items/{id}/redeem', [PromoItemController::class, 'redeem'])->whereNumber('id');
+    Route::post('/admin/promos/{id}/items', [PromoItemController::class, 'claim'])->whereNumber('id');
 
     // User Activity
     Route::prefix('user')->group(function () {
@@ -326,7 +329,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/communities/{id}', [CommunityController::class, 'update'])->whereNumber('id');
         Route::delete('/communities/{id}', [CommunityController::class, 'destroy'])->whereNumber('id');
 
-         // +++ NEW: ADMIN members +++
+        // +++ NEW: ADMIN members +++
         Route::get('/communities/{id}/members', [CommunityController::class, 'adminMembers'])->whereNumber('id');
 
         // +++ NEW: ADMIN member requests management +++
@@ -357,15 +360,21 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/ads/{id}/claim', [\App\Http\Controllers\Admin\AdController::class, 'claim']);
     Route::get('/ads/{id}', [\App\Http\Controllers\Admin\AdController::class, 'show']);
 
+    // === Chat routes ===
+    // === Universal chat (bisa dipakai user/mitra/admin) ===
+    Route::prefix('chat')->group(function () {
+        Route::post('/resolve', [ChatController::class, 'resolve']);
+        Route::post('/send', [ChatController::class, 'send']);
+        Route::get('/{chatId}/messages', [ChatController::class, 'messages'])->whereNumber('chatId');
+        Route::post('/{chatId}/read', [ChatController::class, 'markAsRead'])->whereNumber('chatId');
+    });
 
-
-    
-    // Removed duplicate route for admin/options/ad-category to avoid ambiguity
+    Route::get('/chat-rooms', [ChatController::class, 'chatRooms']);
 
     // Admin/Corporate/Integration bundle
-    require __DIR__.'/api/admin.php';
-    require __DIR__.'/api/corporate.php';
-    require __DIR__.'/api/integration.php';
+    require __DIR__ . '/api/admin.php';
+    require __DIR__ . '/api/corporate.php';
+    require __DIR__ . '/api/integration.php';
 });
 
 /**
@@ -374,7 +383,7 @@ Route::middleware('auth:sanctum')->group(function () {
  * =======================
  */
 if (app()->environment('local', 'development')) {
-    require __DIR__.'/test_validation.php';
+    require __DIR__ . '/test_validation.php';
 }
 
 
@@ -383,4 +392,4 @@ if (app()->environment('local', 'development')) {
 /**
  * Fallback 404
  */
-Route::fallback(fn () => response()->json(['message' => 'Not Found'], 404));
+Route::fallback(fn() => response()->json(['message' => 'Not Found'], 404));

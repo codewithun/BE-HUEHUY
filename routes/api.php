@@ -361,13 +361,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/ads/{id}', [\App\Http\Controllers\Admin\AdController::class, 'show']);
 
     // === Chat routes ===
-    Route::prefix('admin')->group(function () {
-        Route::post('/chat/resolve', [ChatController::class, 'resolve']); // << tambah ini
-        Route::post('/chat/send', [ChatController::class, 'send']); // ⚡ letakkan PALING ATAS
-        Route::get('/chat/{chatId}/messages', [ChatController::class, 'messages'])->whereNumber('chatId');
-        Route::post('/chat/{chatId}/read', [ChatController::class, 'markAsRead'])->whereNumber('chatId');
-        Route::get('/chat', [ChatController::class, 'index']);
+    // === Universal chat (bisa dipakai user/mitra/admin) ===
+    Route::prefix('chat')->group(function () {
+        Route::post('/resolve', [ChatController::class, 'resolve']);
+        Route::post('/send', [ChatController::class, 'send']);
+        Route::get('/{chatId}/messages', [ChatController::class, 'messages'])->whereNumber('chatId');
+        Route::post('/{chatId}/read', [ChatController::class, 'markAsRead'])->whereNumber('chatId');
     });
+
+    Route::get('/chat-rooms', [ChatController::class, 'chatRooms']);
 
     // Admin/Corporate/Integration bundle
     require __DIR__ . '/api/admin.php';

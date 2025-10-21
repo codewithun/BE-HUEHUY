@@ -4,69 +4,42 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Chat extends Model
 {
     use HasFactory;
 
-    // =========================>
-    // ## Fillable
-    // =========================>
     protected $fillable = [
-        'chat_room_id',
-        'user_sender_id',
-        'cube_id',
-        'grab_id',
-        'message',
+        'community_id',
+        'corporate_id',
+        'user_id',
+        'admin_id',
+        'last_message',
+        'updated_at',
     ];
 
-    // =========================>
-    // ## Searchable
-    // =========================>
-    public $searchable = [
-    ];
-
-    // =========================>
-    // ## Selectable
-    // =========================>
-    public $selectable = [
-        'chats.id',
-        'chats.chat_room_id',
-        'chats.user_sender_id',
-        'chats.cube_id',
-        'chats.grab_id',
-        'chats.message',
-    ];
-
-    /**
-     * * Relation to `ChatRoom` model
-     */
-    public function chat_room() : BelongsTo {
-        return $this->belongsTo(ChatRoom::class, 'chat_room_id', 'id');
+    public function community()
+    {
+        return $this->belongsTo(Community::class);
     }
 
-    /**
-     * * Relation to `User` model
-     */
-    public function user_sender() : BelongsTo
+    public function corporate()
     {
-        return $this->belongsTo(User::class, 'user_sender_id', 'id');
+        return $this->belongsTo(Corporate::class);
     }
 
-    /**
-     * * Relation to `Cube` model
-     */
-    public function cube() : BelongsTo
+    public function user()
     {
-        return $this->belongsTo(Cube::class, 'cube_id', 'id');
+        return $this->belongsTo(User::class, 'user_id');
     }
 
-    /**
-     * * Relation to `Grab` model
-     */
-    public function grab() : BelongsTo
+    public function admin()
     {
-        return $this->belongsTo(Grab::class, 'grab_id', 'id');
+        return $this->belongsTo(User::class, 'admin_id');
+    }
+
+    public function messages()
+    {
+        return $this->hasMany(ChatMessage::class);
     }
 }

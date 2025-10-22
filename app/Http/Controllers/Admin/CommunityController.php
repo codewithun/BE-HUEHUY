@@ -22,47 +22,47 @@ class CommunityController extends Controller
     private function getActivePromosCount($communityId)
     {
         if (!$communityId) return 0;
-        
+
         return Promo::where('community_id', $communityId)
             ->where(function ($q) {
                 // Promo yang always_available = true
                 $q->where('always_available', true)
-                // ATAU promo yang masih dalam periode aktif
-                ->orWhere(function ($qq) {
-                    $now = now();
-                    $qq->where('always_available', '!=', true)
-                       ->where(function ($qqq) use ($now) {
-                           // Start date <= now <= end date
-                           $qqq->where(function ($qqqq) use ($now) {
-                               $qqqq->whereNotNull('start_date')
-                                    ->whereNotNull('end_date')
-                                    ->where('start_date', '<=', $now)
-                                    ->where('end_date', '>=', $now);
-                           })
-                           // Atau hanya ada start_date dan sudah dimulai
-                           ->orWhere(function ($qqqq) use ($now) {
-                               $qqqq->whereNotNull('start_date')
-                                    ->whereNull('end_date')
-                                    ->where('start_date', '<=', $now);
-                           })
-                           // Atau hanya ada end_date dan belum berakhir
-                           ->orWhere(function ($qqqq) use ($now) {
-                               $qqqq->whereNull('start_date')
-                                    ->whereNotNull('end_date')
-                                    ->where('end_date', '>=', $now);
-                           })
-                           // Atau tidak ada tanggal sama sekali
-                           ->orWhere(function ($qqqq) {
-                               $qqqq->whereNull('start_date')
-                                    ->whereNull('end_date');
-                           });
-                       });
-                });
+                    // ATAU promo yang masih dalam periode aktif
+                    ->orWhere(function ($qq) {
+                        $now = now();
+                        $qq->where('always_available', '!=', true)
+                            ->where(function ($qqq) use ($now) {
+                                // Start date <= now <= end date
+                                $qqq->where(function ($qqqq) use ($now) {
+                                    $qqqq->whereNotNull('start_date')
+                                        ->whereNotNull('end_date')
+                                        ->where('start_date', '<=', $now)
+                                        ->where('end_date', '>=', $now);
+                                })
+                                    // Atau hanya ada start_date dan sudah dimulai
+                                    ->orWhere(function ($qqqq) use ($now) {
+                                        $qqqq->whereNotNull('start_date')
+                                            ->whereNull('end_date')
+                                            ->where('start_date', '<=', $now);
+                                    })
+                                    // Atau hanya ada end_date dan belum berakhir
+                                    ->orWhere(function ($qqqq) use ($now) {
+                                        $qqqq->whereNull('start_date')
+                                            ->whereNotNull('end_date')
+                                            ->where('end_date', '>=', $now);
+                                    })
+                                    // Atau tidak ada tanggal sama sekali
+                                    ->orWhere(function ($qqqq) {
+                                        $qqqq->whereNull('start_date')
+                                            ->whereNull('end_date');
+                                    });
+                            });
+                    });
             })
             // Tambahan filter: promo yang masih ada stok (jika ada kolom stock)
             ->where(function ($q) {
                 $q->whereNull('stock')
-                  ->orWhere('stock', '>', 0);
+                    ->orWhere('stock', '>', 0);
             })
             ->count();
     }
@@ -246,6 +246,16 @@ class CommunityController extends Controller
                 ], 422);
             }
 
+            // Tambahkan ini 👇
+            $privacy = strtolower($community->privacy ?? $community->world_type ?? 'public');
+            if ($privacy === 'pribadi' || $privacy === 'private') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Komunitas ini bersifat private. Harus mengirim permintaan bergabung terlebih dahulu.',
+                    'need_request' => true,
+                ], 403);
+            }
+
             $membership = $community->addMember($user);
 
             $community->load('adminContacts.role');
@@ -394,7 +404,6 @@ class CommunityController extends Controller
                 'success' => false,
                 'message' => 'Gagal keluar dari komunitas',
             ], 500);
-
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
@@ -467,8 +476,8 @@ class CommunityController extends Controller
             $s = trim($request->search);
             $q->whereHas('user', function ($u) use ($s) {
                 $u->where('name', 'like', "%{$s}%")
-                  ->orWhere('email', 'like', "%{$s}%")
-                  ->orWhere('phone', 'like', "%{$s}%");
+                    ->orWhere('email', 'like', "%{$s}%")
+                    ->orWhere('phone', 'like', "%{$s}%");
             });
         }
 
@@ -526,7 +535,7 @@ class CommunityController extends Controller
             $s = trim($request->search);
             $q->whereHas('user', function ($u) use ($s) {
                 $u->where('name', 'like', "%{$s}%")
-                  ->orWhere('email', 'like', "%{$s}%");
+                    ->orWhere('email', 'like', "%{$s}%");
             });
         }
 
@@ -545,7 +554,7 @@ class CommunityController extends Controller
 
     /**
      * POST /api/admin/communities
-     */ 
+     */
     public function store(Request $request)
     {
         try {
@@ -590,9 +599,9 @@ class CommunityController extends Controller
                 if (is_array($isActive)) {
                     // Contoh dari checkbox FE: [1] atau ['1']
                     $flat = collect($isActive)
-                        ->map(fn ($v) => is_bool($v) ? ($v ? '1' : '0') : strtolower(trim((string) $v)))
-                        ->filter(fn ($v) => $v !== '');
-                    $validated['is_active'] = $flat->contains(fn ($v) => in_array($v, ['1', 'true', 'on', 'yes'], true)) ? 1 : 0;
+                        ->map(fn($v) => is_bool($v) ? ($v ? '1' : '0') : strtolower(trim((string) $v)))
+                        ->filter(fn($v) => $v !== '');
+                    $validated['is_active'] = $flat->contains(fn($v) => in_array($v, ['1', 'true', 'on', 'yes'], true)) ? 1 : 0;
                 } elseif (is_string($isActive)) {
                     $validated['is_active'] = in_array(strtolower($isActive), ['1', 'true', 'on', 'yes'], true) ? 1 : 0;
                 } elseif (is_bool($isActive)) {
@@ -703,7 +712,7 @@ class CommunityController extends Controller
                 $logoValidator = Validator::make($request->all(), [
                     'logo' => 'file|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048'
                 ]);
-                
+
                 if ($logoValidator->fails()) {
                     return response()->json([
                         'success' => false,
@@ -730,9 +739,9 @@ class CommunityController extends Controller
                 // Handle berbagai format input dari frontend (string, bool, numeric, array checkbox)
                 if (is_array($isActive)) {
                     $flat = collect($isActive)
-                        ->map(fn ($v) => is_bool($v) ? ($v ? '1' : '0') : strtolower(trim((string) $v)))
-                        ->filter(fn ($v) => $v !== '');
-                    $validated['is_active'] = $flat->contains(fn ($v) => in_array($v, ['1', 'true', 'on', 'yes'], true)) ? 1 : 0;
+                        ->map(fn($v) => is_bool($v) ? ($v ? '1' : '0') : strtolower(trim((string) $v)))
+                        ->filter(fn($v) => $v !== '');
+                    $validated['is_active'] = $flat->contains(fn($v) => in_array($v, ['1', 'true', 'on', 'yes'], true)) ? 1 : 0;
                 } elseif (is_string($isActive)) {
                     $validated['is_active'] = in_array(strtolower($isActive), ['1', 'true', 'on', 'yes'], true) ? 1 : 0;
                 } elseif (is_bool($isActive)) {
@@ -914,7 +923,7 @@ class CommunityController extends Controller
             ->where('status', 'active')
             ->whereNotNull('joined_at')
             ->get()
-            ->map(fn ($m) => [
+            ->map(fn($m) => [
                 'user_id'    => $m->user->id,
                 'user_name'  => $m->user->name,
                 'action'     => 'joined',
@@ -926,7 +935,7 @@ class CommunityController extends Controller
             ->where('community_id', $community->id)
             ->where('status', 'removed')
             ->get()
-            ->map(fn ($m) => [
+            ->map(fn($m) => [
                 'user_id'    => $m->user->id,
                 'user_name'  => $m->user->name,
                 'action'     => 'left',
@@ -935,7 +944,7 @@ class CommunityController extends Controller
             ]);
 
         $merged = $active->merge($removed)
-            ->sortByDesc(fn ($row) => Carbon::parse($row['created_at'])->timestamp)
+            ->sortByDesc(fn($row) => Carbon::parse($row['created_at'])->timestamp)
             ->values();
 
         return response()->json([
@@ -943,5 +952,42 @@ class CommunityController extends Controller
             'data'    => $merged,
             'total_row' => $merged->count(),
         ]);
+    }
+
+    /**
+     * DELETE /api/admin/communities/{community}/members/{user}
+     * Hapus anggota komunitas (oleh admin)
+     */
+    public function adminRemoveMember($communityId, $userId)
+    {
+        try {
+            $community = Community::findOrFail($communityId);
+
+            $membership = CommunityMembership::where('community_id', $communityId)
+                ->where('user_id', $userId)
+                ->first();
+
+            if (!$membership) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Member tidak ditemukan dalam komunitas ini',
+                ], 404);
+            }
+
+            // ubah status jadi removed atau hapus langsung
+            $membership->update([
+                'status' => 'removed',
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Member berhasil dihapus dari komunitas',
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal menghapus member: ' . $e->getMessage(),
+            ], 500);
+        }
     }
 }

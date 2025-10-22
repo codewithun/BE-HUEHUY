@@ -123,7 +123,18 @@ class User extends Authenticatable
     {
         $toArray = parent::toArray();
 
-        $toArray['picture_source'] = $this->picture_source ? asset('storage/' . $this->picture_source) : null;
+        // Handle picture_source - check if it's already a full URL (e.g., Google profile picture)
+        if ($this->picture_source) {
+            if (str_starts_with($this->picture_source, 'http://') || str_starts_with($this->picture_source, 'https://')) {
+                // It's already a full URL (e.g., Google profile picture)
+                $toArray['picture_source'] = $this->picture_source;
+            } else {
+                // It's a local file path, prepend storage URL
+                $toArray['picture_source'] = asset('storage/' . $this->picture_source);
+            }
+        } else {
+            $toArray['picture_source'] = null;
+        }
 
         return $toArray;
     }

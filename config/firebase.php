@@ -51,17 +51,13 @@ return [
              */
 
             'credentials' => [
-                'type' => 'service_account',
-                'project_id' => 'huehuy-c43c3',
-                'private_key_id' => 'ad9ff9b64ccee8cbbdd7feae6823e1e1bdbd111c',
-                'private_key' => '-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDDY3m8HGEC9PCO\nLQxZZEwTYiu0Ypygf5fzC0EIUG9eF+Lc5Gvkw+lm4y7Wy+yWWvg0jNQyYKQVwEa5\nXNllAoXq0o30fPnCk+VY8fJ+X5/iRyGRfzVHEI/nHP/k/ZJlZ2suvYS8TId5EDAs\n5v34Ax9wHoVqCgb639xvSqjIoaLkx0q7B2je68Jx77sXntnXtIu7MOOUeHmCZI/3\nmhRAvrj5eq6h6sfb3Wr0IivrK0BzpGarN3yUNjClkZ9dm/rOrxZ5ebCTpQ1oYFUC\n2uRp8XIfKI0h0yCTIbK0kShHnVxEe965T3eSUzlE3OCVlMZjqG5ZJqyv48AgJ1ge\n6bezjMU9AgMBAAECggEAAlwaNA1hiYnIwIpSR8iRHWq2mWOch3nCNB9hG+wB5iuP\nu8lvymkHhiBbhPLoEPhL719cxE6vXQ0EBxaSk7tlh9WojWYPXaWmIx/4UtWig6aD\nMv5fd92259OIeh1zHwFT2iQ50hhe7n2bsF5SViRMvoRY4BkO9MdtXXtzEiXDdA7m\nKtC7t+6dvjUrR1R1FTaJreBnroXxLv1UHiNWtq4ejSfNZVMgguhdM0C4lH8/tYsj\n5qc4sgwSEFS2qezjj66kQHg9KoZ8Cajo02maEdkmz+gH21SoJNb3IaYeqyWFTd5I\nOMcTJ6SKtHK/1incYv4MOLKbV78Kxaw4p60nYAtVdQKBgQD8ZmycUR9SzW2idkAv\nrbnrhig0vc3lc/RdWCCjE7DaQqTp8yJFc4N37olCDD6FIfloSFxaL5Zwb2xlzDCh\nqY22EYDne9ltPI+MyPzqtsorxV72JPqK/fERyDnW6CpaGFFrTQTAfzl7SIZDsIeG\nwEl8U55dunuMVZckwQs7Uh1HYwKBgQDGLONS4tgPcQL0b3bc+YMqTXzpqw70FnuZ\nZ/ZCiajI9rXTz0wblBRrDCyifOGAo0Vme1KRFeYIP5BS5VlrMEbsm0v1dFOqimYi\nHEWKlYqx08e5z0ZwXDsP9+MDG4ioMNxgEowi7TdaKi081sT0KQgKATNwtIesP+vT\nIiM6NDDy3wKBgCaHLAUgjPuCyD2Id3vPtRWywOhsIMXp0V9+WF0MYG6wxaPArXaU\nj3j7PJCMde60pPG6Of66TOiU2aMgbDwBOdSVD2xGh4YZPIBtHc5mYK4Vzs0cD/Kv\nmODyA4I+plhiZetPMm5//TJIe9ZRWB7Fs3H7Aa2lDb76Qbwmi6RegIGpAoGAf/Ir\nMjBS3mVQSxBL5Y8SKBWvOA3AscZyNjDwxTSrTFQ8QGvt70BDjnllt+J4lNzUyb2F\nKTbCNUEUpPB+Mr4QjGIXQHnCKrEAD7XBECBMU1Mv977i81gYqc6ZOkBkknI5Va2j\n3EjbG9NvMYBX2GtFTXBJDdMAZS0/zCiWJdXcZHECgYBogimN9NiUITUEkvXS+ZHC\nB3vjFSzmNftMpV8VjFjVOlaDB7oegdF/+vHlZVPVisMfRKPXcBRvIE6n+4QU1nr6\n1QxeXulZm2xMQ8NPkN1EEhlktosj4wSTfxQVIxVnx7rI2Fzkpk/2gChxMCaocV+x\n1+Gvj+XHypZau+TglCN9Tg==\n-----END PRIVATE KEY-----\n',
-                'client_email' => 'firebase-adminsdk-n9gqp@huehuy-c43c3.iam.gserviceaccount.com"',
-                'client_id' => '116908476211153313008',
-                'auth_uri' => 'https://accounts.google.com/o/oauth2/auth',
-                'token_uri' => 'https://oauth2.googleapis.com/token',
-                'auth_provider_x509_cert_url' => 'https://www.googleapis.com/oauth2/v1/certs',
-                'client_x509_cert_url' => 'https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-n9gqp%40huehuy-c43c3.iam.gserviceaccount.com',
-                'universe_domain' => 'googleapis.com',
+                // Use service account file path from environment (recommended)
+                // You can use a relative path like ./firebase/huehuy-63c16.json
+                // which will be resolved from the base_path() of the app
+                // If FIREBASE_CREDENTIALS is not set, return null to enable SDK auto-discovery
+                'file' => env('FIREBASE_CREDENTIALS') && file_exists(base_path(env('FIREBASE_CREDENTIALS')))
+                    ? base_path(env('FIREBASE_CREDENTIALS'))
+                    : null,
             ],
 
             /*

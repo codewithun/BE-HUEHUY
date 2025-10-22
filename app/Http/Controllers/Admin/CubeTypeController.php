@@ -43,23 +43,17 @@ class CubeTypeController extends Controller
         }
 
         // ? Sort & executing with pagination
-        $query = $query->orderBy($this->remark_column($sortby, $columnAliases), $sortDirection)
-            ->select($model->selectable)->paginate($paginate);
+        $paginator = $query
+            ->orderBy($this->remark_column($sortby, $columnAliases), $sortDirection)
+            ->select($model->selectable)
+            ->paginate($paginate);
 
-        // ? When empty
-        if (empty($query->items())) {
-            return response([
-                "message" => "empty data",
-                "data" => [],
-            ], 200);
-        }
-
-        // ? When success
+        // ? Standardized response shape for FE
         return response([
             "message" => "success",
-            "data" => $query->all(),
-            "total_row" => $query->total(),
-        ]);
+            "data" => $paginator->items(),
+            "total_row" => $paginator->total(),
+        ], 200);
     }
 
     // ============================================>
@@ -100,6 +94,75 @@ class CubeTypeController extends Controller
             "message" => "success",
             "data" => $model
         ]);
+    }
+
+    // ============================================>
+    // ## Store a newly created resource in storage.
+    // ============================================>
+    public function store(Request $request)
+    {
+        DB::beginTransaction();
+
+        // ? Validate request
+        $validation = $this->validation($request->all(), [
+            'name' => 'required|string|max:255',
+            'code' => 'required|string|max:255',
+            'color' => 'required|string|max:10',
+            'description' => 'required|string|max:255',
+        ]);
+        if ($validation) return $validation;
+
+        try {
+            $model = new CubeType();
+            $model = $this->dump_field($request->all(), $model);
+            $model->save();
+
+            DB::commit();
+            return response([
+                "message" => "success",
+                "data" => $model,
+            ], 201);
+        } catch (\Throwable $th) {
+            DB::rollBack();
+            return response([
+                "message" => "Error: server side having problem!",
+            ], 500);
+        }
+    }
+
+    // ============================================>
+    // ## Display the specified resource.
+    // ============================================>
+    public function show(string $id)
+    {
+        $model = CubeType::findOrFail($id);
+        return response([
+            "message" => "success",
+            "data" => $model,
+        ], 200);
+    }
+
+    // ============================================>
+    // ## Remove the specified resource from storage.
+    // ============================================>
+    public function destroy(string $id)
+    {
+        DB::beginTransaction();
+
+        try {
+            $model = CubeType::findOrFail($id);
+            $model->delete();
+            DB::commit();
+
+            return response([
+                "message" => "success",
+            ], 200);
+        } catch (\Throwable $th) {
+            DB::rollBack();
+            return response([
+                "message" => "Error: server side having problem!",
+            ], 500);
+        }
     }
 }
         

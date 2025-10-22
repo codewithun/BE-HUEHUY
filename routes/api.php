@@ -28,6 +28,7 @@ use App\Http\Controllers\Admin\UserController as AdminUserController;
 use App\Http\Controllers\Admin\PromoItemController;
 use App\Http\Controllers\Admin\AdCategoryController;
 use App\Http\Controllers\Admin\ChatController;
+use App\Http\Controllers\Admin\CubeTypeController;
 
 /**
  * Unauthorized helper
@@ -357,6 +358,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Preserve AdCategoryController options on a distinct path for internal/admin selects
         Route::get('/ad-categories/options', [AdCategoryController::class, 'options']);
+
+        // === CUBE TYPES CRUD (Admin) ===
+        Route::apiResource('cube-types', CubeTypeController::class);
     });
 
 

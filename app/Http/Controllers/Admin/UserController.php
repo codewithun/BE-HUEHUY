@@ -62,6 +62,16 @@ class UserController extends Controller
             ? $model->selectable
             : ['*']; // fallback kalau properti selectable nggak ada
 
+        // Pastikan kolom yang dipakai di payload & sorting tersedia di select list
+        // tanpa membuka kolom sensitif (password, remember_token)
+        $requiredColumns = [
+            'id', 'role_id', 'name', 'email', 'phone', 'picture_source',
+            'last_active_at', 'verified_at', 'point', 'created_at', 'updated_at'
+        ];
+        if ($selectable !== ['*']) {
+            $selectable = array_values(array_unique(array_merge($selectable, $requiredColumns)));
+        }
+
         $query = User::with(['role', 'corporate_user', 'corporate_user.corporate', 'corporate_user.role']);
 
         // ==== Search bawaanmu =====
@@ -100,20 +110,29 @@ class UserController extends Controller
                 ], 200);
             }
 
-            // Payload ringkas untuk FE
+            // Payload ringkas & aman untuk FE (tanpa password/remember_token)
             $data = $users->map(function ($u) {
                 return [
-                    'id'    => $u->id,
-                    'name'  => $u->name,
-                    'email' => $u->email,
-                    'phone' => $u->phone,
-                    'role'  => [
-                        'name' => optional($u->role)->name
+                    'id'             => $u->id,
+                    'role_id'        => $u->role_id,
+                    'name'           => $u->name,
+                    'email'          => $u->email,
+                    'phone'          => $u->phone,
+                    'picture_source' => $u->picture_source,
+                    'last_active_at' => $u->last_active_at,
+                    'verified_at'    => $u->verified_at,
+                    'point'          => $u->point,
+                    'created_at'     => $u->created_at,
+                    'updated_at'     => $u->updated_at,
+                    'role' => [
+                        'id'           => optional($u->role)->id,
+                        'name'         => optional($u->role)->name,
+                        'is_corporate' => optional($u->role)->is_corporate,
                     ],
                     'corporate_user' => $u->corporate_user ? [
-                        'corporate_id' => $u->corporate_user->corporate_id,
-                        'corporate_name' => optional($u->corporate_user->corporate)->name,
-                        'role_id' => $u->corporate_user->role_id,
+                        'corporate_id'        => $u->corporate_user->corporate_id,
+                        'corporate_name'      => optional($u->corporate_user->corporate)->name,
+                        'role_id'             => $u->corporate_user->role_id,
                         'corporate_role_name' => optional($u->corporate_user->role)->name
                     ] : null,
                 ];
@@ -136,20 +155,29 @@ class UserController extends Controller
             ], 200);
         }
 
-        // Payload ringkas untuk FE
+        // Payload ringkas & aman untuk FE (tanpa password/remember_token)
         $items = collect($page->items())->map(function ($u) {
             return [
-                'id'    => $u->id,
-                'name'  => $u->name,
-                'email' => $u->email,
-                'phone' => $u->phone,
-                'role'  => [
-                    'name' => optional($u->role)->name
+                'id'             => $u->id,
+                'role_id'        => $u->role_id,
+                'name'           => $u->name,
+                'email'          => $u->email,
+                'phone'          => $u->phone,
+                'picture_source' => $u->picture_source,
+                'last_active_at' => $u->last_active_at,
+                'verified_at'    => $u->verified_at,
+                'point'          => $u->point,
+                'created_at'     => $u->created_at,
+                'updated_at'     => $u->updated_at,
+                'role' => [
+                    'id'           => optional($u->role)->id,
+                    'name'         => optional($u->role)->name,
+                    'is_corporate' => optional($u->role)->is_corporate,
                 ],
                 'corporate_user' => $u->corporate_user ? [
-                    'corporate_id' => $u->corporate_user->corporate_id,
-                    'corporate_name' => optional($u->corporate_user->corporate)->name,
-                    'role_id' => $u->corporate_user->role_id,
+                    'corporate_id'        => $u->corporate_user->corporate_id,
+                    'corporate_name'      => optional($u->corporate_user->corporate)->name,
+                    'role_id'             => $u->corporate_user->role_id,
                     'corporate_role_name' => optional($u->corporate_user->role)->name
                 ] : null,
             ];
@@ -293,15 +321,16 @@ class UserController extends Controller
             'email'             => 'nullable|email|unique:users,email,' . $id,
             'phone'             => 'nullable|string|max:100|unique:users,phone,' . $id,
             'password'          => 'nullable|string|min:8|max:50|confirmed',
-            'role_id'           => 'prohibited', // Larang ubah role di endpoint ini
+            // Izinkan update role global saja (bukan role corporate)
+            'role_id'           => 'nullable|numeric|exists:roles,id,is_corporate,0',
             'corporate_role_id' => 'prohibited', // Larang ubah corporate role di endpoint ini
             'image'             => 'nullable',
         ]);
 
         if ($validation) return $validation;
 
-        // ? Buang role_id dan corporate_role_id dari payload untuk double protection
-        $safe = collect($request->all())->except(['role_id', 'corporate_role_id'])->all();
+        // ? Buang hanya corporate_role_id dari payload; role_id tetap boleh diubah
+        $safe = collect($request->all())->except(['corporate_role_id'])->all();
         $model = $this->dump_field($safe, $model);
 
         // * Password Encryption

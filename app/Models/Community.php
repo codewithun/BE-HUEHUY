@@ -121,12 +121,20 @@ class Community extends Model
      */
     public function removeMember(User $user): bool
     {
-        $updated = $this->memberships()
+        $membership = $this->memberships()
             ->where('user_id', $user->id)
-            ->where('status', 'active')
-            ->update(['status' => 'inactive']);
+            ->first();
 
-        return (bool) $updated;
+        if ($membership) {
+            // ubah jadi left agar ter-track di history
+            $membership->update([
+                'status'     => 'left',
+                'updated_at' => now(),
+            ]);
+            return true;
+        }
+
+        return false;
     }
 
     /**

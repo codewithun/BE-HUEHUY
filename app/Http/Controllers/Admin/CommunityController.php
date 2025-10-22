@@ -918,41 +918,40 @@ class CommunityController extends Controller
     {
         $community = Community::findOrFail($id);
 
-        $active = CommunityMembership::with('user')
+        $memberships = CommunityMembership::with('user')
             ->where('community_id', $community->id)
-            ->where('status', 'active')
-            ->whereNotNull('joined_at')
-            ->get()
-            ->map(fn($m) => [
+            ->whereIn('status', ['active', 'removed', 'left']) // ✅ tambahkan left
+            ->orderByDesc('updated_at')
+            ->get();
+
+        $history = $memberships->map(function ($m) {
+            $action = match ($m->status) {
+                'active'  => 'joined',
+                'left'    => 'left',
+                'removed' => 'removed',
+                default   => 'unknown',
+            };
+
+            return [
                 'user_id'    => $m->user->id,
                 'user_name'  => $m->user->name,
-                'action'     => 'joined',
-                'created_at' => $m->joined_at ?? $m->created_at,
+                'action'     => $action,
+                'created_at' => match ($action) {
+                    'joined'  => $m->joined_at ?? $m->created_at,
+                    'left', 'removed' => $m->updated_at ?? $m->created_at,
+                    default => $m->created_at,
+                },
                 'user'       => ['name' => $m->user->name],
-            ]);
-
-        $removed = CommunityMembership::with('user')
-            ->where('community_id', $community->id)
-            ->where('status', 'removed')
-            ->get()
-            ->map(fn($m) => [
-                'user_id'    => $m->user->id,
-                'user_name'  => $m->user->name,
-                'action'     => 'left',
-                'created_at' => $m->updated_at ?? $m->created_at,
-                'user'       => ['name' => $m->user->name],
-            ]);
-
-        $merged = $active->merge($removed)
-            ->sortByDesc(fn($row) => Carbon::parse($row['created_at'])->timestamp)
-            ->values();
+            ];
+        })->sortByDesc(fn($row) => \Carbon\Carbon::parse($row['created_at'])->timestamp)->values();
 
         return response()->json([
-            'success' => true,
-            'data'    => $merged,
-            'total_row' => $merged->count(),
+            'success'    => true,
+            'data'       => $history,
+            'total_row'  => $history->count(),
         ]);
     }
+
 
     /**
      * DELETE /api/admin/communities/{community}/members/{user}

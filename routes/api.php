@@ -63,8 +63,8 @@ Route::prefix('auth')->group(function () {
     Route::post('/resend-mail', [AuthController::class, 'resendMail']);
     Route::post('/verify-mail', [AuthController::class, 'mailVerify']);
 
-    // Legacy Firebase
-    Route::post('/login-firebase', [AuthController::class, 'login_firebase']);
+    // Firebase login (new handler)
+    Route::post('/login-firebase', [AuthController::class, 'loginFirebase']);
 
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/edit-profile', [AuthController::class, 'editProfile']);

@@ -1,0 +1,5 @@
+# Ignore sensitive Firebase service account JSON
+*.json
+
+# Keep directory
+!.gitignore

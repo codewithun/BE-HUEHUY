@@ -20,8 +20,8 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Kreait\Firebase\Exception\Auth\FailedToVerifyToken;
-use Kreait\Firebase\Factory;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class AuthController extends Controller
 {
@@ -1068,66 +1068,296 @@ class AuthController extends Controller
 
     public function login_firebase(Request $request)
     {
-        if (!($request->idToken && is_string($request->idToken))) {
-            return response()->json([
-                "message" => "require idToken"
-            ], 422);
+        // Validate JSON body explicitly (works for application/json)
+        $data = $request->validate([
+            'idToken' => ['required', 'string'],
+        ]);
+
+        // --- Debug: log token claims (iss/aud) to validate project match ---
+        try {
+            [$h, $p, $s] = array_pad(explode('.', $data['idToken']), 3, null);
+            $payload = $p ? json_decode(base64_decode(strtr($p, '-_', '+/')), true) : null;
+            Log::debug('🔥 Firebase Token Claims', [
+                'iss' => $payload['iss'] ?? null,
+                'aud' => $payload['aud'] ?? null,
+                'sub' => $payload['sub'] ?? null,
+                'email' => $payload['email'] ?? null,
+            ]);
+        } catch (\Throwable $e) {
+            Log::debug('Failed to parse Firebase token payload for debugging', ['error' => $e->getMessage()]);
         }
 
-        $factory = (new Factory())
-            ->withServiceAccount([
-                'type' => 'service_account',
-                'project_id' => 'huehuy-c43c3',
-                'private_key_id' => 'ad9ff9b64ccee8cbbdd7feae6823e1e1bdbd111c',
-                'private_key' => '-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDDY3m8HGEC9PCO\nLQxZZEwTYiu0Ypygf5fzC0EIUG9eF+Lc5Gvkw+lm4y7Wy+yWWvg0jNQyYKQVwEa5\nXNllAoXq0o30fPnCk+VY8fJ+X5/iRyGRfzVHEI/nHP/k/ZJlZ2suvYS8TId5EDAs\n5v34Ax9wHoVqCgb639xvSqjIoaLkx0q7B2je68Jx77sXntnXtIu7MOOUeHmCZI/3\nmhRAvrj5eq6h6sfb3Wr0IivrK0BzpGarN3yUNjClkZ9dm/rOrxZ5ebCTpQ1oYFUC\n2uRp8XIfKI0h0yCTIbK0kShHnVxEe965T3eSUzlE3OCVlMZjqG5ZJqyv48AgJ1ge\n6bezjMU9AgMBAAECggEAAlwaNA1hiYnIwIpSR8iRHWq2mWOch3nCNB9hG+wB5iuP\nu8lvymkHhiBbhPLoEPhL719cxE6vXQ0EBxaSk7tlh9WojWYPXaWmIx/4UtWig6aD\nMv5fd92259OIeh1zHwFT2iQ50hhe7n2bsF5SViRMvoRY4BkO9MdtXXtzEiXDdA7m\nKtC7t+6dvjUrR1R1FTaJreBnroXxLv1UHiNWtq4ejSfNZVMgguhdM0C4lH8/tYsj\n5qc4sgwSEFS2qezjj66kQHg9KoZ8Cajo02maEdkmz+gH21SoJNb3IaYeqyWFTd5I\nOMcTJ6SKtHK/1incYv4MOLKbV78Kxaw4p60nYAtVdQKBgQD8ZmycUR9SzW2idkAv\nrbnrhig0vc3lc/RdWCCjE7DaQqTp8yJFc4N37olCDD6FIfloSFxaL5Zwb2xlzDCh\nqY22EYDne9ltPI+MyPzqtsorxV72JPqK/fERyDnW6CpaGFFrTQTAfzl7SIZDsIeG\nwEl8U55dunuMVZckwQs7Uh1HYwKBgQDGLONS4tgPcQL0b3bc+YMqTXzpqw70FnuZ\nZ/ZCiajI9rXTz0wblBRrDCyifOGAo0Vme1KRFeYIP5BS5VlrMEbsm0v1dFOqimYi\nHEWKlYqx08e5z0ZwXDsP9+MDG4ioMNxgEowi7TdaKi081sT0KQgKATNwtIesP+vT\nIiM6NDDy3wKBgCaHLAUgjPuCyD2Id3vPtRWywOhsIMXp0V9+WF0MYG6wxaPArXaU\nj3j7PJCMde60pPG6Of66TOiU2aMgbDwBOdSVD2xGh4YZPIBtHc5mYK4Vzs0cD/Kv\nmODyA4I+plhiZetPMm5//TJIe9ZRWB7Fs3H7Aa2lDb76Qbwmi6RegIGpAoGAf/Ir\nMjBS3mVQSxBL5Y8SKBWvOA3AscZyNjDwxTSrTFQ8QGvt70BDjnllt+J4lNzUyb2F\nKTbCNUEUpPB+Mr4QjGIXQHnCKrEAD7XBECBMU1Mv977i81gYqc6ZOkBkknI5Va2j\n3EjbG9NvMYBX2GtFTXBJDdMAZS0/zCiWJdXcZHECgYBogimN9NiUITUEkvXS+ZHC\nB3vjFSzmNftMpV8VjFjVOlaDB7oegdF/+vHlZVPVisMfRKPXcBRvIE6n+4QU1nr6\n1QxeXulZm2xMQ8NPkN1EEhlktosj4wSTfxQVIxVnx7rI2Fzkpk/2gChxMCaocV+x\n1+Gvj+XHypZau+TglCN9Tg==\n-----END PRIVATE KEY-----\n',
-                'client_email' => 'firebase-adminsdk-n9gqp@huehuy-c43c3.iam.gserviceaccount.com"',
-                'client_id' => '116908476211153313008',
-                'auth_uri' => 'https://accounts.google.com/o/oauth2/auth',
-                'token_uri' => 'https://oauth2.googleapis.com/token',
-                'auth_provider_x509_cert_url' => 'https://www.googleapis.com/oauth2/v1/certs',
-                'client_x509_cert_url' => 'https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-n9gqp%40huehuy-c43c3.iam.gserviceaccount.com',
-                'universe_domain' => 'googleapis.com',
-            ])
-            ->withProjectId('huehuy-c43c3');
-        $auth = $factory->createAuth();
-        $idTokenString = $request->idToken;
+        // Use configured Firebase Auth (no hardcoded credentials)
+        $auth = app('firebase.auth');
 
         try {
-            $verifiedIdToken = $auth->verifyIdToken($idTokenString);
+            // Set second param to true if you want to check revoked tokens
+            $verified = $auth->verifyIdToken($data['idToken'], false);
         } catch (FailedToVerifyToken $e) {
             return response()->json([
-                "message" => "invalid idToken"
+                'message' => 'invalid idToken'
             ], 422);
         }
 
-        $email = $verifiedIdToken->claims()->get('email');
+        $claims = $verified->claims()->all();
+        $uid    = $claims['sub'] ?? null;
+        $email  = $claims['email'] ?? null;
+        $name   = $claims['name'] ?? 'User';
 
-        $user = User::where('email', $email)->whereNotNull('name')->first();
+        if (!$uid) {
+            return response()->json(['message' => 'Invalid token'], 401);
+        }
+
+        // Adapt to existing schema: authenticate by email; mark verified
+        $user = null;
+        if ($email) {
+            $user = User::where('email', $email)->first();
+        }
 
         if (!$user) {
-            User::where('email', $email)->whereNull('name')->delete();
-
             $user = new User();
-
             $user->email = $email;
-            $user->name = $verifiedIdToken->claims()->get('name');
-            $user->verified_at = date_create();
-            $user->role_id = 2;
+            $user->name = $name;
+            $user->verified_at = now();
+            $user->role_id = 2; // default role
 
             try {
                 $user->save();
             } catch (\Throwable $th) {
-                return response([
-                    'message' => $th,
+                return response()->json([
+                    'message' => 'Failed to create user',
+                    'error' => config('app.debug') ? $th->getMessage() : 'Server error'
                 ], 500);
+            }
+        } else {
+            // Ensure verified flag is set for returning users logging in via Firebase
+            if (empty($user->verified_at)) {
+                $user->verified_at = now();
+                $user->save();
             }
         }
 
+        // Issue Sanctum token for session management
         $user_token = $user->createToken('sanctum')->plainTextToken;
 
-        return response([
-            'message' => 'Email verify has been sending!',
-            'token' => $user_token,
+        // Keep response shape close to existing behavior for compatibility
+        return response()->json([
+            'message' => 'Success',
+            'token'   => $user_token,
+            'data'    => [
+                'uid'   => $uid,
+                'email' => $user->email,
+                'name'  => $user->name,
+            ]
+        ], 200);
+    }
+
+    /**
+     * Firebase login using ID Token from client SDKs (web/mobile).
+     * - Verifies the token using Firebase Admin SDK
+     * - Creates or finds a local user
+     * - Returns a Sanctum token
+     *
+     * Request JSON: { idToken: string }
+     * Response JSON: { success: bool, token: string, user: object }
+     */
+    public function loginFirebase(Request $request)
+    {
+        $request->validate(['idToken' => 'required|string']);
+
+        // Check credential file existence to avoid opaque 500s
+        $credEnv = env('FIREBASE_CREDENTIALS');
+        $credPath = $credEnv ? base_path($credEnv) : null;
+        $credExists = $credPath ? file_exists($credPath) : false;
+        $gacEnv = env('GOOGLE_APPLICATION_CREDENTIALS');
+        $gacExists = $gacEnv ? file_exists($gacEnv) : false;
+
+        // In development, allow mock authentication if Firebase credentials are missing
+        if (!$credExists && !$gacExists && app()->environment(['local', 'development'])) {
+            Log::warning('Firebase credentials missing in local/dev environment - using mock authentication', [
+                'FIREBASE_CREDENTIALS' => $credEnv,
+                'resolved_path' => $credPath,
+                'GOOGLE_APPLICATION_CREDENTIALS' => $gacEnv,
+            ]);
+
+            // Mock authentication for development - extract email from idToken if it's a development token
+            // In a real scenario, you might want to decode the JWT manually or use a different approach
+            return $this->handleDevelopmentFirebaseAuth($request);
+        }
+
+        try {
+            $auth = app('firebase.auth');
+        } catch (\Throwable $e) {
+            Log::error('Firebase Auth init failed', [
+                'error' => $e->getMessage(),
+                'cred_env' => $credEnv,
+                'cred_path' => $credPath,
+                'cred_exists' => $credExists,
+                'gac_env' => $gacEnv,
+                'gac_exists' => $gacExists,
+            ]);
+            
+            // In development, provide helpful error message
+            if (app()->environment(['local', 'development'])) {
+                return response()->json([
+                    'message' => 'Firebase configuration error',
+                    'code' => 'FIREBASE_CONFIG',
+                    'hint' => 'Download your Firebase service account JSON file and place it at ./firebase/huehuy-63c16.json, then uncomment FIREBASE_CREDENTIALS in your .env file',
+                    'expected_path' => './firebase/huehuy-63c16.json',
+                ], 500);
+            }
+            
+            return response()->json([
+                'message' => 'Authentication service unavailable',
+                'code' => 'AUTH_SERVICE_ERROR',
+            ], 500);
+        }
+
+        try {
+            $verified = $auth->verifyIdToken($request->idToken, false);
+        } catch (FailedToVerifyToken $e) {
+            return response()->json(['message' => 'Invalid Firebase token'], 422);
+        } catch (\Throwable $e) {
+            Log::error('Firebase token verification failed', [
+                'error' => $e->getMessage(),
+            ]);
+            return response()->json([
+                'message' => 'Firebase verification failed',
+                'code' => 'FIREBASE_VERIFY_FAIL',
+            ], 500);
+        }
+
+        $claims = $verified->claims()->all();
+        $uid = $claims['sub'] ?? null;
+        $email = $claims['email'] ?? 'noemail@unknown.com';
+        $name = $claims['name'] ?? 'User';
+        $picture = $claims['picture'] ?? null;
+
+        if (!$uid) {
+            return response()->json(['message' => 'Invalid token'], 401);
+        }
+
+        return $this->createOrFindFirebaseUser($uid, $email, $name, $picture);
+    }
+
+    /**
+     * Handle Firebase authentication in development environment when credentials are missing
+     */
+    private function handleDevelopmentFirebaseAuth(Request $request)
+    {
+        // For development only - this is NOT secure for production
+        Log::info('Using development Firebase auth mock');
+
+        try {
+            // Decode the JWT token manually (without verification for development)
+            $idToken = $request->idToken;
+            $tokenParts = explode('.', $idToken);
+            
+            if (count($tokenParts) !== 3) {
+                throw new \Exception('Invalid token format');
+            }
+            
+            // Decode the payload (second part of JWT)
+            $payload = base64_decode(str_replace(['-', '_'], ['+', '/'], $tokenParts[1]));
+            $claims = json_decode($payload, true);
+            
+            if (!$claims) {
+                throw new \Exception('Invalid token payload');
+            }
+            
+            Log::info('Decoded Firebase token claims:', $claims);
+            
+            // Extract user information from the token
+            $uid = $claims['sub'] ?? $claims['user_id'] ?? ('dev_' . time());
+            $email = $claims['email'] ?? 'unknown@dev.local';
+            $name = $claims['name'] ?? $claims['display_name'] ?? 'Development User';
+            $picture = $claims['picture'] ?? null;
+            
+            Log::info('Extracted user info from token:', [
+                'uid' => $uid,
+                'email' => $email,
+                'name' => $name,
+                'picture' => $picture
+            ]);
+            
+            return $this->createOrFindFirebaseUser($uid, $email, $name, $picture);
+            
+        } catch (\Exception $e) {
+            Log::warning('Failed to decode Firebase token in development mode:', [
+                'error' => $e->getMessage(),
+                'token_preview' => substr($request->idToken, 0, 50) . '...'
+            ]);
+            
+            // Fallback to mock user if token decoding fails
+            $devEmail = 'dev@huehuy.com';
+            $devName = 'Development User';
+            $devUid = 'dev_' . time();
+            
+            return $this->createOrFindFirebaseUser($devUid, $devEmail, $devName);
+        }
+    }
+
+    /**
+     * Create or find user from Firebase authentication
+     */
+    private function createOrFindFirebaseUser($uid, $email, $name, $picture = null)
+    {
+        // Prefer firebase_uid if the column exists. Otherwise, fall back to email.
+        if (Schema::hasColumn('users', 'firebase_uid')) {
+            $user = User::firstOrCreate(
+                ['firebase_uid' => $uid],
+                [
+                    'email' => $email,
+                    'name' => $name,
+                    'verified_at' => now(),
+                    'role_id' => 2,
+                    'picture_source' => $picture,
+                ]
+            );
+        } else {
+            // Fallback to email-only schema (no firebase_uid column)
+            $user = User::firstOrCreate(
+                ['email' => $email],
+                [
+                    'name' => $name,
+                    'verified_at' => now(),
+                    'role_id' => 2,
+                    'picture_source' => $picture,
+                ]
+            );
+        }
+
+        // Update existing user's information if needed
+        if ($user->wasRecentlyCreated === false) {
+            $updated = false;
+            
+            if ($user->name !== $name) {
+                $user->name = $name;
+                $updated = true;
+            }
+            
+            if ($picture && $user->picture_source !== $picture) {
+                $user->picture_source = $picture;
+                $updated = true;
+            }
+            
+            if ($updated) {
+                $user->save();
+            }
+        }
+
+        // Ensure verified flag is set
+        if (empty($user->verified_at)) {
+            $user->verified_at = now();
+            $user->save();
+        }
+
+        $token = $user->createToken('firebase_login')->plainTextToken;
+
+        return response()->json([
+            'success' => true,
+            'token' => $token,
+            'user' => $user,
         ]);
     }
 

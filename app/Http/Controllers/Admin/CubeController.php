@@ -10,6 +10,8 @@ use App\Models\Cube;
 use App\Models\CubeTag;
 use App\Models\CubeType;
 use App\Models\OpeningHour;
+use App\Models\Promo;
+use App\Models\PromoValidation;
 use App\Models\Voucher;
 use App\Models\VoucherItem;
 use App\Models\Notification;
@@ -25,6 +27,17 @@ use Illuminate\Support\Facades\Storage;
 
 class CubeController extends Controller
 {
+    /**
+     * Helper function to convert empty strings to null
+     */
+    private function nullIfEmpty($value)
+    {
+        if (is_string($value) && trim($value) === '') {
+            return null;
+        }
+        return $value;
+    }
+
     /**
      * Decode field array yang mungkin terkirim sebagai string JSON via multipart/form-data.
      */
@@ -42,20 +55,362 @@ class CubeController extends Controller
     }
 
     // ========================================>
-    // ## Helper Methods for Voucher Sync
+    // ## Helper Methods for Voucher & Promo Sync
     // ========================================>
+
+    /**
+     * Handle promo sync untuk create/update ads dari kubus
+     */
+    private function handlePromoSyncFromCube(Request $request, Ad $ad, $isUpdate = false)
+    {
+        // Cek apakah ini adalah content promo
+        if ($request->input('content_type') !== 'promo') {
+            return;
+        }
+
+        Log::info('Promo sync triggered from CubeController', [
+            'ad_id' => $ad->id,
+            'cube_id' => $ad->cube_id,
+            'is_update' => $isUpdate
+        ]);
+
+        try {
+            if ($isUpdate) {
+                // Update promo yang terkait dengan ad
+                $this->updatePromoFromAd($ad, $request);
+            } else {
+                // Create promo baru dari ad
+                $this->createPromoFromAd($ad, $request);
+            }
+
+            Log::info('Promo sync completed successfully from CubeController', ['ad_id' => $ad->id]);
+        } catch (\Throwable $e) {
+            Log::error('Promo sync failed from CubeController', [
+                'ad_id' => $ad->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            // Don't throw error to prevent cube creation failure
+            // Just log the error
+        }
+    }
+
+    /**
+     * Create promo dari ad data
+     */
+    private function createPromoFromAd(Ad $ad, Request $request)
+    {
+        // Handle kode promo berdasarkan validation_type
+        $validationType = $ad->validation_type ?? 'auto';
+        $promoCode = '';
+
+        if ($validationType === 'manual') {
+            // Untuk manual, WAJIB gunakan kode yang diinputkan admin
+            $promoCode = $ad->code;
+
+            Log::info('Promo sync using manual code from admin input', [
+                'ad_id' => $ad->id,
+                'admin_code' => $ad->code,
+                'validation_type' => $validationType
+            ]);
+        } elseif ($validationType === 'auto') {
+            // Untuk auto, gunakan kode admin jika ada, jika tidak baru generate
+            if (!empty($ad->code)) {
+                $promoCode = $ad->code; // Gunakan kode admin
+                Log::info('Promo sync using admin provided code for auto validation', [
+                    'ad_id' => $ad->id,
+                    'admin_code' => $ad->code
+                ]);
+            } else {
+                // Generate kode dengan format yang konsisten
+                do {
+                    $promoCode = 'PRM-' . strtoupper(bin2hex(random_bytes(3)));
+                } while (
+                    \App\Models\Promo::where('code', $promoCode)->exists() ||
+                    \App\Models\PromoItem::where('code', $promoCode)->exists() ||
+                    \App\Models\Ad::where('code', $promoCode)->exists()
+                );
+
+                // Update ads dengan kode yang sama
+                $ad->update(['code' => $promoCode]);
+
+                Log::info('Promo sync generating new consistent code for auto validation', [
+                    'ad_id' => $ad->id,
+                    'generated_code' => $promoCode
+                ]);
+            }
+        }
+
+        // Siapkan data promo dari ad
+        $promoData = [
+            'title' => $ad->title,
+            'description' => $ad->description,
+            'detail' => $request->input('promo_detail'), // Detail tambahan dari form
+            'code' => $promoCode, // Gunakan kode yang sudah ditentukan di atas
+            'promo_type' => $ad->promo_type ?? 'offline',
+            'validation_type' => $validationType,
+            'start_date' => $ad->start_validate,
+            'end_date' => $ad->finish_validate,
+            'stock' => $ad->unlimited_grab ? null : ($ad->max_grab ?: 0),
+            'always_available' => $request->boolean('promo_always_available', $ad->unlimited_grab ? true : false),
+            'location' => $request->input('promo_location') ?: $request->input('address') ?: $request->input('cube_tags.0.address'),
+            'promo_distance' => $request->input('promo_distance', 0),
+        ];
+
+        // Handle owner info dari cube/ad atau dari form
+        $ownerName = $request->input('promo_owner_name');
+        $ownerContact = $request->input('promo_owner_contact');
+
+        if (!$ownerName || !$ownerContact) {
+            // Fallback ke data cube/user
+            if ($ad->cube && $ad->cube->user) {
+                $promoData['owner_name'] = $ownerName ?: $ad->cube->user->name;
+                $promoData['owner_contact'] = $ownerContact ?: ($ad->cube->user->phone ?? $ad->cube->user->email);
+            }
+        } else {
+            $promoData['owner_name'] = $ownerName;
+            $promoData['owner_contact'] = $ownerContact;
+        }
+
+        // Handle image dari ad (prioritas: image_1, image_2, image_3, image)
+        $imageFields = ['image_1', 'image_2', 'image_3', 'image'];
+        foreach ($imageFields as $field) {
+            if (!empty($ad->{$field})) {
+                $promoData['image'] = $ad->{$field};
+                $promoData['image_updated_at'] = now();
+                break;
+            }
+        }
+
+        // Handle community_id jika ada
+        if ($ad->community_id) {
+            $promoData['community_id'] = $ad->community_id;
+        }
+
+        // Filter out null values untuk fields yang tidak wajib
+        $promoData = array_filter($promoData, function ($value) {
+            return $value !== null && $value !== '';
+        });
+
+        Log::info('Creating promo from ad data', [
+            'ad_id' => $ad->id,
+            'promo_data' => $promoData
+        ]);
+
+        // Create promo
+        $promo = Promo::create($promoData);
+
+        Log::info('✅ Promo created successfully from ad', [
+            'promo_id' => $promo->id,
+            'ad_id' => $ad->id,
+            'promo_code' => $promo->code
+        ]);
+
+        // Create promo validation entry
+        $this->createPromoValidationEntry($promo, $ad);
+
+        return $promo;
+    }
+
+    /**
+     * Update promo dari ad data
+     */
+    private function updatePromoFromAd(Ad $ad, Request $request)
+    {
+        // Cari promo berdasarkan kode atau title (bisa disesuaikan logic pencarian)
+        $promo = Promo::where('code', $ad->code)
+            ->orWhere(function ($query) use ($ad) {
+                $query->where('title', $ad->title)
+                    ->where('promo_type', $ad->promo_type);
+            })
+            ->first();
+
+        if (!$promo) {
+            // Jika promo belum ada, buat baru
+            return $this->createPromoFromAd($ad, $request);
+        }
+
+        // Handle kode promo update berdasarkan validation_type
+        $validationType = $ad->validation_type ?? 'auto';
+
+        // Update data promo
+        $updateData = [
+            'title' => $ad->title,
+            'description' => $ad->description,
+            'detail' => $request->input('promo_detail'),
+            'promo_type' => $ad->promo_type ?? 'offline',
+            'validation_type' => $validationType,
+            'start_date' => $ad->start_validate,
+            'end_date' => $ad->finish_validate,
+            'stock' => $ad->unlimited_grab ? null : ($ad->max_grab ?: 0),
+            'always_available' => $request->boolean('promo_always_available', $ad->unlimited_grab ? true : false),
+            'location' => $request->input('promo_location') ?: $request->input('address') ?: $request->input('cube_tags.0.address'),
+            'promo_distance' => $request->input('promo_distance', $promo->promo_distance ?? 0),
+        ];
+
+        // Update kode hanya jika ada perubahan dan sesuai validation_type
+        if (!empty($ad->code) && $ad->code !== $promo->code) {
+            $updateData['code'] = $ad->code;
+            Log::info('Promo code updated from admin input', [
+                'old_code' => $promo->code,
+                'new_code' => $ad->code,
+                'validation_type' => $validationType
+            ]);
+        }
+
+        // Handle owner info update
+        $ownerName = $request->input('promo_owner_name');
+        $ownerContact = $request->input('promo_owner_contact');
+
+        if ($ownerName) {
+            $updateData['owner_name'] = $ownerName;
+        }
+        if ($ownerContact) {
+            $updateData['owner_contact'] = $ownerContact;
+        }
+
+        // Handle image update dari ad
+        $imageFields = ['image_1', 'image_2', 'image_3', 'image'];
+        foreach ($imageFields as $field) {
+            if (!empty($ad->{$field})) {
+                $updateData['image'] = $ad->{$field};
+                $updateData['image_updated_at'] = now();
+                break;
+            }
+        }
+
+        // Filter out null values untuk fields yang tidak wajib di update
+        $updateData = array_filter($updateData, function ($value) {
+            return $value !== null && $value !== '';
+        });
+
+        $promo->update($updateData);
+
+        Log::info('✅ Promo updated successfully from ad', [
+            'promo_id' => $promo->id,
+            'ad_id' => $ad->id,
+            'updated_fields' => array_keys($updateData)
+        ]);
+
+        // Update atau create promo validation entry jika belum ada
+        $this->updateOrCreatePromoValidationEntry($promo, $ad);
+
+        return $promo;
+    }
+
+    /**
+     * Create promo validation entry untuk tracking validasi promo
+     */
+    private function createPromoValidationEntry(Promo $promo, Ad $ad)
+    {
+        try {
+            $validationType = $ad->validation_type ?? 'auto';
+
+            // ✅ PERBAIKAN: Gunakan kode master promo untuk semua validasi
+            // Untuk konsistensi, semua entry validation menggunakan kode yang sama dengan promo
+            $validationCode = $promo->code;
+
+            Log::info('Creating promo validation entry with consistent code', [
+                'promo_id' => $promo->id,
+                'validation_code' => $validationCode,
+                'validation_type' => $validationType
+            ]);
+
+            // Create promo validation entry
+            $promoValidation = PromoValidation::create([
+                'promo_id' => $promo->id,
+                'code' => $validationCode, // Gunakan kode master yang konsisten
+                'user_id' => null, // Null karena belum ada yang validasi
+                'validated_at' => null, // Null karena belum divalidasi
+                'notes' => "Created from cube ad sync - {$validationType} validation - master_code:{$validationCode}"
+            ]);
+
+            Log::info('✅ Promo validation entry created successfully', [
+                'promo_validation_id' => $promoValidation->id,
+                'promo_id' => $promo->id,
+                'validation_code' => $validationCode
+            ]);
+
+            return $promoValidation;
+        } catch (\Throwable $e) {
+            Log::error('Failed to create promo validation entry', [
+                'promo_id' => $promo->id,
+                'ad_id' => $ad->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            // Jangan throw error, karena promo sudah berhasil dibuat
+            // Hanya log error untuk debugging
+            return null;
+        }
+    }
+
+    /**
+     * Update atau create promo validation entry untuk promo yang di-update
+     */
+    private function updateOrCreatePromoValidationEntry(Promo $promo, Ad $ad)
+    {
+        try {
+            $validationType = $ad->validation_type ?? 'auto';
+
+            // Cek apakah sudah ada promo validation untuk promo ini
+            $existingValidation = PromoValidation::where('promo_id', $promo->id)->first();
+
+            // Generate validation code berdasarkan tipe validasi
+            $validationCode = $promo->code; // Gunakan promo code sebagai validation code
+
+            if ($existingValidation) {
+                // Update existing validation entry
+                $existingValidation->update([
+                    'code' => $validationCode,
+                    'notes' => "Updated from cube ad sync - {$validationType} validation"
+                ]);
+
+                Log::info('✅ Promo validation entry updated successfully', [
+                    'promo_validation_id' => $existingValidation->id,
+                    'promo_id' => $promo->id,
+                    'validation_code' => $validationCode,
+                    'validation_type' => $validationType
+                ]);
+
+                return $existingValidation;
+            } else {
+                // Create new validation entry jika belum ada
+                return $this->createPromoValidationEntry($promo, $ad);
+            }
+        } catch (\Throwable $e) {
+            Log::error('Failed to update/create promo validation entry', [
+                'promo_id' => $promo->id,
+                'ad_id' => $ad->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            // Jangan throw error, karena promo sudah berhasil di-update
+            return null;
+        }
+    }
 
     /**
      * Handle voucher sync untuk create/update ads dari kubus
      */
     private function handleVoucherSyncFromCube(Request $request, Ad $ad, $isUpdate = false)
     {
-        // Cek flag sync voucher dari frontend
+        // ✅ PERBAIKAN: Cek flag sync voucher dari frontend dengan validasi ketat
         if (
             !$request->input('_sync_to_voucher_management') ||
             !$request->has('_voucher_sync_data') ||
             $request->input('content_type') !== 'voucher'
         ) {
+            // Log untuk debugging jika ada attempt sync non-voucher
+            if ($request->input('_sync_to_voucher_management') && $request->input('content_type') !== 'voucher') {
+                Log::warning('Voucher sync attempted for non-voucher content', [
+                    'content_type' => $request->input('content_type'),
+                    'ad_id' => $ad->id,
+                    'cube_id' => $ad->cube_id
+                ]);
+            }
             return;
         }
 
@@ -570,7 +925,19 @@ class CubeController extends Controller
             'owner_user_id' => $request->owner_user_id,
             'corporate_id' => $request->corporate_id,
             'is_information' => $request->boolean('is_information'),
-            'cube_type_name' => $cubeType->name
+            'cube_type_name' => $cubeType->name,
+            'content_type' => $request->input('content_type'),
+            '_sync_to_voucher_management' => $request->input('_sync_to_voucher_management'),
+            'voucher_sync_analysis' => [
+                'has_sync_flag' => $request->has('_sync_to_voucher_management'),
+                'sync_flag_value' => $request->input('_sync_to_voucher_management'),
+                'content_type_value' => $request->input('content_type'),
+                'should_sync_voucher' => $request->input('_sync_to_voucher_management') && $request->input('content_type') === 'voucher',
+                'will_trigger_legacy_voucher' => [
+                    'by_ad_type_check' => 'will_be_checked_after_ad_creation',
+                    'by_promo_type_check' => 'will_be_checked_after_ad_creation'
+                ]
+            ]
         ]);
 
         // ? Initial
@@ -775,9 +1142,9 @@ class CubeController extends Controller
                     $ad->finish_validate = Carbon::createFromFormat('d-m-Y', $adsPayload['finish_validate'])->format('Y-m-d H:i:s');
                 }
 
-                $ad->max_production_per_day  = $adsPayload['max_production_per_day'] ?? null;
-                $ad->sell_per_day            = $adsPayload['sell_per_day'] ?? null;
-                $ad->level_umkm              = $adsPayload['level_umkm'] ?? null;
+                $ad->max_production_per_day  = $this->nullIfEmpty($adsPayload['max_production_per_day'] ?? null);
+                $ad->sell_per_day            = $this->nullIfEmpty($adsPayload['sell_per_day'] ?? null);
+                $ad->level_umkm              = $this->nullIfEmpty($adsPayload['level_umkm'] ?? null);
                 $ad->validation_time_limit   = $adsPayload['validation_time_limit'] ?? null;
 
                 // Schedule fields for promo/voucher  
@@ -919,6 +1286,22 @@ class CubeController extends Controller
                 $ad->save();
 
                 // =====================================
+                // 🔍 DEBUG: Log ad creation details for voucher tracking
+                // =====================================
+                Log::info('CubeController@store ad created - voucher creation analysis', [
+                    'ad_id' => $ad->id,
+                    'ad_type' => $ad->type,
+                    'ad_promo_type' => $ad->promo_type,
+                    'request_content_type' => $request->input('content_type'),
+                    'sync_to_voucher_flag' => $request->input('_sync_to_voucher_management'),
+                    'voucher_creation_paths' => [
+                        'new_sync_method' => $request->input('_sync_to_voucher_management') && $request->input('content_type') === 'voucher',
+                        'legacy_by_ad_type' => $request->input('content_type') === 'voucher' && $ad->type === 'voucher' && $ad->promo_type === 'offline',
+                        'legacy_online' => $request->input('content_type') === 'voucher' && $ad->promo_type === 'online',
+                    ]
+                ]);
+
+                // =====================================
                 // ✅ Handle Voucher Sync (PERBAIKAN)
                 // =====================================
                 if ($request->input('_sync_to_voucher_management') && $request->input('content_type') === 'voucher') {
@@ -940,9 +1323,37 @@ class CubeController extends Controller
                     }
                 }
                 // =====================================
-                // ✅ Auto-create Voucher (Legacy)
+                // ✅ Handle Promo Sync (BARU)
                 // =====================================
-                elseif ($ad->type === 'voucher' && $ad->promo_type === 'offline') {
+                elseif ($request->input('content_type') === 'promo') {
+                    // Sync promo ke tabel promos
+                    try {
+                        $this->handlePromoSyncFromCube($request, $ad, false);
+                        Log::info('✅ Promo synced successfully from CubeController', [
+                            'ad_id' => $ad->id,
+                            'cube_id' => $model->id,
+                            'title' => $ad->title,
+                        ]);
+                    } catch (\Throwable $th) {
+                        Log::error('❌ Promo sync failed from CubeController', [
+                            'ad_id' => $ad->id,
+                            'cube_id' => $model->id,
+                            'error' => $th->getMessage(),
+                        ]);
+                        // Tidak rollback karena ads sudah berhasil dibuat
+                    }
+                }
+                // =====================================
+                // ✅ Auto-create Voucher (Legacy) - HANYA untuk content_type voucher
+                // =====================================
+                elseif ($request->input('content_type') === 'voucher' && $ad->type === 'voucher' && $ad->promo_type === 'offline') {
+                    Log::info('🔄 CubeController legacy voucher creation triggered', [
+                        'trigger' => 'offline_voucher',
+                        'ad_id' => $ad->id,
+                        'content_type' => $request->input('content_type'),
+                        'ad_type' => $ad->type,
+                        'ad_promo_type' => $ad->promo_type,
+                    ]);
                     try {
                         Voucher::updateOrCreate(
                             ['ad_id' => $ad->id],
@@ -958,6 +1369,7 @@ class CubeController extends Controller
                         Log::info('✅ Voucher auto-created from CubeController (legacy)', [
                             'ad_id' => $ad->id,
                             'title' => $ad->title,
+                            'content_type' => $request->input('content_type'),
                         ]);
                     } catch (\Throwable $th) {
                         Log::error('❌ Failed to auto-create voucher from CubeController', [
@@ -967,9 +1379,15 @@ class CubeController extends Controller
                     }
                 }
                 // =====================================
-                // ✅ Legacy Online Voucher Creation
+                // ✅ Legacy Online Voucher Creation - HANYA untuk content_type voucher
                 // =====================================
-                elseif ($ad->promo_type === 'online') {
+                elseif ($request->input('content_type') === 'voucher' && $ad->promo_type === 'online') {
+                    Log::info('🔄 CubeController legacy online voucher creation triggered', [
+                        'trigger' => 'online_voucher',
+                        'ad_id' => $ad->id,
+                        'content_type' => $request->input('content_type'),
+                        'ad_promo_type' => $ad->promo_type,
+                    ]);
                     try {
                         Voucher::create([
                             'ad_id' => $ad->id,
@@ -979,6 +1397,7 @@ class CubeController extends Controller
                         Log::info('✅ Online voucher auto-created from CubeController (legacy)', [
                             'ad_id' => $ad->id,
                             'title' => $ad->title,
+                            'content_type' => $request->input('content_type'),
                         ]);
                     } catch (\Throwable $th) {
                         Log::error('❌ Failed to auto-create online voucher from CubeController', [
@@ -986,6 +1405,20 @@ class CubeController extends Controller
                             'error' => $th->getMessage(),
                         ]);
                     }
+                }
+                // =====================================
+                // 🔍 DEBUG: Log when no voucher creation occurs
+                // =====================================
+                else {
+                    Log::info('✅ CubeController NO voucher creation triggered', [
+                        'reason' => 'content_type_not_voucher_or_conditions_not_met',
+                        'ad_id' => $ad->id,
+                        'content_type' => $request->input('content_type'),
+                        'ad_type' => $ad->type,
+                        'ad_promo_type' => $ad->promo_type,
+                        'sync_flag' => $request->input('_sync_to_voucher_management'),
+                        'expected_behavior' => 'voucher should NOT be created for promo/iklan content'
+                    ]);
                 }
 
 
@@ -1570,9 +2003,9 @@ class CubeController extends Controller
                         $ad->unlimited_grab         = ($adsPayload['unlimited_grab'] ?? false) == 1;
                         $ad->is_daily_grab          = $adsPayload['is_daily_grab'] ?? null;
                         $ad->promo_type             = $adsPayload['promo_type'] ?? null;
-                        $ad->max_production_per_day = $adsPayload['max_production_per_day'] ?? null;
-                        $ad->sell_per_day           = $adsPayload['sell_per_day'] ?? null;
-                        $ad->level_umkm             = $adsPayload['level_umkm'] ?? null;
+                        $ad->max_production_per_day = $this->nullIfEmpty($adsPayload['max_production_per_day'] ?? null);
+                        $ad->sell_per_day           = $this->nullIfEmpty($adsPayload['sell_per_day'] ?? null);
+                        $ad->level_umkm             = $this->nullIfEmpty($adsPayload['level_umkm'] ?? null);
 
                         // Schedule fields for promo/voucher
                         $ad->jam_mulai              = $adsPayload['jam_mulai'] ?? null;

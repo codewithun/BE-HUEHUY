@@ -1506,6 +1506,10 @@ class VoucherController extends Controller
                     'user'         => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null, // validator (tenant)
                     'owner'        => $owner, // pemilik item (user)
                     'itemType'     => 'voucher',
+                    // TAMBAHAN: Field untuk frontend logic yang konsisten dengan PromoController
+                    'user_relationship' => 'unknown', // Default untuk history global
+                    'show_owner_info' => true, // Di history tenant, tampilkan info owner
+                    'show_validator_info' => false, // Di history tenant, tidak perlu info validator karena sudah diketahui
                 ];
             });
 
@@ -1667,7 +1671,7 @@ class VoucherController extends Controller
                 ? User::whereIn('id', $ownerIds)->get(['id', 'name'])->keyBy('id')
                 : collect();
 
-            $data = $rows->map(function ($r) use ($owners) {
+            $data = $rows->map(function ($r) use ($owners, $userId) {
                 $voucher = $r->voucher;
                 if ($voucher) {
                     $voucher->title = $voucher->title ?? $voucher->name ?? 'Voucher';
@@ -1678,6 +1682,10 @@ class VoucherController extends Controller
                     $owner = ['id' => $r->owner_id, 'name' => $owners[$r->owner_id]->name];
                 }
 
+                // Determine user's relationship to this validation record
+                $isOwner = $r->owner_id && (int)$r->owner_id === (int)$userId;
+                $isValidator = $r->user_id && (int)$r->user_id === (int)$userId;
+
                 return [
                     'id'           => $r->id,
                     'code'         => $r->code,
@@ -1687,6 +1695,10 @@ class VoucherController extends Controller
                     'user'         => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null, // validator (tenant)
                     'owner'        => $owner,
                     'itemType'     => 'voucher',
+                    // Additional context for frontend
+                    'user_relationship' => $isOwner ? 'owner' : ($isValidator ? 'validator' : 'unknown'),
+                    'show_owner_info' => $isValidator, // Show "Voucher milik" when user is validator
+                    'show_validator_info' => $isOwner, // Show "Divalidasi oleh" when user is owner
                 ];
             });
 

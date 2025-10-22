@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Carbon;
 
 class Promo extends Model
@@ -24,13 +25,13 @@ class Promo extends Model
         'always_available',
         'stock',
         'promo_type',
-        'validation_type', // <-- penting: simpan tipe validasi
+        'validation_type',   // simpan tipe validasi: auto|manual
         'location',
         'owner_name',
         'owner_contact',
         'image',
-        'image_updated_at', // Add this field
-        'status', // opsional, kalau kamu pakai status (active/inactive)
+        'image_updated_at',  // buat cache-busting image
+        'status',            // optional: active/inactive
     ];
 
     protected $casts = [
@@ -48,27 +49,21 @@ class Promo extends Model
 
     protected $appends = ['image_url', 'image_url_versioned'];
 
-    // ====== Normalisasi getter/setter ======
+    // ================= Normalisasi getter/setter =================
 
-    /**
-     * Getter: selalu kembalikan 'auto' kalau null/kosong.
-     */
     public function getValidationTypeAttribute($value)
     {
         $val = strtolower((string) $value);
         return in_array($val, ['auto', 'manual'], true) ? $val : 'auto';
     }
 
-    /**
-     * Setter: pastikan hanya 'auto' | 'manual' yang tersimpan.
-     */
     public function setValidationTypeAttribute($value): void
     {
         $val = strtolower((string) $value);
         $this->attributes['validation_type'] = in_array($val, ['auto', 'manual'], true) ? $val : 'auto';
     }
 
-    // ====== Relasi ======
+    // ================= Relasi =================
 
     public function community()
     {
@@ -85,64 +80,54 @@ class Promo extends Model
         return $this->hasMany(PromoValidation::class);
     }
 
-    // (opsional) scope kalau butuh filter aktif
+    // (opsional) scope aktif
     public function scopeActive($query)
     {
         return $query->where(function ($q) {
-            $q->where('status', 'active')
-              ->orWhereNull('status');
+            $q->where('status', 'active')->orWhereNull('status');
         });
     }
 
     // ================= Accessors =================
-    
+
     public function getImageUrlAttribute(): ?string
     {
-        if (!$this->image) return null;
-        
-        // Handle case where image is already a full URL
-        if (filter_var($this->image, FILTER_VALIDATE_URL)) {
-            return $this->image;
+        // pakai raw original/attributes supaya nggak melempar MissingAttributeException
+        $image = $this->getRawOriginal('image') ?? ($this->getAttributes()['image'] ?? null);
+        if (!$image) return null;
+
+        // kalau sudah full URL, balikin langsung
+        if (filter_var($image, FILTER_VALIDATE_URL)) {
+            return $image;
         }
-        
-        /** @var \Illuminate\Filesystem\FilesystemAdapter $disk */
-        $disk = Storage::disk('public');
-        $url = $disk->url(ltrim($this->image, '/'));
-        
-        // Ensure the URL uses the backend host for API responses
-        // Frontend should access images through backend proxy
+
+        // generate URL dari disk publik
+        $url = Storage::url(ltrim($image, '/'));
+
+        // untuk response API, pakai host backend (hindari direct ke storage host)
         if (request()->is('api/*')) {
-            $parsedUrl = parse_url($url);
-            if ($parsedUrl && isset($parsedUrl['path'])) {
-                // Return relative URL that will be served by Laravel
-                return url($parsedUrl['path']);
+            $path = parse_url($url, PHP_URL_PATH);
+            if ($path) {
+                // pakai Facade biar Intelephense tidak protes
+                return URL::to($path);
             }
         }
-        
+
         return $url;
     }
-    
+
     public function getImageUrlVersionedAttribute(): ?string
     {
         $url = $this->image_url;
         if (!$url) return null;
-        
-        // PERBAIKAN: Prioritas versioning yang lebih robust
-        $ver = null;
-        
-        // 1) Prioritas tertinggi: image_updated_at (ketika file diganti)
-        if ($this->image_updated_at instanceof Carbon) {
-            $ver = $this->image_updated_at->getTimestamp();
-        } 
-        // 2) Fallback: updated_at (ketika record berubah)
-        else if ($this->updated_at instanceof Carbon) {
-            $ver = $this->updated_at->getTimestamp();
-        }
-        // 3) Fallback terakhir: ID + current time
-        else {
-            $ver = $this->id ? ($this->id * 1000 + (time() % 1000)) : time();
-        }
-        
+
+        // prioritas versi: image_updated_at -> updated_at -> now
+        $verSource = $this->image_updated_at instanceof Carbon
+            ? $this->image_updated_at
+            : ($this->updated_at instanceof Carbon ? $this->updated_at : Carbon::now());
+
+        $ver = $verSource->getTimestamp();
+
         return str_contains($url, '?') ? "{$url}&v={$ver}" : "{$url}?v={$ver}";
     }
 }

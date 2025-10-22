@@ -37,40 +37,54 @@ class PromoController extends Controller
     private function resolveTenantUserIdByPromo(Promo $promo): ?int
     {
         try {
-            $ownerPhone = $this->normalizePhone($promo->owner_contact ?? null);
-
-            // Ambil daftar kolom users yang benar2 ada
-            $allUserCols = \Illuminate\Support\Facades\Schema::getColumnListing('users');
-
-            $phoneCols = array_values(array_intersect(
-                $allUserCols,
-                ['phone', 'phone_number', 'telp', 'telpon', 'mobile', 'contact', 'whatsapp', 'wa']
-            ));
-
-            // 1) Cocokkan via nomor HP (paling akurat)
-            if ($ownerPhone && !empty($phoneCols)) {
-                $u = \App\Models\User::query()
-                    ->where(function ($q) use ($ownerPhone, $phoneCols) {
-                        foreach ($phoneCols as $col) {
-                            // samakan hanya digit; izinkan prefix 0/62
-                            $q->orWhereRaw(
-                                "REGEXP_REPLACE(COALESCE($col,''),'[^0-9]','') REGEXP ?",
-                                ["^(0|62)?$ownerPhone$"]
-                            );
-                        }
-                    })
-                    // ->where('role_id', 6) // kalau perlu batasi role manager tenant
-                    ->first();
-
-                if ($u) return $u->id;
+            // 1) Paling kuat: pakai kolom langsung
+            if (!empty($promo->owner_user_id)) {
+                return (int) $promo->owner_user_id;
             }
 
-            // 2) Fallback by nama (opsional)
+            // 2) Fallback: (opsional) cocokan nama/telepon — aman tanpa REGEXP_REPLACE
+            $ownerPhone = $this->normalizePhone($promo->owner_contact ?? null);
+            $allUserCols = \Illuminate\Support\Facades\Schema::getColumnListing('users') ?? [];
+
+            // hanya kolom yang benar-benar ada
+            $phoneCols = array_values(array_intersect(
+                $allUserCols,
+                ['phone', 'telp', 'telpon', 'mobile', 'contact', 'whatsapp', 'wa'] // sengaja TIDAK pakai phone_number kalau tidak ada
+            ));
+
+            if ($ownerPhone && !empty($phoneCols)) {
+                // Cari kandidat dulu (longgar), verifikasi di PHP
+                $u = \App\Models\User::query()
+                    ->where(function ($q) use ($phoneCols, $ownerPhone) {
+                        foreach ($phoneCols as $col) {
+                            // longgar: buang char non-digit di SQL sederhana
+                            $q->orWhereRaw("REPLACE(REPLACE(REPLACE(REPLACE(IFNULL($col,''),'+',''),' ',''),'-',''),'.','') LIKE ?", ["%$ownerPhone"]);
+                        }
+                    })
+                    ->first();
+
+                if ($u) {
+                    // verifikasi ketat di PHP
+                    $phones = [];
+                    foreach ($phoneCols as $col) {
+                        $v = $u->$col ?? null;
+                        if ($v) $phones[] = preg_replace('/\D+/', '', $v);
+                    }
+                    $phones = array_filter($phones);
+                    foreach ($phones as $digits) {
+                        // terima 08..., 62..., dan tanpa prefix
+                        $d = preg_replace('/^(?:0|62)/', '', $digits);
+                        if ($d === $ownerPhone) return $u->id;
+                    }
+                }
+            }
+
+            // 3) Fallback nama (opsional)
+            $ownerName = trim((string)($promo->owner_name ?? ''));
             $nameCols = array_values(array_intersect(
                 $allUserCols,
                 ['name', 'full_name', 'username', 'display_name', 'company_name']
             ));
-            $ownerName = trim((string)($promo->owner_name ?? ''));
             if ($ownerName !== '' && !empty($nameCols)) {
                 $u = \App\Models\User::query()
                     ->where(function ($q) use ($ownerName, $nameCols) {
@@ -78,20 +92,16 @@ class PromoController extends Controller
                             $q->orWhere($col, $ownerName);
                         }
                     })
-                    // ->where('role_id', 6)
                     ->first();
-
                 if ($u) return $u->id;
             }
 
             return null;
         } catch (\Throwable $e) {
             Log::error('resolveTenantUserIdByPromo failed: ' . $e->getMessage(), [
-                'promo_id'      => $promo->id ?? null,
-                'owner_name'    => $promo->owner_name ?? null,
-                'owner_contact' => $promo->owner_contact ?? null,
+                'promo_id' => $promo->id ?? null,
             ]);
-            return null; // fallback aman agar tidak 500
+            return null;
         }
     }
 
@@ -112,6 +122,65 @@ class PromoController extends Controller
             if (isset($v) && trim((string)$v) !== '') return $v;
         }
         return null;
+    }
+
+    /**
+     * Generate consistent promo code yang digunakan di semua tabel terkait
+     * Format: PRM-XXXXXX untuk auto validation, atau kode manual yang diinput admin
+     */
+    private function generateConsistentPromoCode(?string $validationType = 'auto', ?string $manualCode = null): string
+    {
+        $validationType = strtolower($validationType ?? 'auto');
+
+        if ($validationType === 'manual' && !empty($manualCode)) {
+            // Untuk manual validation, gunakan kode yang diinput admin
+            return $manualCode;
+        }
+
+        // Untuk auto validation atau manual tanpa kode, generate code baru
+        do {
+            $code = 'PRM-' . strtoupper(bin2hex(random_bytes(3)));
+        } while (
+            Promo::where('code', $code)->exists() ||
+            \App\Models\PromoItem::where('code', $code)->exists() ||
+            \App\Models\Ad::where('code', $code)->exists()
+        );
+
+        return $code;
+    }
+
+    /**
+     * Sync code ke semua tabel terkait (ads, promos, promo_items, promo_validations)
+     * untuk memastikan konsistensi
+     */
+    private function syncCodeToRelatedTables(Promo $promo, string $code): void
+    {
+        try {
+            // Update ads terkait jika ada
+            if (isset($promo->cube_id)) {
+                \App\Models\Ad::where('cube_id', $promo->cube_id)
+                    ->where(function ($q) use ($promo) {
+                        $q->where('title', $promo->title)
+                            ->orWhere('id', $promo->ad_id ?? 0);
+                    })
+                    ->update(['code' => $code]);
+            }
+
+            // Update promo_items yang sudah ada untuk promo ini
+            \App\Models\PromoItem::where('promo_id', $promo->id)
+                ->update(['code' => $code]);
+
+            Log::info('Synced promo code to related tables', [
+                'promo_id' => $promo->id,
+                'code' => $code
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('Failed to sync code to related tables', [
+                'promo_id' => $promo->id,
+                'code' => $code,
+                'error' => $e->getMessage()
+            ]);
+        }
     }
 
     /**
@@ -492,9 +561,6 @@ class PromoController extends Controller
 
             $data = $validator->validated();
 
-            // HINDARI mass assignment: buang field yang bukan kolom
-            unset($data['owner_user_id']); // <— penting
-
             $data['always_available'] = in_array($data['always_available'] ?? '0', [1, '1', true, 'true'], true);
             $data['promo_distance']   = isset($data['promo_distance']) ? (float) $data['promo_distance'] : 0;
             $data['stock']            = isset($data['stock']) ? (int) $data['stock'] : 0;
@@ -504,11 +570,11 @@ class PromoController extends Controller
                 $data['validation_type'] = 'auto';
             }
 
-            if (empty($data['code'])) {
-                do {
-                    $data['code'] = 'PRM-' . strtoupper(bin2hex(random_bytes(3)));
-                } while (Promo::where('code', $data['code'])->exists());
-            }
+            // Generate consistent code using helper method
+            $data['code'] = $this->generateConsistentPromoCode(
+                $data['validation_type'],
+                $data['code'] ?? null
+            );
 
             if ($request->hasFile('image')) {
                 $data['image'] = $request->file('image')->store('promos', 'public');
@@ -516,6 +582,10 @@ class PromoController extends Controller
             }
 
             $promo = Promo::create($data);
+
+            // Sync code ke tabel terkait untuk konsistensi
+            $this->syncCodeToRelatedTables($promo, $data['code']);
+
             $promo = $this->transformPromoImageUrls($promo);
 
             DB::commit();
@@ -626,9 +696,6 @@ class PromoController extends Controller
 
             $data = $validator->validated();
 
-            // HINDARI mass assignment
-            unset($data['owner_user_id']); // <— penting
-
             if (isset($data['image']) && is_string($data['image']) && !$request->hasFile('image')) {
                 unset($data['image']);
             }
@@ -656,6 +723,28 @@ class PromoController extends Controller
                 }
             }
 
+            // ✅ PERBAIKAN: Handle consistent code generation for updates
+            if (isset($data['code']) || isset($data['validation_type'])) {
+                $newValidationType = $data['validation_type'];
+                $newCode = $data['code'] ?? null;
+
+                // Only regenerate code if validation_type changed or manual code provided
+                if (
+                    $newValidationType !== $promo->validation_type ||
+                    ($newValidationType === 'manual' && !empty($newCode))
+                ) {
+
+                    $data['code'] = $this->generateConsistentPromoCode($newValidationType, $newCode);
+
+                    Log::info('Updated promo code for consistency', [
+                        'promo_id' => $promo->id,
+                        'old_code' => $promo->code,
+                        'new_code' => $data['code'],
+                        'validation_type' => $newValidationType
+                    ]);
+                }
+            }
+
             if ($request->hasFile('image')) {
                 if (!empty($promo->image)) {
                     Storage::disk('public')->delete($promo->image);
@@ -677,6 +766,12 @@ class PromoController extends Controller
             }
 
             $promo->update($data);
+
+            // Sync code ke tabel terkait jika code berubah
+            if (isset($data['code'])) {
+                $this->syncCodeToRelatedTables($promo, $data['code']);
+            }
+
             $promo = $this->transformPromoImageUrls($promo->fresh());
 
             DB::commit();
@@ -968,7 +1063,18 @@ class PromoController extends Controller
             'qr_timestamp'       => 'sometimes',
         ]);
 
-        $code       = trim((string)$data['code']);
+        // Normalisasi kode dari FE (buang spasi, NBSP, zero-width, control chars)
+        $raw  = (string)($data['code'] ?? '');
+        $code = trim($raw);
+        $code = preg_replace('/[\x00-\x1F\x7F\x{00A0}\x{200B}-\x{200D}\x{FEFF}]/u', '', $code);
+
+        Log::info('🧪 CODE DEBUG', [
+
+            'raw'  => $data['code'] ?? null,
+            'trim' => $code,
+            'len'  => strlen($code),
+            'hex'  => bin2hex($code), // deteksi karakter tersembunyi
+        ]);
         $itemId     = $data['item_id'] ?? null;
         $ownerHint  = $data['item_owner_id'] ?? null;
         $item       = null;
@@ -1006,7 +1112,7 @@ class PromoController extends Controller
             // Verifikasi kode dengan logic yang diperbaiki untuk manual validation
             $promo = $item->promo;
             $isValidCode = false;
-            
+
             // 🔧 PERBAIKAN: Untuk promo manual validation, hanya terima kode master
             if ($promo && $promo->validation_type === 'manual') {
                 // Hanya terima kode master (yang ditulis admin) - TIDAK terima kode unik item
@@ -1015,7 +1121,7 @@ class PromoController extends Controller
                 // Untuk promo auto validation, harus exact match dengan kode item
                 $isValidCode = hash_equals((string)$item->code, $code);
             }
-            
+
             if (!$isValidCode) {
                 return response()->json(['success' => false, 'message' => 'Kode unik tidak valid.'], 422);
             }
@@ -1025,13 +1131,28 @@ class PromoController extends Controller
             // Cek apakah ada master promo dengan kode tersebut
             $promo = \App\Models\Promo::where('code', $code)->first();
             Log::info('🔍 Search master promo by code', ['code' => $code, 'found' => !!$promo, 'promo_id' => $promo->id ?? null]);
-            
+
             if (!$promo) {
                 // 🔧 PERBAIKAN: Cari promo_item dengan kode tersebut tanpa membatasi user_id
                 // untuk mengcover kasus dimana user memasukkan kode unik dari promo_item
                 $promoItem = \App\Models\PromoItem::with(['promo', 'user'])
                     ->where('code', $code)
                     ->first();
+
+                // Fallback: kalau relasi promo null, coba cari promo-nya manual
+                if ($promoItem && !$promoItem->promo) {
+                    $promo = \App\Models\Promo::find($promoItem->promo_id)
+                        ?: \App\Models\Promo::where('code', $promoItem->code)->first();
+
+                    if (!$promo) {
+                        Log::warning('Orphan promo_item detected', [
+                            'item_id'  => $promoItem->id,
+                            'promo_id' => $promoItem->promo_id,
+                            'code'     => $promoItem->code,
+                        ]);
+                        return response()->json(['success' => false, 'message' => 'Promo tidak ditemukan'], 404);
+                    }
+                }
 
                 Log::info('🔍 Search promo_item by code', ['code' => $code, 'found' => !!$promoItem, 'item_owner' => $promoItem->user_id ?? null]);
 
@@ -1182,7 +1303,7 @@ class PromoController extends Controller
             }
 
             // Simpan validasi
-            $this->savePromoValidation($locked, $validatorId, $code);
+            $this->savePromoValidation($locked, $validatorId, $promo->code ?? $code);
 
             DB::commit();
 
@@ -1230,24 +1351,14 @@ class PromoController extends Controller
                     }
                 }
 
-                // Generate kode untuk table promo_items
-                $base = $promo->code ?? $enteredCode; // "mual"
-                
-                // 🔧 PERBAIKAN: Untuk promo manual validation, semua user pakai kode master yang sama
-                if ($promo->validation_type === 'manual') {
-                    $uniqueCode = $base; // Semua user pakai kode master "mual" (tanpa suffix)
-                } else {
-                    // Untuk promo auto validation, tetap generate kode unik per user
-                    $uniqueCode = $base . '-' . $ownerHint; // "mual-34", "mual-35"
-                    while (\App\Models\PromoItem::where('code', $uniqueCode)->exists()) {
-                        $uniqueCode = $base . '-' . strtoupper(Str::random(4));
-                    }
-                }
+                // 🔧 PERBAIKAN: Gunakan kode master promo untuk semua item dan validasi
+                // Semua promo_items akan menggunakan kode yang sama dengan master promo
+                $masterCode = $promo->code ?? $enteredCode;
 
                 $item = \App\Models\PromoItem::create([
                     'promo_id'    => $promo->id,
                     'user_id'     => $ownerHint,
-                    'code'        => $uniqueCode,
+                    'code'        => $masterCode, // Gunakan kode master yang sama
                     'status'      => 'redeemed',
                     'redeemed_at' => now(),
                     'expires_at'  => $promo->end_date,
@@ -1259,8 +1370,8 @@ class PromoController extends Controller
                 }
             }
 
-            // Simpan validasi (audit entered_code)
-            $this->savePromoValidation($item, $validatorId, $enteredCode);
+            // Simpan validasi (gunakan kode master untuk konsistensi)
+            $this->savePromoValidation($item, $validatorId, $promo->code ?? $enteredCode);
 
             // Tambahkan display_code untuk FE
             $item->setAttribute('display_code', $promo->code ?? $enteredCode);
@@ -1284,19 +1395,22 @@ class PromoController extends Controller
     }
 
     /**
-     * Helper untuk menyimpan validasi promo
+     * Helper untuk menyimpan validasi promo dengan kode yang konsisten
      */
     private function savePromoValidation($item, $validatorId, $code)
     {
+        // Pastikan menggunakan kode master promo untuk konsistensi
+        $masterCode = $item->promo->code ?? $code;
+
         $validationData = [
             'user_id'      => $validatorId,
             'promo_id'     => $item->promo_id,
             'validated_at' => now(),
-            'code'         => $code, // ini kode yang diinput user (master)
+            'code'         => $masterCode, // Gunakan kode master yang konsisten
             'notes'        => null,
         ];
 
-        $notes = 'item_id:' . $item->id . '|owner_id:' . $item->user_id . '|validator_id:' . $validatorId . '|entered_code:' . $code;
+        $notes = 'item_id:' . $item->id . '|owner_id:' . $item->user_id . '|validator_id:' . $validatorId . '|entered_code:' . $code . '|master_code:' . $masterCode;
 
         if (Schema::hasColumn('promo_validations', 'promo_item_id')) {
             $validationData['promo_item_id'] = $item->id;
@@ -1315,6 +1429,7 @@ class PromoController extends Controller
         } else {
             $existingValidation->update([
                 'validated_at' => now(),
+                'code' => $masterCode, // Update dengan kode master
                 'notes'        => $validationData['notes']
             ]);
         }
@@ -1510,7 +1625,7 @@ class PromoController extends Controller
                 ? User::whereIn('id', $ownerIds)->get(['id', 'name'])->keyBy('id')
                 : collect();
 
-            $data = $rows->map(function ($r) use ($owners) {
+            $data = $rows->map(function ($r) use ($owners, $userId) {
                 $promo = $r->promo;
                 if ($promo) {
                     $promo->title = $promo->title ?? 'Promo';
@@ -1525,6 +1640,10 @@ class PromoController extends Controller
                     ];
                 }
 
+                // Determine user's relationship to this validation record
+                $isOwner = $r->owner_id && (int)$r->owner_id === (int)$userId;
+                $isValidator = $r->user_id && (int)$r->user_id === (int)$userId;
+
                 return [
                     'id'           => $r->id,
                     'code'         => $r->code,
@@ -1536,6 +1655,10 @@ class PromoController extends Controller
                     // owner = pemilik promo item -> dipakai FE sisi tenant untuk "Promo milik ..."
                     'owner'        => $owner,
                     'itemType'     => 'promo',
+                    // Additional context for frontend
+                    'user_relationship' => $isOwner ? 'owner' : ($isValidator ? 'validator' : 'unknown'),
+                    'show_owner_info' => $isValidator, // Show "Promo milik" when user is validator
+                    'show_validator_info' => $isOwner, // Show "Divalidasi oleh" when user is owner
                 ];
             });
 

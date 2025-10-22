@@ -59,6 +59,31 @@ class AdController extends Controller
     // ========================================>
 
     /**
+     * Generate consistent code yang digunakan di semua tabel terkait
+     * Format yang konsisten dengan PromoController
+     */
+    private function generateConsistentCode(?string $validationType = 'auto', ?string $manualCode = null, string $prefix = 'VCR'): string
+    {
+        $validationType = strtolower($validationType ?? 'auto');
+
+        if ($validationType === 'manual' && !empty($manualCode)) {
+            // Untuk manual validation, gunakan kode yang diinput admin
+            return $manualCode;
+        }
+
+        // Untuk auto validation atau manual tanpa kode, generate code baru
+        do {
+            $code = $prefix . '-' . strtoupper(bin2hex(random_bytes(3)));
+        } while (
+            \App\Models\Voucher::where('code', $code)->exists() ||
+            \App\Models\VoucherItem::where('code', $code)->exists() ||
+            \App\Models\Ad::where('code', $code)->exists()
+        );
+
+        return $code;
+    }
+
+    /**
      * Handle voucher sync untuk create/update ads
      */
     private function handleVoucherSync(Request $request, Ad $ad, $isUpdate = false)
@@ -118,20 +143,33 @@ class AdController extends Controller
         // Resolve owner info jika perlu
         $voucherSyncData = $this->resolveOwnerInfo($voucherSyncData);
 
-        // Generate code jika auto dan kosong
-        if (($voucherSyncData['validation_type'] ?? 'auto') === 'auto' && empty($voucherSyncData['code'])) {
-            $voucherSyncData['code'] = 'VCR-' . strtoupper(Str::random(8));
-        }
+        // ✅ PERBAIKAN: Generate code yang konsisten
+        $validationType = $voucherSyncData['validation_type'] ?? 'auto';
+        $manualCode = $voucherSyncData['code'] ?? null;
+
+        $consistentCode = $this->generateConsistentCode($validationType, $manualCode, 'VCR');
+        $voucherSyncData['code'] = $consistentCode;
+
+        // Update ads dengan kode yang sama untuk konsistensi
+        $ad->update(['code' => $consistentCode]);
 
         // Hapus field yang tidak ada di tabel vouchers
         unset($voucherSyncData['owner_user_id'], $voucherSyncData['cube_id']);
 
         // Pastikan required fields ada
         $voucherSyncData['type'] = $voucherSyncData['type'] ?? 'voucher';
-        $voucherSyncData['validation_type'] = $voucherSyncData['validation_type'] ?? 'auto';
+        $voucherSyncData['validation_type'] = $validationType;
 
         // Create voucher
-        Voucher::create($voucherSyncData);
+        $voucher = Voucher::create($voucherSyncData);
+
+        Log::info('✅ Voucher created with consistent code', [
+            'voucher_id' => $voucher->id,
+            'ad_id' => $ad->id,
+            'consistent_code' => $consistentCode
+        ]);
+
+        return $voucher;
     }
 
     /**
@@ -497,9 +535,9 @@ class AdController extends Controller
             }
         }
         /**
-         * * Create Voucher (Legacy - tetap support untuk backward compatibility)
+         * * Create Voucher (Legacy - HANYA untuk content_type voucher)
          */
-        elseif ($model->type === 'voucher') {
+        elseif ($request->input('content_type') === 'voucher' && $model->type === 'voucher') {
             try {
                 // Gunakan updateOrCreate agar aman dari duplikasi ad_id
                 Voucher::updateOrCreate(
@@ -516,6 +554,7 @@ class AdController extends Controller
                 Log::info('✅ Voucher auto-created from AdController (legacy)', [
                     'ad_id' => $model->id,
                     'title' => $model->title,
+                    'content_type' => $request->input('content_type'),
                 ]);
             } catch (\Throwable $th) {
                 Log::error('❌ Failed to auto-create voucher from ad', [
@@ -988,9 +1027,9 @@ class AdController extends Controller
             }
         }
         /**
-         * * Update/Create Voucher (Legacy - tetap support untuk backward compatibility)
+         * * Update/Create Voucher (Legacy - HANYA untuk content_type voucher)
          */
-        elseif ($model->type === 'voucher') {
+        elseif ($request->input('content_type') === 'voucher' && $model->type === 'voucher') {
             $voucher = Voucher::where('ad_id', $model->id)->first();
 
             if (!$voucher) {
@@ -1241,10 +1280,10 @@ class AdController extends Controller
                 $claimRequest->setUserResolver(function () use ($user) {
                     return $user;
                 });
-                
+
                 $promoResult = $promoItemController->store($claimRequest);
                 $promoData = $promoResult->getData(true);
-                
+
                 if (!$promoData['success']) {
                     DB::rollBack();
                     return response()->json($promoData, 422);

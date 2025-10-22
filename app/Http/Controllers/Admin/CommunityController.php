@@ -384,26 +384,45 @@ class CommunityController extends Controller
             $user = $request->user();
             $community = Community::findOrFail($id);
 
-            if (!$community->hasMember($user)) {
+            $membership = CommunityMembership::where('community_id', $community->id)
+                ->where('user_id', $user->id)
+                ->first();
+
+            if (!$membership) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Anda bukan anggota komunitas ini',
                 ], 422);
             }
 
-            $removed = $community->removeMember($user);
+            // Jika user sebelumnya hanya pending, anggap membatalkan permintaan
+            if ($membership->status === 'pending') {
+                $membership->update(['status' => 'removed']);
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Permintaan bergabung dibatalkan',
+                ]);
+            }
 
-            if ($removed) {
+            if ($membership->status === 'active') {
+                // Tandai sebagai keluar (biarkan row tetap ada)
+                $membership->update([
+                    'status' => 'left',
+                    // updated_at otomatis di-set; optional:
+                    // 'updated_at' => now(),
+                ]);
+
                 return response()->json([
                     'success' => true,
                     'message' => 'Berhasil keluar dari komunitas',
                 ]);
             }
 
+            // Sudah tidak aktif (left/removed), anggap idempotent
             return response()->json([
-                'success' => false,
-                'message' => 'Gagal keluar dari komunitas',
-            ], 500);
+                'success' => true,
+                'message' => 'Status anda sudah bukan anggota aktif',
+            ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,

@@ -35,5 +35,6 @@ class CubeType extends Model
         'cube_types.code',
         'cube_types.description',
         'cube_types.color',
+        'cube_types.created_at',
     ];
 }

@@ -1540,6 +1540,107 @@ class PromoController extends Controller
         }
     }
 
+    public function validationsIndex(Request $req)
+    {
+        try {
+            $promoCode = trim((string)$req->input('promo_code', ''));
+            if ($promoCode === '') {
+                return response()->json(['data' => [], 'total_row' => 0]);
+            }
+
+            $promo = Promo::where('code', $promoCode)->first();
+            if (!$promo) {
+                return response()->json(['data' => [], 'total_row' => 0]);
+            }
+
+            $page        = max((int)$req->input('page', 1), 1);
+            $paginate    = max((int)$req->input('paginate', 10), 1);
+            $search      = trim((string)$req->input('search', ''));
+            $sortBy      = $req->input('sortBy', 'validated_at');
+            $sortDirRaw  = strtolower($req->input('sortDirection', 'desc'));
+            $sortDir     = $sortDirRaw === 'asc' ? 'asc' : 'desc';
+
+            // base query: validator = relasi user()
+            $base = PromoValidation::query()
+                ->with(['user:id,name'])
+                ->where('promo_id', $promo->id);
+
+            if ($search !== '') {
+                $base->where(function ($w) use ($search) {
+                    $w->where('code', 'like', "%{$search}%")
+                        ->orWhereHas('user', fn($u) => $u->where('name', 'like', "%{$search}%"));
+                });
+            }
+
+            if (!in_array($sortBy, ['validated_at', 'code', 'user_id', 'id'], true)) {
+                $sortBy = 'validated_at';
+            }
+            $base->orderBy($sortBy, $sortDir);
+
+            // --- Ambil rows ---
+            $total = (clone $base)->count();
+
+            // Jika ada kolom promo_item_id → join promo_items utk ambil owner_id langsung
+            if (Schema::hasColumn('promo_validations', 'promo_item_id')) {
+                $rows = (clone $base)
+                    ->leftJoin('promo_items', 'promo_items.id', '=', 'promo_validations.promo_item_id')
+                    ->select('promo_validations.*', 'promo_items.user_id as owner_id')
+                    ->skip(($page - 1) * $paginate)
+                    ->take($paginate)
+                    ->get();
+            } else {
+                // Tanpa kolom promo_item_id → ambil rows dulu, parse notes untuk owner_id
+                $rows = (clone $base)
+                    ->skip(($page - 1) * $paginate)
+                    ->take($paginate)
+                    ->get();
+
+                $rows = $rows->map(function ($r) {
+                    $ownerId = null;
+                    if ($r->notes && preg_match('/owner_id:(\d+)/', $r->notes, $m)) {
+                        $ownerId = (int)$m[1];
+                    } else {
+                        // Fallback lemah: coba cari owner via promo_items (bisa sama2 code)
+                        $pi = \App\Models\PromoItem::where('promo_id', $r->promo_id)
+                            ->where('code', $r->code)
+                            ->latest('id')
+                            ->first();
+                        $ownerId = $pi?->user_id;
+                    }
+                    $r->owner_id = $ownerId;
+                    return $r;
+                });
+            }
+
+            // Ambil nama owner & validator
+            $ownerIds = $rows->pluck('owner_id')->filter()->unique()->values();
+            $owners   = $ownerIds->isNotEmpty()
+                ? \App\Models\User::whereIn('id', $ownerIds)->get(['id', 'name'])->keyBy('id')
+                : collect();
+
+            $data = $rows->map(function ($r) use ($owners) {
+                $owner = null;
+                if ($r->owner_id && isset($owners[$r->owner_id])) {
+                    $owner = ['id' => $r->owner_id, 'name' => $owners[$r->owner_id]->name];
+                }
+                return [
+                    'code'          => $r->code,                    // kode promo (bukan per-item)
+                    'validated_at'  => $r->validated_at,
+                    'user'          => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null, // validator (tenant)
+                    'owner'         => $owner,                      // pemilik/pengklaim (ini yang harus ditampilkan di kolom "Pengguna")
+                ];
+            });
+
+            return response()->json([
+                'data'      => $data,
+                'total_row' => $total,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('validationsIndex error: ' . $e->getMessage());
+            return response()->json(['data' => [], 'total_row' => 0], 200);
+        }
+    }
+
     public function userValidationHistory(Request $request)
     {
         try {

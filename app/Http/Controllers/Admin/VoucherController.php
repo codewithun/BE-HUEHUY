@@ -675,6 +675,108 @@ class VoucherController extends Controller
         }
     }
 
+    // === Tambahkan di VoucherController ===
+    public function validationsIndex(Request $req)
+    {
+        try {
+            $voucherCode = trim((string)$req->input('voucher_code', ''));
+            if ($voucherCode === '') {
+                return response()->json(['data' => [], 'total_row' => 0]);
+            }
+
+            $voucher = Voucher::where('code', $voucherCode)->first();
+            if (!$voucher) {
+                return response()->json(['data' => [], 'total_row' => 0]);
+            }
+
+            $page        = max((int)$req->input('page', 1), 1);
+            $paginate    = max((int)$req->input('paginate', 10), 1);
+            $search      = trim((string)$req->input('search', ''));
+            $sortBy      = $req->input('sortBy', 'validated_at');
+            $sortDirRaw  = strtolower($req->input('sortDirection', 'desc'));
+            $sortDir     = $sortDirRaw === 'asc' ? 'asc' : 'desc';
+
+            $base = VoucherValidation::query()
+                ->with(['user:id,name']) // validator (tenant)
+                ->where('voucher_id', $voucher->id);
+
+            if ($search !== '') {
+                $base->where(function ($w) use ($search) {
+                    $w->where('code', 'like', "%{$search}%")
+                        ->orWhereHas('user', fn($u) => $u->where('name', 'like', "%{$search}%"));
+                });
+            }
+
+            if (!in_array($sortBy, ['validated_at', 'code', 'user_id', 'id'], true)) {
+                $sortBy = 'validated_at';
+            }
+            $base->orderBy($sortBy, $sortDir);
+
+            $total = (clone $base)->count();
+
+            if (Schema::hasColumn('voucher_validations', 'voucher_item_id')) {
+                $rows = (clone $base)
+                    ->leftJoin('voucher_items', 'voucher_items.id', '=', 'voucher_validations.voucher_item_id')
+                    ->select('voucher_validations.*', 'voucher_items.user_id as owner_id', 'voucher_items.code as item_code')
+                    ->skip(($page - 1) * $paginate)
+                    ->take($paginate)
+                    ->get();
+            } else {
+                $rows = (clone $base)
+                    ->skip(($page - 1) * $paginate)
+                    ->take($paginate)
+                    ->get();
+
+                // derive owner_id & item_code dari notes / fallback
+                $rows = $rows->map(function ($r) {
+                    $ownerId = null;
+                    $itemCode = null;
+                    if ($r->notes) {
+                        if (preg_match('/owner_id:(\d+)/', $r->notes, $m)) $ownerId = (int)$m[1];
+                        if (preg_match('/item_code:([A-Za-z0-9\-]+)/', $r->notes, $m2)) $itemCode = $m2[1];
+                    }
+                    if (!$ownerId || !$itemCode) {
+                        $pi = \App\Models\VoucherItem::where('voucher_id', $r->voucher_id)
+                            ->where('code', $r->code)->latest('id')->first();
+                        $ownerId  = $ownerId ?: ($pi?->user_id);
+                        $itemCode = $itemCode ?: ($pi?->code);
+                    }
+                    $r->owner_id  = $ownerId;
+                    $r->item_code = $itemCode;
+                    return $r;
+                });
+            }
+
+            // collect owners
+            $ownerIds = $rows->pluck('owner_id')->filter()->unique()->values();
+            $owners   = $ownerIds->isNotEmpty()
+                ? \App\Models\User::whereIn('id', $ownerIds)->get(['id', 'name'])->keyBy('id')
+                : collect();
+
+            $data = $rows->map(function ($r) use ($owners, $voucher) {
+                $owner = null;
+                if ($r->owner_id && isset($owners[$r->owner_id])) {
+                    $owner = ['id' => $r->owner_id, 'name' => $owners[$r->owner_id]->name];
+                }
+                return [
+                    'validated_at' => $r->validated_at,
+                    'user'         => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null, // validator (tenant)
+                    'owner'        => $owner,                   // pemilik item (USER yang klaim)
+                    'code'         => $voucher->code,           // master voucher code (untuk tampilan)
+                    'item_code'    => $r->item_code ?? $r->code // kode unik item (kalau mau ditampilkan)
+                ];
+            });
+
+            return response()->json([
+                'data'      => $data,
+                'total_row' => $total,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('voucher validationsIndex error: ' . $e->getMessage());
+            return response()->json(['data' => [], 'total_row' => 0], 200);
+        }
+    }
+
     // ================= Update =================
     public function update(Request $request, string $id)
     {

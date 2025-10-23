@@ -319,6 +319,8 @@ Route::middleware('auth:sanctum')->group(function () {
      * =======================
      */
     Route::prefix('admin')->group(function () {
+        Route::get('/promo-validations', [\App\Http\Controllers\Admin\PromoController::class, 'validationsIndex']);
+        Route::get('/voucher-validations', [VoucherController::class, 'validationsIndex']);
         // === USERS (untuk MultiSelectDropdown admin contacts) ===
         // Contoh: /api/admin/users?only_admin_contacts=true&paginate=all
         // atau    /api/admin/users?roles[]=admin&roles[]=manager_tenant&paginate=all

@@ -83,42 +83,40 @@ class PromoItemController extends Controller
                 function ($attribute, $value, $fail) {
                     $existsInPromos = \App\Models\Promo::where('id', $value)->exists();
                     $existsInAds    = \App\Models\Ad::where('id', $value)->exists();
-                    if (! $existsInPromos && ! $existsInAds) {
+                    if (!$existsInPromos && !$existsInAds) {
                         $fail('The selected promo id is invalid.');
                     }
                 },
             ],
-            'user_id' => 'nullable|exists:users,id',
-            'code' => 'nullable|string|unique:promo_items,code',
-            'status' => 'nullable|in:available,reserved,redeemed,expired',
+            'user_id'    => 'nullable|exists:users,id',
+            'code'       => 'nullable|string|unique:promo_items,code',
+            'status'     => 'nullable|in:available,reserved,redeemed,expired',
             'expires_at' => 'nullable|date',
-            // optional: frontend can send claim boolean to indicate user is claiming the promo
-            'claim' => 'nullable|boolean',
+            'claim'      => 'nullable|boolean',
         ]);
 
         if ($validator->fails()) {
-            return response()->json(['success' => false, 'message' => 'Validation failed', 'errors' => $validator->errors()], 422);
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation failed',
+                'errors'  => $validator->errors()
+            ], 422);
         }
 
-        $data = $request->only(['promo_id', 'user_id', 'status', 'expires_at']);
-
-        // always prefer authenticated user as owner of a claimed item
+        $data       = $request->only(['promo_id', 'user_id', 'status', 'expires_at']);
         $authUserId = Auth::id();
         $data['user_id'] = $request->input('user_id', $authUserId);
 
-        // load promo/ad to decide code and status
+        // Muat promo / ad (tanpa lock dulu untuk routing logika)
         $promo = Promo::find($data['promo_id']);
-        $ad = null;
+        $ad    = null;
 
-        // If promo not found, try finding it as an Ad (since promos can be stored as ads)
         if (!$promo) {
             $ad = \App\Models\Ad::find($data['promo_id']);
             if ($ad) {
-                // Coba cari promo dengan kode sama
+                // Pastikan ada Promo sebagai FK (tetap gunakan logic kamu yang ada)
                 $existingPromo = \App\Models\Promo::where('code', $ad->code)->first();
-
                 if (!$existingPromo) {
-                    // Buat promo dummy agar FK valid
                     $newPromoId = DB::table('promos')->insertGetId([
                         'community_id'     => null,
                         'category_id'      => null,
@@ -127,19 +125,12 @@ class PromoItemController extends Controller
                         'description'      => $ad->description ?? '-',
                         'detail'           => null,
                         'promo_distance'   => 0,
-
                         'start_date'       => $ad->start_validate ?? now(),
                         'end_date'         => $ad->finish_validate ?? now()->addDays(7),
-
-                        // unlimited? set stock NULL (lebih aman untuk deteksi unlimited)
                         'always_available' => $ad->unlimited_grab ? 1 : 0,
                         'stock'            => $ad->unlimited_grab ? null : ($ad->max_grab ?? 0),
-
                         'promo_type'       => $ad->promo_type ?? 'offline',
-                        'validation_type'  => $ad->validation_type
-                            ?? (!empty($ad->qr_required) ? 'qr' : 'code'),
-
-                        // owner & kontak
+                        'validation_type'  => $ad->validation_type ?? 'auto',
                         'owner_name'       => $ad->owner_name
                             ?? optional($ad->cube)->owner_name
                             ?? optional($ad->cube?->user)->name
@@ -147,60 +138,24 @@ class PromoItemController extends Controller
                         'owner_contact'    => $ad->owner_contact
                             ?? optional($ad->cube?->user)->phone
                             ?? '-',
-
-                        // gambar: pilih yang tersedia
                         'image'            => $ad->picture_source
-                            ?? $ad->image_1
-                            ?? $ad->image_2
-                            ?? $ad->image_3
-                            ?? $ad->image
-                            ?? null,
+                            ?? $ad->image_1 ?? $ad->image_2 ?? $ad->image_3
+                            ?? $ad->image ?? null,
                         'image_updated_at' => now(),
-
                         'location'         => $ad->location ?? null,
                         'status'           => 'active',
                         'created_at'       => now(),
                         'updated_at'       => now(),
                     ]);
-
                     $promo = \App\Models\Promo::find($newPromoId);
                 } else {
                     $promo = $existingPromo;
                 }
-
-                // Pastikan FK promo_id selalu ke tabel promos
                 $data['promo_id'] = $promo->id;
             }
         }
 
-        // 🚧 Jika promo_id merujuk ke Ad (bukan Promo) → buat promo dummy agar FK aman
-        if (!$promo && $ad) {
-            $existingPromo = Promo::where('code', $ad->code)->first();
-            if (!$existingPromo) {
-                $newPromoId = DB::table('promos')->insertGetId([
-                    'code'             => $ad->code ?? strtoupper('PRM-' . Str::random(6)),
-                    'title'            => $ad->title ?? 'Auto from Ad',
-                    'description'      => $ad->description ?? '-',
-                    'promo_type'       => $ad->promo_type ?? 'offline',
-                    'validation_type'  => 'auto',
-                    'status'           => 'active',
-                    'always_available' => $ad->unlimited_grab ? 1 : 0,
-                    'start_date'       => $ad->start_validate ?? now(),
-                    'end_date'         => $ad->finish_validate ?? now()->addDays(7),
-                    'stock'            => $ad->max_grab ?? 0,
-                    'created_at'       => now(),
-                    'updated_at'       => now(),
-                ]);
-                $promo = Promo::find($newPromoId);
-            } else {
-                $promo = $existingPromo;
-            }
-
-            // pastikan promo_id mengarah ke record promos baru
-            $data['promo_id'] = $promo->id;
-        }
-
-        // determine promo active state
+        // Hitung aktif/tidak (seperti semula)
         $isActive = false;
         if ($promo) {
             $now = Carbon::now();
@@ -208,39 +163,29 @@ class PromoItemController extends Controller
                 $isActive = true;
             } else {
                 $start = $promo->start_date ? Carbon::parse($promo->start_date) : null;
-                $end = $promo->end_date ? Carbon::parse($promo->end_date) : null;
-
-                if ($start && $end) {
-                    $isActive = $now->between($start, $end);
-                } elseif ($start && ! $end) {
-                    $isActive = $now->greaterThanOrEqualTo($start);
-                } elseif (! $start && $end) {
-                    $isActive = $now->lessThanOrEqualTo($end);
-                } else {
-                    $isActive = true;
-                }
+                $end   = $promo->end_date ? Carbon::parse($promo->end_date) : null;
+                if ($start && $end)        $isActive = $now->between($start, $end);
+                elseif ($start && !$end)   $isActive = $now->greaterThanOrEqualTo($start);
+                elseif (!$start && $end)   $isActive = $now->lessThanOrEqualTo($end);
+                else                       $isActive = true;
             }
         }
 
-        // Decide final item status later inside transaction
         $requestedStatus = $request->input('status');
-        $isClaimAction = $request->boolean('claim');
+        $isClaimAction   = $request->boolean('claim');
 
-        // set expires_at default from promo end_date if not provided
         if (empty($data['expires_at']) && $promo && $promo->end_date) {
             $data['expires_at'] = $promo->end_date;
         }
 
-        // Use promo.code from database instead of always generating
+        // Penentuan kode item (tetap seperti logic kamu)
         if ($promo && !empty($promo->code)) {
             $baseCode = (string) $promo->code;
             $code = $baseCode;
-
             $suffix = 1;
             while (PromoItem::where('code', $code)->exists()) {
                 $code = $baseCode . '-' . $suffix++;
             }
-
             $data['code'] = $code;
         } else {
             $data['code'] = strtoupper('PMI-' . Str::random(8));
@@ -249,89 +194,137 @@ class PromoItemController extends Controller
             }
         }
 
-        // Cegah user claim promo yg sama > 1x
-        if ($isClaimAction && $authUserId && !empty($data['promo_id'])) {
-            $already = PromoItem::where('promo_id', $data['promo_id'])
+        // === TRANSAKSI ATOMIK + LOCK ===
+        $result = DB::transaction(function () use ($promo, $ad, $requestedStatus, $isClaimAction, $authUserId, &$data, $isActive) {
+
+            // 🔒 Lock baris stok
+            $lockedPromo = null;
+            $lockedAd    = null;
+
+            if ($promo) {
+                $lockedPromo = \App\Models\Promo::where('id', $promo->id)->lockForUpdate()->first();
+                if (!$lockedPromo) {
+                    return ['ok' => false, 'reason' => 'Promo tidak ditemukan'];
+                }
+                // re-check expired di dalam lock
+                if (!empty($lockedPromo->end_date) && now()->greaterThan($lockedPromo->end_date)) {
+                    return ['ok' => false, 'reason' => 'Promo kedaluwarsa'];
+                }
+            } elseif ($ad) {
+                $lockedAd = \App\Models\Ad::where('id', $ad->id)->lockForUpdate()->first();
+                if (!$lockedAd) {
+                    return ['ok' => false, 'reason' => 'Promo tidak ditemukan'];
+                }
+                // catatan: ad tidak punya end_date standar; lewati atau tambahkan jika perlu
+            } else {
+                return ['ok' => false, 'reason' => 'Promo tidak ditemukan'];
+            }
+
+            // ✅ Idempotensi: cek existing item user ini untuk promo ini
+            $existing = PromoItem::where('promo_id', $data['promo_id'])
                 ->where('user_id', $authUserId)
                 ->whereIn('status', ['available', 'reserved', 'redeemed'])
-                ->exists();
+                ->first();
 
-            if ($already) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Promo ini sudah pernah Anda rebut.',
-                ], 409);
+            if ($existing) {
+                return [
+                    'ok' => true,
+                    'already' => true,
+                    'item' => $existing,
+                    'stock_remaining' => $lockedPromo?->stock
+                ];
             }
-        }
 
-        $result = DB::transaction(function () use ($promo, &$ad, $requestedStatus, $isClaimAction, $authUserId, &$data, $isActive) {
+            // Tentukan apakah perlu kurangi stok (claim atau langsung redeemed)
+            $needsStock = false;
+            $makeRedeemed = false;
+
             if ($requestedStatus === 'redeemed') {
-                // redeem saat create -> kurangi stok jika dikelola
-                if ($promo && !is_null($promo->stock) && empty(optional($promo)->unlimited_grab)) {
-                    // Try to decrement from Promo table first
-                    $affected = 0;
-                    if (isset($promo->id) && \App\Models\Promo::where('id', $promo->id)->exists()) {
-                        $affected = \App\Models\Promo::where('id', $promo->id)
-                            ->where('stock', '>', 0)
-                            ->decrement('stock');
-                    }
-
-                    // If no Promo record, try Ad table
-                    if ($affected === 0 && $ad && !$ad->unlimited_grab) {
-                        $affected = \App\Models\Ad::where('id', $ad->id)
-                            ->where('max_grab', '>', 0)
-                            ->decrement('max_grab');
-                    }
-
-                    if ($affected === 0) {
-                        return ['ok' => false, 'reason' => 'Stok promo habis'];
-                    }
-                }
-                $data['status'] = 'redeemed';
-                $data['redeemed_at'] = Carbon::now();
-                if ($authUserId) {
-                    $data['user_id'] = $authUserId;
-                }
+                $needsStock   = true;
+                $makeRedeemed = true;
             } elseif ($isClaimAction && $authUserId) {
-                // treat as a claim action coming from FE (e.g. { claim: true })
-                // Kurangi stok promo saat di-claim (reserved)
-                if ($promo && !is_null($promo->stock) && empty(optional($promo)->unlimited_grab)) {
-                    // Try to decrement from Promo table first
-                    $affected = 0;
-                    if (isset($promo->id) && \App\Models\Promo::where('id', $promo->id)->exists()) {
-                        $affected = \App\Models\Promo::where('id', $promo->id)
-                            ->where('stock', '>', 0)
-                            ->decrement('stock');
-                    }
-
-                    // If no Promo record, try Ad table
-                    if ($affected === 0 && $ad && !$ad->unlimited_grab) {
-                        $affected = \App\Models\Ad::where('id', $ad->id)
-                            ->where('max_grab', '>', 0)
-                            ->decrement('max_grab');
-                    }
-
-                    if ($affected === 0) {
-                        return ['ok' => false, 'reason' => 'Stok promo habis'];
-                    }
-                }
-                $data['status'] = 'reserved';
-                $data['reserved_at'] = Carbon::now();
-                $data['user_id'] = $authUserId;
+                $needsStock   = true;
+                $makeRedeemed = false; // reserved (klaim)
             } else {
-                // ignore frontend-sent 'reserved' to avoid accidental reserved state
-                $data['status'] = $isActive ? 'available' : 'expired';
+                // bukan claim & bukan redeem → available/expired sesuai aktif
+                $needsStock   = false;
+                $makeRedeemed = false;
+            }
+
+            // Kurangi stok di bawah lock
+            if ($needsStock) {
+                $affected = 0;
+                if ($lockedPromo && !is_null($lockedPromo->stock)) {
+                    $affected = \App\Models\Promo::where('id', $lockedPromo->id)
+                        ->where('stock', '>', 0)
+                        ->decrement('stock');
+                    $lockedPromo->refresh();
+                } elseif ($lockedAd && !$lockedAd->unlimited_grab) {
+                    $affected = \App\Models\Ad::where('id', $lockedAd->id)
+                        ->where('max_grab', '>', 0)
+                        ->decrement('max_grab');
+                    $lockedAd->refresh();
+                }
+                if ($affected === 0 && (($lockedPromo && !is_null($lockedPromo->stock)) || ($lockedAd && !$lockedAd->unlimited_grab))) {
+                    return ['ok' => false, 'reason' => 'Stok promo habis'];
+                }
+            }
+
+            // Final status item
+            if ($makeRedeemed) {
+                $data['status']      = 'redeemed';
+                $data['redeemed_at'] = Carbon::now();
+                $data['user_id']     = $authUserId ?: $data['user_id'];
+            } elseif ($isClaimAction && $authUserId) {
+                $data['status']      = 'reserved';
+                $data['reserved_at'] = Carbon::now();
+                $data['user_id']     = $authUserId;
+            } else {
+                $data['status']      = $isActive ? 'available' : 'expired';
             }
 
             $item = PromoItem::create($data);
-            return ['ok' => true, 'item' => $item];
-        });
+
+            return [
+                'ok' => true,
+                'already' => false,
+                'item' => $item,
+                'stock_remaining' => $lockedPromo?->stock
+            ];
+        }, 3);
 
         if (!$result['ok']) {
-            return response()->json(['success' => false, 'message' => $result['reason'] ?? 'Stok promo habis'], 409);
+            return response()->json([
+                'success' => false,
+                'message' => $result['reason'] ?? 'Stok promo habis'
+            ], 409);
         }
 
-        return response()->json(['success' => true, 'data' => $result['item']], 201);
+        // Sudah pernah direbut (idempotent)
+        if (!empty($result['already'])) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Sudah direbut',
+                'data' => [
+                    'promo_item_id'   => $result['item']->id,
+                    'already_claimed' => true,
+                    'stock_remaining' => $result['stock_remaining'] ?? null,
+                ]
+            ], 200);
+        }
+
+        // Klaim/redeem baru
+        return response()->json([
+            'success' => true,
+            'message' => $request->input('status') === 'redeemed'
+                ? 'Redeem berhasil'
+                : ($request->boolean('claim') ? 'Klaim berhasil' : 'Item dibuat'),
+            'data' => [
+                'promo_item_id'   => $result['item']->id,
+                'already_claimed' => false,
+                'stock_remaining' => $result['stock_remaining'] ?? null,
+            ]
+        ], 201);
     }
 
     public function storeForPromo(Request $request, $promoId)

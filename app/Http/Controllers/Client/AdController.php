@@ -297,7 +297,7 @@ class AdController extends Controller
 
     public function getCubeByCodeGeneral(Request $request, $code)
     {
-        $query = Cube::with('ads', 'tags', 'ads.ad_category', 'cube_type', 'user', 'corporate')
+        $query = Cube::with('ads', 'tags', 'ads.ad_category', 'cube_type', 'user', 'corporate', 'opening_hours')
             ->select(['cubes.*'])
             ->where('cubes.status', 'active')
             ->where('code', $code)

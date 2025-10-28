@@ -71,6 +71,14 @@ class ChatController extends Controller
 
         $sender = Auth::user();
 
+        if ($request->receiver_id && $request->receiver_id == $sender->id) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Tidak bisa mengirim pesan ke diri sendiri.',
+            ], 422);
+        }
+
+
         DB::beginTransaction();
         try {
             if ($request->chat_id) {
@@ -154,12 +162,19 @@ class ChatController extends Controller
             'corporate_id'  => 'nullable|integer',
         ]);
 
-        $me          = $request->user();
-        $partnerId   = (int) $request->receiver_id;
+        $me = $request->user();
+        $partnerId = (int) $request->receiver_id;
         $communityId = $request->community_id;
         $corporateId = $request->corporate_id;
 
-        // cari chat dua arah dalam scope community/corporate yang sama
+        // 🚫 Cegah self-chat
+        if ($partnerId === $me->id) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Tidak bisa mengirim pesan ke diri sendiri.',
+            ], 422);
+        }
+
         $chat = Chat::where(function ($q) use ($me, $partnerId) {
             $q->where('sender_id', $me->id)->where('receiver_id', $partnerId);
         })
@@ -183,30 +198,62 @@ class ChatController extends Controller
         return response()->json(['success' => true, 'chat' => $chat]);
     }
 
+
     public function chatRooms(Request $request)
     {
         $user = $request->user();
 
-        $chats = Chat::with([
+        $partnerId   = $request->query('partner_id');     // id user lawan bicara yang ingin difilter
+        $communityId = $request->query('community_id');   // optional
+        $corporateId = $request->query('corporate_id');   // optional
+
+        $query = Chat::with([
             'sender:id,name,picture_source',
             'receiver:id,name,picture_source',
             'messages' => fn($q) => $q->latest()->limit(1)
-        ])
-            ->where(function ($q) use ($user) {
-                $q->where('sender_id', $user->id)
-                    ->orWhere('receiver_id', $user->id);
-            })
-            ->orderByDesc('updated_at')
+        ]);
+
+        // hanya chat yang melibatkan user login
+        $query->where(function ($q) use ($user) {
+            $q->where('sender_id', $user->id)
+                ->orWhere('receiver_id', $user->id);
+        });
+
+        // 🔥 PERBAIKAN: Hanya tampilkan chat dengan aktivitas dari kedua pihak
+        // Chat baru dibuat tapi belum ada balasan TIDAK akan muncul
+        $query->whereHas('messages', function ($q) use ($user) {
+            $q->where('sender_id', '!=', $user->id);
+        });
+
+        // filter partner tertentu (hanya chat dengan A)
+        if (!empty($partnerId)) {
+            $query->where(function ($q) use ($user, $partnerId) {
+                $q->where(function ($q) use ($user, $partnerId) {
+                    $q->where('sender_id', $user->id)->where('receiver_id', $partnerId);
+                })->orWhere(function ($q) use ($user, $partnerId) {
+                    $q->where('sender_id', $partnerId)->where('receiver_id', $user->id);
+                });
+            });
+        }
+
+        // filter konteks (jika dipakai)
+        if ($communityId !== null && $communityId !== '') {
+            $query->where('community_id', $communityId);
+        }
+        if ($corporateId !== null && $corporateId !== '') {
+            $query->where('corporate_id', $corporateId);
+        }
+
+        $chats = $query->orderByDesc('updated_at')
             ->get()
             ->map(function ($chat) use ($user) {
                 $last = $chat->messages->first();
 
-                // tentukan siapa lawan bicara
-                $partner = $chat->sender_id === $user->id
-                    ? $chat->receiver
-                    : $chat->sender;
+                $partner = $chat->sender_id === $user->id ? $chat->receiver : $chat->sender;
+                if (!$partner || $partner->id === $user->id) {
+                    return null;
+                }
 
-                // 🔥 hitung jumlah pesan yang belum dibaca
                 $unreadCount = ChatMessage::where('chat_id', $chat->id)
                     ->where('sender_id', '!=', $user->id)
                     ->where('is_read', false)
@@ -221,13 +268,14 @@ class ChatController extends Controller
                     ],
                     'last_message' => $last?->message ?? '(belum ada pesan)',
                     'created_at' => $last?->created_at,
-                    'unread_count' => $unreadCount, // 👈 FE butuh ini
+                    'unread_count' => $unreadCount,
                 ];
-            });
+            })
+            ->filter();
 
         return response()->json([
             'success' => true,
-            'data' => $chats,
+            'data' => $chats->values(),
         ]);
     }
 }

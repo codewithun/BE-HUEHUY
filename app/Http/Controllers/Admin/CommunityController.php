@@ -540,6 +540,56 @@ class CommunityController extends Controller
     }
 
     /**
+     * POST /api/admin/communities/{id}/members
+     * Tambahkan anggota baru ke komunitas oleh admin.
+     */
+    public function adminAddMember(Request $request, $id)
+    {
+        $community = Community::findOrFail($id);
+
+        $validated = $request->validate([
+            'user_identifier' => 'required|string',
+        ]);
+
+        // Bisa pakai ID atau Email
+        $user = User::where('email', $validated['user_identifier'])
+            ->orWhere('id', $validated['user_identifier'])
+            ->first();
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User tidak ditemukan',
+            ], 404);
+        }
+
+        $membership = CommunityMembership::updateOrCreate(
+            [
+                'community_id' => $community->id,
+                'user_id' => $user->id,
+            ],
+            [
+                'status' => 'active',
+                'joined_at' => now(),
+            ]
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Anggota berhasil ditambahkan',
+            'data' => [
+                'user' => [
+                    'id' => $user->id,
+                    'name' => $user->name,
+                    'email' => $user->email,
+                ],
+                'membership' => $membership,
+            ],
+        ], 201);
+    }
+
+
+    /**
      * GET /api/communities/{id}/members
      */
     public function publicMembers(Request $request, $id)

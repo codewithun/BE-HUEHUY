@@ -338,6 +338,8 @@ Route::middleware('auth:sanctum')->group(function () {
         // +++ NEW: ADMIN remove specific member from community +++
         Route::delete('/communities/{community}/members/{user}', [CommunityController::class, 'adminRemoveMember'])
             ->whereNumber(['community', 'user']);
+        Route::post('/communities/{community}/members', [CommunityController::class, 'adminAddMember']);
+
 
 
         // +++ NEW: ADMIN member requests management +++

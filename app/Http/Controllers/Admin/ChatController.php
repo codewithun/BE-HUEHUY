@@ -83,14 +83,14 @@ class ChatController extends Controller
 
                 // cari chat dua arah dalam scope community/corporate
                 $chat = Chat::where(function ($q) use ($sender, $partnerId) {
-                            $q->where('sender_id', $sender->id)->where('receiver_id', $partnerId);
-                        })
-                        ->orWhere(function ($q) use ($sender, $partnerId) {
-                            $q->where('sender_id', $partnerId)->where('receiver_id', $sender->id);
-                        })
-                        ->where('community_id', $request->community_id)
-                        ->where('corporate_id', $request->corporate_id)
-                        ->first();
+                    $q->where('sender_id', $sender->id)->where('receiver_id', $partnerId);
+                })
+                    ->orWhere(function ($q) use ($sender, $partnerId) {
+                        $q->where('sender_id', $partnerId)->where('receiver_id', $sender->id);
+                    })
+                    ->where('community_id', $request->community_id)
+                    ->where('corporate_id', $request->corporate_id)
+                    ->first();
 
                 if (!$chat) {
                     $chat = Chat::create([
@@ -161,14 +161,14 @@ class ChatController extends Controller
 
         // cari chat dua arah dalam scope community/corporate yang sama
         $chat = Chat::where(function ($q) use ($me, $partnerId) {
-                    $q->where('sender_id', $me->id)->where('receiver_id', $partnerId);
-                })
-                ->orWhere(function ($q) use ($me, $partnerId) {
-                    $q->where('sender_id', $partnerId)->where('receiver_id', $me->id);
-                })
-                ->where('community_id', $communityId)
-                ->where('corporate_id', $corporateId)
-                ->first();
+            $q->where('sender_id', $me->id)->where('receiver_id', $partnerId);
+        })
+            ->orWhere(function ($q) use ($me, $partnerId) {
+                $q->where('sender_id', $partnerId)->where('receiver_id', $me->id);
+            })
+            ->where('community_id', $communityId)
+            ->where('corporate_id', $corporateId)
+            ->first();
 
         if (!$chat) {
             $chat = Chat::create([
@@ -201,9 +201,16 @@ class ChatController extends Controller
             ->map(function ($chat) use ($user) {
                 $last = $chat->messages->first();
 
+                // tentukan siapa lawan bicara
                 $partner = $chat->sender_id === $user->id
                     ? $chat->receiver
                     : $chat->sender;
+
+                // 🔥 hitung jumlah pesan yang belum dibaca
+                $unreadCount = ChatMessage::where('chat_id', $chat->id)
+                    ->where('sender_id', '!=', $user->id)
+                    ->where('is_read', false)
+                    ->count();
 
                 return [
                     'id' => $chat->id,
@@ -214,9 +221,13 @@ class ChatController extends Controller
                     ],
                     'last_message' => $last?->message ?? '(belum ada pesan)',
                     'created_at' => $last?->created_at,
+                    'unread_count' => $unreadCount, // 👈 FE butuh ini
                 ];
             });
 
-        return response()->json(['success' => true, 'data' => $chats]);
+        return response()->json([
+            'success' => true,
+            'data' => $chats,
+        ]);
     }
 }

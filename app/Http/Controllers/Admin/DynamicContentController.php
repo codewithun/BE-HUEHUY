@@ -32,7 +32,20 @@ class DynamicContentController extends Controller
 
         // ? Begin
         $model = new DynamicContent();
-        $query = DynamicContent::with('dynamic_content_cubes', 'dynamic_content_cubes.cube', 'dynamic_content_cubes.cube.cube_type', 'dynamic_content_cubes.cube.ads', 'ad_category');
+        $query = DynamicContent::with([
+            'dynamic_content_cubes', 
+            'dynamic_content_cubes.cube', 
+            'dynamic_content_cubes.cube.cube_type', 
+            'dynamic_content_cubes.cube.ads' => function($query) {
+                $query->where('status', 'active');
+            },
+            'dynamic_content_cubes.cube.ads.ad_category',
+            'dynamic_content_cubes.cube.tags',
+            'dynamic_content_cubes.cube.user',
+            'dynamic_content_cubes.cube.corporate',
+            'dynamic_content_cubes.cube.opening_hours',
+            'ad_category'
+        ]);
 
         // ? When search
         if ($request->get("search") != "") {

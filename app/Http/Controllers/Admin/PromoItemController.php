@@ -9,8 +9,8 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
-use App\Models\Promo; // added
-use Illuminate\Support\Facades\DB; // added
+use App\Models\Promo;
+use Illuminate\Support\Facades\DB;
 
 class PromoItemController extends Controller
 {
@@ -24,24 +24,53 @@ class PromoItemController extends Controller
             'user'
         ]);
 
-        // Filter berdasarkan user_scope untuk API frontend
-        if ($request->has('user_scope') && $request->boolean('user_scope')) {
+
+        $hasPromoScope = $request->filled('promo_id') || $request->filled('promo_code');
+
+
+        if ($request->boolean('user_scope')) {
+
             $query->where('user_id', Auth::id());
-        } else {
-            // Untuk admin, tampilkan semua atau filter berdasarkan user_id jika ada
-            if ($request->has('user_id')) {
-                $query->where('user_id', $request->input('user_id'));
-            } else {
-                // Untuk keamanan, selalu tampilkan milik user sendiri jika bukan admin request
-                $query->where('user_id', Auth::id());
-            }
+        } elseif ($request->filled('user_id')) {
+
+            $query->where('user_id', $request->input('user_id'));
+        } elseif (!$hasPromoScope) {
+
+            $query->where('user_id', Auth::id());
         }
 
-        if ($request->has('promo_id')) {
+
+
+        if ($request->filled('promo_id')) {
             $query->where('promo_id', $request->input('promo_id'));
         }
 
-        if ($request->has('status')) {
+        if ($request->filled('promo_code')) {
+            $code = trim((string) $request->input('promo_code'));
+            $query->where(function ($q) use ($code) {
+                $q->whereHas('promo', function ($qp) use ($code) {
+                    $qp->where('code', $code);
+                })
+                    ->orWhere('code', $code)
+                    ->orWhere('code', 'like', $code . '-%');
+            });
+        }
+
+
+        if ($request->filled('validation_type_filter')) {
+            $filterType = $request->input('validation_type_filter');
+            if ($filterType === 'qr_only') {
+                $query->whereHas('promo', function ($q) {
+                    $q->where('validation_type', 'auto');
+                });
+            } elseif ($filterType === 'manual_only') {
+                $query->whereHas('promo', function ($q) {
+                    $q->where('validation_type', 'manual');
+                });
+            }
+        }
+
+        if ($request->filled('status')) {
             $query->where('status', $request->input('status'));
         }
 
@@ -76,7 +105,7 @@ class PromoItemController extends Controller
     public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            // Terima id dari promos ATAU ads
+
             'promo_id' => [
                 'required',
                 'integer',
@@ -107,14 +136,14 @@ class PromoItemController extends Controller
         $authUserId = Auth::id();
         $data['user_id'] = $request->input('user_id', $authUserId);
 
-        // Muat promo / ad (tanpa lock dulu untuk routing logika)
+
         $promo = Promo::find($data['promo_id']);
         $ad    = null;
 
         if (!$promo) {
             $ad = \App\Models\Ad::find($data['promo_id']);
             if ($ad) {
-                // Pastikan ada Promo sebagai FK (tetap gunakan logic kamu yang ada)
+
                 $existingPromo = \App\Models\Promo::where('code', $ad->code)->first();
                 if (!$existingPromo) {
                     $newPromoId = DB::table('promos')->insertGetId([
@@ -155,7 +184,7 @@ class PromoItemController extends Controller
             }
         }
 
-        // Hitung aktif/tidak (seperti semula)
+
         $isActive = false;
         if ($promo) {
             $now = Carbon::now();
@@ -178,7 +207,7 @@ class PromoItemController extends Controller
             $data['expires_at'] = $promo->end_date;
         }
 
-        // Penentuan kode item (tetap seperti logic kamu)
+
         if ($promo && !empty($promo->code)) {
             $baseCode = (string) $promo->code;
             $code = $baseCode;
@@ -194,10 +223,10 @@ class PromoItemController extends Controller
             }
         }
 
-        // === TRANSAKSI ATOMIK + LOCK ===
+
         $result = DB::transaction(function () use ($promo, $ad, $requestedStatus, $isClaimAction, $authUserId, &$data, $isActive) {
 
-            // 🔒 Lock baris stok
+
             $lockedPromo = null;
             $lockedAd    = null;
 
@@ -206,7 +235,7 @@ class PromoItemController extends Controller
                 if (!$lockedPromo) {
                     return ['ok' => false, 'reason' => 'Promo tidak ditemukan'];
                 }
-                // re-check expired di dalam lock
+
                 if (!empty($lockedPromo->end_date) && now()->greaterThan($lockedPromo->end_date)) {
                     return ['ok' => false, 'reason' => 'Promo kedaluwarsa'];
                 }
@@ -215,12 +244,11 @@ class PromoItemController extends Controller
                 if (!$lockedAd) {
                     return ['ok' => false, 'reason' => 'Promo tidak ditemukan'];
                 }
-                // catatan: ad tidak punya end_date standar; lewati atau tambahkan jika perlu
             } else {
                 return ['ok' => false, 'reason' => 'Promo tidak ditemukan'];
             }
 
-            // ✅ Idempotensi: cek existing item user ini untuk promo ini
+
             $existing = PromoItem::where('promo_id', $data['promo_id'])
                 ->where('user_id', $authUserId)
                 ->whereIn('status', ['available', 'reserved', 'redeemed'])
@@ -235,7 +263,7 @@ class PromoItemController extends Controller
                 ];
             }
 
-            // Tentukan apakah perlu kurangi stok (claim atau langsung redeemed)
+
             $needsStock = false;
             $makeRedeemed = false;
 
@@ -244,33 +272,54 @@ class PromoItemController extends Controller
                 $makeRedeemed = true;
             } elseif ($isClaimAction && $authUserId) {
                 $needsStock   = true;
-                $makeRedeemed = false; // reserved (klaim)
+                $makeRedeemed = false;
             } else {
-                // bukan claim & bukan redeem → available/expired sesuai aktif
+
                 $needsStock   = false;
                 $makeRedeemed = false;
             }
 
-            // Kurangi stok di bawah lock
+
             if ($needsStock) {
                 $affected = 0;
+
                 if ($lockedPromo && !is_null($lockedPromo->stock)) {
+
                     $affected = \App\Models\Promo::where('id', $lockedPromo->id)
                         ->where('stock', '>', 0)
                         ->decrement('stock');
                     $lockedPromo->refresh();
-                } elseif ($lockedAd && !$lockedAd->unlimited_grab) {
-                    $affected = \App\Models\Ad::where('id', $lockedAd->id)
-                        ->where('max_grab', '>', 0)
-                        ->decrement('max_grab');
-                    $lockedAd->refresh();
+                } else {
+
+
+
+                    if (!$lockedAd) {
+                        $adByCode = \App\Models\Ad::where('code', $lockedPromo?->code)
+                            ->lockForUpdate()
+                            ->first();
+                        if ($adByCode) {
+                            $lockedAd = $adByCode;
+                        }
+                    }
+
+                    if ($lockedAd && !$lockedAd->unlimited_grab) {
+                        $affected = \App\Models\Ad::where('id', $lockedAd->id)
+                            ->where('max_grab', '>', 0)
+                            ->decrement('max_grab');
+                        $lockedAd->refresh();
+                    }
                 }
-                if ($affected === 0 && (($lockedPromo && !is_null($lockedPromo->stock)) || ($lockedAd && !$lockedAd->unlimited_grab))) {
+
+
+                if ($affected === 0 && (
+                    ($lockedPromo && !is_null($lockedPromo->stock)) ||
+                    ($lockedAd && !$lockedAd->unlimited_grab)
+                )) {
                     return ['ok' => false, 'reason' => 'Stok promo habis'];
                 }
             }
 
-            // Final status item
+
             if ($makeRedeemed) {
                 $data['status']      = 'redeemed';
                 $data['redeemed_at'] = Carbon::now();
@@ -300,7 +349,7 @@ class PromoItemController extends Controller
             ], 409);
         }
 
-        // Sudah pernah direbut (idempotent)
+
         if (!empty($result['already'])) {
             return response()->json([
                 'success' => true,
@@ -313,7 +362,7 @@ class PromoItemController extends Controller
             ], 200);
         }
 
-        // Klaim/redeem baru
+
         return response()->json([
             'success' => true,
             'message' => $request->input('status') === 'redeemed'
@@ -353,7 +402,7 @@ class PromoItemController extends Controller
 
         $data = $request->only(['user_id', 'code', 'status', 'expires_at']);
 
-        // ensure code stays unique if provided empty -> keep old
+
         if (! $request->filled('code')) {
             unset($data['code']);
         }
@@ -389,7 +438,7 @@ class PromoItemController extends Controller
             return response()->json(['success' => false, 'message' => 'Promo item sudah ditukarkan'], 409);
         }
 
-        // Wajib kirim kode unik, tapi jangan pernah bocorkan nilainya
+
         $validator = Validator::make($request->all(), [
             'user_id' => 'nullable|exists:users,id',
             'code'    => 'required|string',
@@ -406,7 +455,7 @@ class PromoItemController extends Controller
             ], 422);
         }
 
-        // Cek kecocokan kode unik terhadap QR milik item (pesan generic)
+
         $inputCode = trim((string) $request->input('code'));
 
         if (!hash_equals((string) $item->code, $inputCode)) {
@@ -419,26 +468,26 @@ class PromoItemController extends Controller
         $promo = Promo::find($item->promo_id);
         $ad = null;
 
-        // If promo not found, try finding it as an Ad
+
         if (!$promo) {
             $ad = \App\Models\Ad::find($item->promo_id);
         }
 
         $result = DB::transaction(function () use ($request, &$item, $promo, &$ad) {
-            // Only reduce stock if the item wasn't already reserved (to prevent double reduction)
+
             $shouldReduceStock = $item->status !== 'reserved';
 
             if ($shouldReduceStock) {
                 $affected = 0;
 
-                // Try Promo table first
+
                 if ($promo && !is_null($promo->stock)) {
                     $affected = \App\Models\Promo::where('id', $promo->id)
                         ->where('stock', '>', 0)
                         ->decrement('stock');
                 }
 
-                // If no Promo record or no stock affected, try Ad table
+
                 if ($affected === 0 && $ad && !$ad->unlimited_grab) {
                     $affected = \App\Models\Ad::where('id', $ad->id)
                         ->where('max_grab', '>', 0)
@@ -482,14 +531,14 @@ class PromoItemController extends Controller
             return response()->json(['success' => false, 'message' => 'Validation failed', 'errors' => $validator->errors()], 422);
         }
 
-        // Merge promo_id dan set claim=true
+
         $request->merge([
             'promo_id' => $promoId,
             'claim' => true,
             'user_id' => Auth::id()
         ]);
 
-        // Gunakan method store yang sudah ada
+
         return $this->store($request);
     }
 
@@ -499,15 +548,15 @@ class PromoItemController extends Controller
      */
     public function claimDirect(Request $request)
     {
-        // Pastikan ada promo_id dan claim=true
+
         if (!$request->has('promo_id') || !$request->boolean('claim')) {
             return response()->json(['success' => false, 'message' => 'Missing promo_id or claim flag'], 422);
         }
 
-        // Set user_id ke authenticated user
+
         $request->merge(['user_id' => Auth::id()]);
 
-        // Gunakan method store yang sudah ada
+
         return $this->store($request);
     }
 }

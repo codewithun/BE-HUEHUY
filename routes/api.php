@@ -319,6 +319,7 @@ Route::middleware('auth:sanctum')->group(function () {
      * =======================
      */
     Route::prefix('admin')->group(function () {
+        Route::get('/voucher-items', [\App\Http\Controllers\Admin\VoucherItemController::class, 'index']);
         Route::get('/promo-validations', [\App\Http\Controllers\Admin\PromoController::class, 'validationsIndex']);
         Route::get('/voucher-validations', [VoucherController::class, 'validationsIndex']);
         // === USERS (untuk MultiSelectDropdown admin contacts) ===

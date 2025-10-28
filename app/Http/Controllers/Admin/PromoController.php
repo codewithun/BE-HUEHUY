@@ -7,7 +7,7 @@ use App\Models\Promo;
 use App\Models\PromoItem;
 use App\Models\PromoValidation;
 use App\Models\Community;
-use App\Models\User; // ambil data manager merchant
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
@@ -22,49 +22,41 @@ use Illuminate\Support\Str;
 class PromoController extends Controller
 {
 
-    /** Normalisasi nomor HP: ambil digit, buang 0/62 di depan */
     private function normalizePhone(?string $raw): ?string
     {
         if (!$raw) return null;
         $d = preg_replace('/\D+/', '', $raw);
         if ($d === '') return null;
-        // buang prefix umum Indonesia
+
         $d = preg_replace('/^(?:0|62)/', '', $d);
         return $d;
     }
 
-    /** Temukan user (tenant pemilik promo) dari owner_contact / owner_name */
     private function resolveTenantUserIdByPromo(Promo $promo): ?int
     {
         try {
-            // 1) Paling kuat: pakai kolom langsung
             if (!empty($promo->owner_user_id)) {
                 return (int) $promo->owner_user_id;
             }
 
-            // 2) Fallback: (opsional) cocokan nama/telepon — aman tanpa REGEXP_REPLACE
             $ownerPhone = $this->normalizePhone($promo->owner_contact ?? null);
             $allUserCols = \Illuminate\Support\Facades\Schema::getColumnListing('users') ?? [];
 
-            // hanya kolom yang benar-benar ada
             $phoneCols = array_values(array_intersect(
                 $allUserCols,
-                ['phone', 'telp', 'telpon', 'mobile', 'contact', 'whatsapp', 'wa'] // sengaja TIDAK pakai phone_number kalau tidak ada
+                ['phone', 'telp', 'telpon', 'mobile', 'contact', 'whatsapp', 'wa']
             ));
 
             if ($ownerPhone && !empty($phoneCols)) {
-                // Cari kandidat dulu (longgar), verifikasi di PHP
                 $u = \App\Models\User::query()
                     ->where(function ($q) use ($phoneCols, $ownerPhone) {
                         foreach ($phoneCols as $col) {
-                            // longgar: buang char non-digit di SQL sederhana
                             $q->orWhereRaw("REPLACE(REPLACE(REPLACE(REPLACE(IFNULL($col,''),'+',''),' ',''),'-',''),'.','') LIKE ?", ["%$ownerPhone"]);
                         }
                     })
                     ->first();
 
                 if ($u) {
-                    // verifikasi ketat di PHP
                     $phones = [];
                     foreach ($phoneCols as $col) {
                         $v = $u->$col ?? null;
@@ -72,14 +64,13 @@ class PromoController extends Controller
                     }
                     $phones = array_filter($phones);
                     foreach ($phones as $digits) {
-                        // terima 08..., 62..., dan tanpa prefix
+
                         $d = preg_replace('/^(?:0|62)/', '', $digits);
                         if ($d === $ownerPhone) return $u->id;
                     }
                 }
             }
 
-            // 3) Fallback nama (opsional)
             $ownerName = trim((string)($promo->owner_name ?? ''));
             $nameCols = array_values(array_intersect(
                 $allUserCols,
@@ -110,7 +101,7 @@ class PromoController extends Controller
      */
     private function transformPromoImageUrls($promo)
     {
-        // Pakai accessor dari model agar konsisten - accessor sudah handle URL generation dengan benar
+
         $promo->append(['image_url', 'image_url_versioned']);
         return $promo;
     }
@@ -133,11 +124,11 @@ class PromoController extends Controller
         $validationType = strtolower($validationType ?? 'auto');
 
         if ($validationType === 'manual' && !empty($manualCode)) {
-            // Untuk manual validation, gunakan kode yang diinput admin
+
             return $manualCode;
         }
 
-        // Untuk auto validation atau manual tanpa kode, generate code baru
+
         do {
             $code = 'PRM-' . strtoupper(bin2hex(random_bytes(3)));
         } while (
@@ -156,7 +147,7 @@ class PromoController extends Controller
     private function syncCodeToRelatedTables(Promo $promo, string $code): void
     {
         try {
-            // Update ads terkait jika ada
+
             if (isset($promo->cube_id)) {
                 \App\Models\Ad::where('cube_id', $promo->cube_id)
                     ->where(function ($q) use ($promo) {
@@ -166,7 +157,7 @@ class PromoController extends Controller
                     ->update(['code' => $code]);
             }
 
-            // Update promo_items yang sudah ada untuk promo ini
+
             \App\Models\PromoItem::where('promo_id', $promo->id)
                 ->update(['code' => $code]);
 
@@ -210,7 +201,7 @@ class PromoController extends Controller
             $user->wa ?? null
         );
 
-        // Fallback dari relasi profile() jika ADA
+
         if (method_exists($user, 'profile')) {
             $profile = $user->profile()->first();
             if ($profile) {
@@ -230,7 +221,7 @@ class PromoController extends Controller
             }
         }
 
-        // Fallback dari relasi meta() jika ADA
+
         if (method_exists($user, 'meta')) {
             $meta = $user->meta()->first();
             if ($meta) {
@@ -246,7 +237,7 @@ class PromoController extends Controller
         return [$name, $phone ? trim((string)$phone) : null];
     }
 
-    // Align with VoucherController index (search/sort/paginate + response shape)
+
     public function index(Request $request)
     {
         try {
@@ -257,6 +248,11 @@ class PromoController extends Controller
             $filter        = $request->get('filter', null);
 
             $query = Promo::with(['community'])
+
+                ->when($request->filled('code'), function ($q) use ($request) {
+                    $q->where('code', $request->get('code'));
+                })
+
                 ->when($request->filled('search'), function ($q) use ($request) {
                     $s = $request->get('search');
                     $q->where(function ($qq) use ($s) {
@@ -266,7 +262,7 @@ class PromoController extends Controller
                     });
                 });
 
-            // $query->where('admin_id', $adminId);
+
 
             if ($filter) {
                 $filters = is_string($filter) ? json_decode($filter, true) : (array) $filter;
@@ -489,7 +485,7 @@ class PromoController extends Controller
 
     public function store(Request $request)
     {
-        // Default validation_type
+
         if (!$request->filled('validation_type')) {
             $request->merge(['validation_type' => 'auto']);
         }
@@ -499,12 +495,12 @@ class PromoController extends Controller
             'always_available' => in_array($request->input('always_available'), [1, '1', true, 'true'], true) ? '1' : '0',
         ]);
 
-        // TERIMA alias dari FE (owner_manager_id) → map ke owner_user_id
+
         if ($request->filled('owner_manager_id') && !$request->filled('owner_user_id')) {
             $request->merge(['owner_user_id' => $request->input('owner_manager_id')]);
         }
 
-        // Ambil dari user manager kalau owner_user_id ada
+
         if ($request->filled('owner_user_id')) {
             $user = User::find($request->input('owner_user_id'));
             [$uname, $uphone] = $this->extractUserNamePhone($user);
@@ -541,7 +537,7 @@ class PromoController extends Controller
             'code.required_if'         => 'Kode wajib diisi untuk tipe validasi manual.',
         ]);
 
-        // Kalau owner_user_id dikirim tapi nomor user kosong → error yang jelas
+
         $validator->after(function ($v) use ($request) {
             if ($request->filled('owner_user_id') && !$request->filled('owner_contact')) {
                 $v->errors()->add('owner_contact', 'Nomor telepon manager pada data user belum diisi.');
@@ -570,7 +566,7 @@ class PromoController extends Controller
                 $data['validation_type'] = 'auto';
             }
 
-            // Generate consistent code using helper method
+
             $data['code'] = $this->generateConsistentPromoCode(
                 $data['validation_type'],
                 $data['code'] ?? null
@@ -578,12 +574,12 @@ class PromoController extends Controller
 
             if ($request->hasFile('image')) {
                 $data['image'] = $request->file('image')->store('promos', 'public');
-                $data['image_updated_at'] = now(); // versioning trigger
+                $data['image_updated_at'] = now();
             }
 
             $promo = Promo::create($data);
 
-            // Sync code ke tabel terkait untuk konsistensi
+
             $this->syncCodeToRelatedTables($promo, $data['code']);
 
             $promo = $this->transformPromoImageUrls($promo);
@@ -621,12 +617,12 @@ class PromoController extends Controller
             'always_available' => in_array($request->input('always_available'), [1, '1', true, 'true'], true) ? '1' : (in_array($request->input('always_available'), [0, '0', false, 'false'], true) ? '0' : null),
         ]);
 
-        // TERIMA alias dari FE (owner_manager_id) → map ke owner_user_id
+
         if ($request->filled('owner_manager_id') && !$request->filled('owner_user_id')) {
             $request->merge(['owner_user_id' => $request->input('owner_manager_id')]);
         }
 
-        // Ambil dari user manager kalau dikirim
+
         if ($request->filled('owner_user_id')) {
             $user = User::find($request->input('owner_user_id'));
             [$uname, $uphone] = $this->extractUserNamePhone($user);
@@ -638,7 +634,7 @@ class PromoController extends Controller
             }
         }
 
-        // Create dynamic validation rules based on whether image is being uploaded
+
         $validationRules = [
             'owner_user_id'   => 'nullable|integer|exists:users,id',
 
@@ -669,7 +665,7 @@ class PromoController extends Controller
             'code.required_if'   => 'Kode wajib diisi untuk tipe validasi manual.',
         ]);
 
-        // Opsional: kalau owner_user_id dikirim tapi nomor tak terisi
+
         $validator->after(function ($v) use ($request) {
             if ($request->filled('owner_user_id')) {
                 if ($request->has('owner_contact') && ($request->input('owner_contact') === null || $request->input('owner_contact') === '')) {
@@ -723,12 +719,12 @@ class PromoController extends Controller
                 }
             }
 
-            // ✅ PERBAIKAN: Handle consistent code generation for updates
+
             if (isset($data['code']) || isset($data['validation_type'])) {
                 $newValidationType = $data['validation_type'];
                 $newCode = $data['code'] ?? null;
 
-                // Only regenerate code if validation_type changed or manual code provided
+
                 if (
                     $newValidationType !== $promo->validation_type ||
                     ($newValidationType === 'manual' && !empty($newCode))
@@ -750,10 +746,8 @@ class PromoController extends Controller
                     Storage::disk('public')->delete($promo->image);
                 }
                 $data['image'] = $request->file('image')->store('promos', 'public');
-                $data['image_updated_at'] = now(); // versioning trigger
-            }
-            // TAMBAHAN: Update cache buster untuk perubahan non-image
-            else if (!$request->hasFile('image')) {
+                $data['image_updated_at'] = now();
+            } else if (!$request->hasFile('image')) {
                 $significantFields = ['title', 'description', 'detail', 'stock', 'start_date', 'end_date', 'location', 'owner_name', 'owner_contact'];
                 $hasSignificantChange = collect($significantFields)->some(function ($field) use ($data, $promo) {
                     return isset($data[$field]) && $data[$field] != $promo->$field;
@@ -767,7 +761,7 @@ class PromoController extends Controller
 
             $promo->update($data);
 
-            // Sync code ke tabel terkait jika code berubah
+
             if (isset($data['code'])) {
                 $this->syncCodeToRelatedTables($promo, $data['code']);
             }
@@ -808,18 +802,18 @@ class PromoController extends Controller
         try {
             DB::beginTransaction();
 
-            // Hapus semua promo items terkait
+
             PromoItem::where('promo_id', $id)->delete();
 
-            // Hapus semua riwayat validasi promo terkait
+
             PromoValidation::where('promo_id', $id)->delete();
 
-            // Hapus file gambar jika ada
+
             if (!empty($promo->image)) {
                 Storage::disk('public')->delete($promo->image);
             }
 
-            // Hapus promo
+
             $promo->delete();
 
             DB::commit();
@@ -838,7 +832,7 @@ class PromoController extends Controller
         }
     }
 
-    // list promos for a specific community (assigned promos)
+
     public function indexByCommunity($communityId)
     {
         $promos = Promo::where('community_id', $communityId)->get();
@@ -853,7 +847,7 @@ class PromoController extends Controller
         ]);
     }
 
-    // store promo under a specific community (creates new promo and assigns)
+
     public function storeForCommunity(Request $request, $communityId)
     {
         if ($request->boolean('attach_existing') || ($request->has('promo_id') && !$request->has('title'))) {
@@ -969,7 +963,7 @@ class PromoController extends Controller
                 ], 404);
             }
 
-            // Image URLs are now handled by the model accessors
+
 
             $responseData = [
                 'id' => $promo->id,
@@ -1055,7 +1049,7 @@ class PromoController extends Controller
 
         $data = $request->validate([
             'code'               => 'required|string',
-            'item_id'            => 'sometimes|integer', // Optional: untuk QR code dengan item spesifik
+            'item_id'            => 'sometimes|integer',
             'item_owner_id'      => 'sometimes|integer',
             'expected_type'      => 'sometimes|in:promo',
             'validator_role'     => 'sometimes|in:tenant',
@@ -1063,7 +1057,7 @@ class PromoController extends Controller
             'qr_timestamp'       => 'sometimes',
         ]);
 
-        // Normalisasi kode dari FE (buang spasi, NBSP, zero-width, control chars)
+
         $raw  = (string)($data['code'] ?? '');
         $code = trim($raw);
         $code = preg_replace('/[\x00-\x1F\x7F\x{00A0}\x{200B}-\x{200D}\x{FEFF}]/u', '', $code);
@@ -1073,14 +1067,14 @@ class PromoController extends Controller
             'raw'  => $data['code'] ?? null,
             'trim' => $code,
             'len'  => strlen($code),
-            'hex'  => bin2hex($code), // deteksi karakter tersembunyi
+            'hex'  => bin2hex($code),
         ]);
         $itemId     = $data['item_id'] ?? null;
         $ownerHint  = $data['item_owner_id'] ?? null;
         $item       = null;
         $promo      = null;
 
-        // 🔍 LOG untuk debugging
+
         Log::info('🎯 Promo validateCode started', [
             'user_id' => $user->id,
             'code' => $code,
@@ -1089,9 +1083,9 @@ class PromoController extends Controller
             'validator_role' => $data['validator_role'] ?? null
         ]);
 
-        // ====== STRATEGI PENCARIAN BERDASARKAN INPUT ======
 
-        // 1) Jika ada item_id, ambil item spesifik (untuk QR code)
+
+
         if ($itemId) {
             $item = \App\Models\PromoItem::with(['promo', 'user'])
                 ->where('id', $itemId)
@@ -1101,7 +1095,7 @@ class PromoController extends Controller
                 return response()->json(['success' => false, 'message' => 'Promo item tidak ditemukan'], 404);
             }
 
-            // Jika FE mengirim owner_hint, pastikan cocok
+
             if ($ownerHint && (int)$item->user_id !== (int)$ownerHint) {
                 return response()->json([
                     'success' => false,
@@ -1109,37 +1103,35 @@ class PromoController extends Controller
                 ], 422);
             }
 
-            // Verifikasi kode dengan logic yang diperbaiki untuk manual validation
+
             $promo = $item->promo;
             $isValidCode = false;
 
-            // 🔧 PERBAIKAN: Untuk promo manual validation, hanya terima kode master
+
             if ($promo && $promo->validation_type === 'manual') {
-                // Hanya terima kode master (yang ditulis admin) - TIDAK terima kode unik item
+
                 $isValidCode = hash_equals((string)$promo->code, $code);
             } else {
-                // Untuk promo auto validation, harus exact match dengan kode item
+
                 $isValidCode = hash_equals((string)$item->code, $code);
             }
 
             if (!$isValidCode) {
                 return response()->json(['success' => false, 'message' => 'Kode unik tidak valid.'], 422);
             }
-        }
-        // 2) Jika tidak ada item_id, cari berdasarkan kode dengan logika yang sederhana
-        else {
-            // Cek apakah ada master promo dengan kode tersebut
+        } else {
+
             $promo = \App\Models\Promo::where('code', $code)->first();
             Log::info('🔍 Search master promo by code', ['code' => $code, 'found' => !!$promo, 'promo_id' => $promo->id ?? null]);
 
             if (!$promo) {
-                // 🔧 PERBAIKAN: Cari promo_item dengan kode tersebut tanpa membatasi user_id
-                // untuk mengcover kasus dimana user memasukkan kode unik dari promo_item
+
+
                 $promoItem = \App\Models\PromoItem::with(['promo', 'user'])
                     ->where('code', $code)
                     ->first();
 
-                // Fallback: kalau relasi promo null, coba cari promo-nya manual
+
                 if ($promoItem && !$promoItem->promo) {
                     $promo = \App\Models\Promo::find($promoItem->promo_id)
                         ?: \App\Models\Promo::where('code', $promoItem->code)->first();
@@ -1157,13 +1149,13 @@ class PromoController extends Controller
                 Log::info('🔍 Search promo_item by code', ['code' => $code, 'found' => !!$promoItem, 'item_owner' => $promoItem->user_id ?? null]);
 
                 if ($promoItem) {
-                    // Jika user yang login adalah pemilik item, gunakan item tersebut
+
                     if ($promoItem->user_id == $user->id) {
                         $item  = $promoItem;
                         $promo = $item->promo;
                         Log::info('🎯 User owns the promo_item, using existing item', ['item_id' => $item->id]);
                     } else {
-                        // Jika bukan pemilik, coba ambil master promo untuk membuat item baru
+
                         $promo = $promoItem->promo;
                         $item = null;
                         $ownerHint = $user->id;
@@ -1174,7 +1166,7 @@ class PromoController extends Controller
                     return response()->json(['success' => false, 'message' => 'Promo dengan kode tersebut tidak ditemukan'], 404);
                 }
             } else {
-                // 🔧 PERBAIKAN: cari item existing berdasarkan (promo_id, user_id) — BUKAN berdasarkan code
+
                 $existingItem = \App\Models\PromoItem::with(['promo', 'user'])
                     ->where('promo_id', $promo->id)
                     ->where('user_id', $user->id)
@@ -1186,7 +1178,7 @@ class PromoController extends Controller
                     $item = $existingItem;
                     Log::info('🎯 Found existing item for user', ['item_id' => $item->id]);
                 } else {
-                    // belum punya — lanjut create item baru
+
                     $ownerHint = $user->id;
                     $item = null;
                     Log::info('🎯 No existing item, will create new one', ['promo_id' => $promo->id, 'user_id' => $user->id]);
@@ -1198,12 +1190,12 @@ class PromoController extends Controller
             return response()->json(['success' => false, 'message' => 'Promo tidak ditemukan'], 404);
         }
 
-        // Cek expired
+
         if (!empty($promo->end_date) && now()->greaterThan($promo->end_date)) {
             return response()->json(['success' => false, 'message' => 'Promo kedaluwarsa'], 422);
         }
 
-        // ===== Tentukan tenant & role validator =====
+
         $tenantId = $this->resolveTenantUserIdByPromo($promo);
         $validatorRole = $data['validator_role'] ?? null;
 
@@ -1216,13 +1208,13 @@ class PromoController extends Controller
             }
             $validatorId = $user->id;
         } else {
-            // user-initiated (kode unik): kreditkan ke tenant agar tampil di riwayat tenant
+
             $validatorId = $tenantId ?: $user->id;
         }
 
-        // ====== HANDLING BERDASARKAN KONDISI ITEM ======
 
-        // Jika item sudah ada, cek idempotensi dan proses
+
+
         if ($item) {
             if (!is_null($item->redeemed_at) || in_array($item->status, ['redeemed', 'used'], true)) {
                 $item->setAttribute('display_code', ($promo->code ?? $code));
@@ -1237,11 +1229,9 @@ class PromoController extends Controller
                 ], 200);
             }
 
-            // Item ada tapi belum di-redeem, lakukan transaksi
+
             return $this->processExistingItemValidation($item, $promo, $validatorId, $code);
-        }
-        // Jika item belum ada, buat item baru
-        else {
+        } else {
             return $this->createAndValidateNewItem($promo, $ownerHint, $validatorId, $code);
         }
     }
@@ -1263,7 +1253,7 @@ class PromoController extends Controller
                 return response()->json(['success' => false, 'message' => 'Promo item tidak ditemukan'], 404);
             }
 
-            // Re-check setelah lock (idempotent)
+
             if (!is_null($locked->redeemed_at) || in_array($locked->status, ['redeemed', 'used'], true)) {
                 DB::commit();
                 $lockedFresh = $locked->fresh();
@@ -1279,7 +1269,7 @@ class PromoController extends Controller
                 ], 200);
             }
 
-            // Update atomik
+
             $updates = ['redeemed_at' => now()];
             if (Schema::hasColumn('promo_items', 'status')) $updates['status'] = 'redeemed';
 
@@ -1302,7 +1292,7 @@ class PromoController extends Controller
                 ], 200);
             }
 
-            // Simpan validasi
+
             $this->savePromoValidation($locked, $validatorId, $promo->code ?? $code);
 
             DB::commit();
@@ -1333,14 +1323,14 @@ class PromoController extends Controller
     {
         DB::beginTransaction();
         try {
-            // 🔒 Cek idempotensi per (promo_id, user_id)
+
             $item = \App\Models\PromoItem::where('promo_id', $promo->id)
                 ->where('user_id', $ownerHint)
                 ->lockForUpdate()
                 ->first();
 
             if (!$item) {
-                // ✅ Baru pertama kali: BARU kurangi stok di sini
+
                 if (!is_null($promo->stock)) {
                     $affected = \App\Models\Promo::where('id', $promo->id)
                         ->where('stock', '>', 0)
@@ -1351,29 +1341,29 @@ class PromoController extends Controller
                     }
                 }
 
-                // 🔧 PERBAIKAN: Gunakan kode master promo untuk semua item dan validasi
-                // Semua promo_items akan menggunakan kode yang sama dengan master promo
+
+
                 $masterCode = $promo->code ?? $enteredCode;
 
                 $item = \App\Models\PromoItem::create([
                     'promo_id'    => $promo->id,
                     'user_id'     => $ownerHint,
-                    'code'        => $masterCode, // Gunakan kode master yang sama
+                    'code'        => $masterCode,
                     'status'      => 'redeemed',
                     'redeemed_at' => now(),
                     'expires_at'  => $promo->end_date,
                 ]);
             } else {
-                // Sudah ada item-nya
+
                 if (is_null($item->redeemed_at)) {
                     $item->update(['status' => 'redeemed', 'redeemed_at' => now()]);
                 }
             }
 
-            // Simpan validasi (gunakan kode master untuk konsistensi)
+
             $this->savePromoValidation($item, $validatorId, $promo->code ?? $enteredCode);
 
-            // Tambahkan display_code untuk FE
+
             $item->setAttribute('display_code', $promo->code ?? $enteredCode);
 
             DB::commit();
@@ -1399,14 +1389,14 @@ class PromoController extends Controller
      */
     private function savePromoValidation($item, $validatorId, $code)
     {
-        // Pastikan menggunakan kode master promo untuk konsistensi
+
         $masterCode = $item->promo->code ?? $code;
 
         $validationData = [
             'user_id'      => $validatorId,
             'promo_id'     => $item->promo_id,
             'validated_at' => now(),
-            'code'         => $masterCode, // Gunakan kode master yang konsisten
+            'code'         => $masterCode,
             'notes'        => null,
         ];
 
@@ -1418,7 +1408,7 @@ class PromoController extends Controller
 
         $validationData['notes'] = $notes;
 
-        // cek existing by promo_item_id jika kolom ada
+
         $existingValidation = null;
         if (Schema::hasColumn('promo_validations', 'promo_item_id')) {
             $existingValidation = \App\Models\PromoValidation::where('promo_item_id', $item->id)->first();
@@ -1429,7 +1419,7 @@ class PromoController extends Controller
         } else {
             $existingValidation->update([
                 'validated_at' => now(),
-                'code' => $masterCode, // Update dengan kode master
+                'code' => $masterCode,
                 'notes'        => $validationData['notes']
             ]);
         }
@@ -1448,26 +1438,26 @@ class PromoController extends Controller
                 ], 404);
             }
 
-            // PERBAIKAN: Query yang menampilkan semua validasi tanpa mapping yang salah
+
             if (Schema::hasColumn('promo_validations', 'promo_item_id')) {
-                // Mode ideal: gunakan promo_item_id untuk akurasi tinggi
+
                 $rows = PromoValidation::query()
-                    ->with(['promo', 'user']) // user = validator (tenant)
+                    ->with(['promo', 'user'])
                     ->leftJoin('promo_items', 'promo_items.id', '=', 'promo_validations.promo_item_id')
                     ->select('promo_validations.*', 'promo_items.user_id as owner_id')
                     ->where('promo_validations.promo_id', $promoId)
                     ->orderBy('promo_validations.validated_at', 'desc')
                     ->get();
             } else {
-                // Fallback: ambil semua record dan filter duplikasi dengan hati-hati
+
                 $allRows = PromoValidation::query()
-                    ->with(['promo', 'user']) // user = validator (tenant)
+                    ->with(['promo', 'user'])
                     ->where('promo_validations.promo_id', $promoId)
                     ->orderBy('promo_validations.validated_at', 'desc')
                     ->get();
 
-                // PERBAIKAN: Filter duplikasi berdasarkan item_id yang sebenarnya dari notes
-                // tapi tetap pertahankan semua record validation yang valid
+
+
                 $seen = [];
                 $rows = collect();
 
@@ -1477,14 +1467,14 @@ class PromoController extends Controller
                         $itemId = $matches[1];
                     }
 
-                    // Jika ada item_id dalam notes, gunakan sebagai key unik
+
                     if ($itemId) {
                         if (!isset($seen[$itemId])) {
                             $seen[$itemId] = true;
                             $rows->push($row);
                         }
                     } else {
-                        // Jika tidak ada item_id, gunakan kombinasi code + timestamp sebagai fallback
+
                         $key = $row->code . '|' . $row->validated_at;
                         if (!isset($seen[$key])) {
                             $seen[$key] = true;
@@ -1493,12 +1483,12 @@ class PromoController extends Controller
                     }
                 }
 
-                // Ambil owner_id dari notes
+
                 $rows = $rows->map(function ($row) {
                     if (preg_match('/owner_id:(\d+)/', $row->notes, $matches)) {
                         $row->owner_id = (int)$matches[1];
                     } else {
-                        // Fallback: cari dari promo_items berdasarkan code
+
                         $item = \App\Models\PromoItem::where('code', $row->code)
                             ->where('promo_id', $row->promo_id)
                             ->first();
@@ -1524,8 +1514,8 @@ class PromoController extends Controller
                     'validated_at' => $r->validated_at,
                     'notes'        => $r->notes,
                     'promo'        => $r->promo,
-                    'user'         => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null, // validator (tenant)
-                    'owner'        => $owner, // pemilik item (user)
+                    'user'         => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null,
+                    'owner'        => $owner,
                     'itemType'     => 'promo',
                 ];
             });
@@ -1543,14 +1533,33 @@ class PromoController extends Controller
     public function validationsIndex(Request $req)
     {
         try {
+
+            $promoId = $req->input('promo_id');
             $promoCode = trim((string)$req->input('promo_code', ''));
-            if ($promoCode === '') {
+
+            $promo = null;
+
+
+            if ($promoId) {
+                $promo = Promo::find($promoId);
+            } elseif ($promoCode !== '') {
+                $promo = Promo::where('code', $promoCode)->first();
+            }
+
+            if (!$promo) {
                 return response()->json(['data' => [], 'total_row' => 0]);
             }
 
-            $promo = Promo::where('code', $promoCode)->first();
-            if (!$promo) {
-                return response()->json(['data' => [], 'total_row' => 0]);
+
+
+            if ($req->filled('validation_type_filter')) {
+                $filterType = $req->input('validation_type_filter');
+                if ($filterType === 'qr_only' && $promo->validation_type !== 'auto') {
+                    return response()->json(['data' => [], 'total_row' => 0]);
+                }
+                if ($filterType === 'manual_only' && $promo->validation_type !== 'manual') {
+                    return response()->json(['data' => [], 'total_row' => 0]);
+                }
             }
 
             $page        = max((int)$req->input('page', 1), 1);
@@ -1560,7 +1569,7 @@ class PromoController extends Controller
             $sortDirRaw  = strtolower($req->input('sortDirection', 'desc'));
             $sortDir     = $sortDirRaw === 'asc' ? 'asc' : 'desc';
 
-            // base query: validator = relasi user()
+
             $base = PromoValidation::query()
                 ->with(['user:id,name'])
                 ->where('promo_id', $promo->id);
@@ -1577,10 +1586,10 @@ class PromoController extends Controller
             }
             $base->orderBy($sortBy, $sortDir);
 
-            // --- Ambil rows ---
+
             $total = (clone $base)->count();
 
-            // Jika ada kolom promo_item_id → join promo_items utk ambil owner_id langsung
+
             if (Schema::hasColumn('promo_validations', 'promo_item_id')) {
                 $rows = (clone $base)
                     ->leftJoin('promo_items', 'promo_items.id', '=', 'promo_validations.promo_item_id')
@@ -1589,7 +1598,7 @@ class PromoController extends Controller
                     ->take($paginate)
                     ->get();
             } else {
-                // Tanpa kolom promo_item_id → ambil rows dulu, parse notes untuk owner_id
+
                 $rows = (clone $base)
                     ->skip(($page - 1) * $paginate)
                     ->take($paginate)
@@ -1600,7 +1609,7 @@ class PromoController extends Controller
                     if ($r->notes && preg_match('/owner_id:(\d+)/', $r->notes, $m)) {
                         $ownerId = (int)$m[1];
                     } else {
-                        // Fallback lemah: coba cari owner via promo_items (bisa sama2 code)
+
                         $pi = \App\Models\PromoItem::where('promo_id', $r->promo_id)
                             ->where('code', $r->code)
                             ->latest('id')
@@ -1612,7 +1621,7 @@ class PromoController extends Controller
                 });
             }
 
-            // Ambil nama owner & validator
+
             $ownerIds = $rows->pluck('owner_id')->filter()->unique()->values();
             $owners   = $ownerIds->isNotEmpty()
                 ? \App\Models\User::whereIn('id', $ownerIds)->get(['id', 'name'])->keyBy('id')
@@ -1624,10 +1633,10 @@ class PromoController extends Controller
                     $owner = ['id' => $r->owner_id, 'name' => $owners[$r->owner_id]->name];
                 }
                 return [
-                    'code'          => $r->code,                    // kode promo (bukan per-item)
+                    'code'          => $r->code,
                     'validated_at'  => $r->validated_at,
-                    'user'          => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null, // validator (tenant)
-                    'owner'         => $owner,                      // pemilik/pengklaim (ini yang harus ditampilkan di kolom "Pengguna")
+                    'user'          => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null,
+                    'owner'         => $owner,
                 ];
             });
 
@@ -1649,37 +1658,37 @@ class PromoController extends Controller
                 return response()->json(['success' => false, 'message' => 'User tidak terautentikasi'], 401);
             }
 
-            // PERBAIKAN: Query yang konsisten dengan method history untuk menghindari mapping yang salah
+
             if (Schema::hasColumn('promo_validations', 'promo_item_id')) {
-                // Mode ideal: gunakan promo_item_id untuk akurasi tinggi
+
                 $rows = PromoValidation::query()
-                    ->with(['promo', 'user']) // 'user' = validator (tenant)
+                    ->with(['promo', 'user'])
                     ->leftJoin('promo_items', 'promo_items.id', '=', 'promo_validations.promo_item_id')
                     ->select('promo_validations.*', 'promo_items.user_id as owner_id')
                     ->where(function ($q) use ($userId) {
-                        $q->where('promo_items.user_id', $userId)       // user sebagai owner
-                            ->orWhere('promo_validations.user_id', $userId); // user sebagai validator (tenant)
+                        $q->where('promo_items.user_id', $userId)
+                            ->orWhere('promo_validations.user_id', $userId);
                     })
                     ->orderBy('promo_validations.validated_at', 'desc')
                     ->get();
             } else {
-                // Fallback: ambil semua record dan filter dengan hati-hati untuk tidak menghilangkan data
+
                 $allRows = PromoValidation::query()
-                    ->with(['promo', 'user']) // 'user' = validator (tenant)
+                    ->with(['promo', 'user'])
                     ->orderBy('promo_validations.validated_at', 'desc')
                     ->get();
 
-                // PERBAIKAN: Filter user tapi tetap pertahankan semua record validation yang relevan
+
                 $userRows = $allRows->filter(function ($r) use ($userId) {
-                    // Cek apakah user adalah owner berdasarkan notes
+
                     $isOwner = preg_match('/owner_id:' . $userId . '/', $r->notes ?? '');
-                    // Cek apakah user adalah validator
+
                     $isValidator = $r->user_id == $userId;
 
                     return $isOwner || $isValidator;
                 });
 
-                // PERBAIKAN: Deduplikasi berdasarkan item_id sebenarnya, bukan kombinasi yang bisa menghilangkan data
+
                 $seen = [];
                 $rows = collect();
 
@@ -1689,14 +1698,14 @@ class PromoController extends Controller
                         $itemId = $matches[1];
                     }
 
-                    // Jika ada item_id dalam notes, gunakan sebagai key unik
+
                     if ($itemId) {
                         if (!isset($seen[$itemId])) {
                             $seen[$itemId] = true;
                             $rows->push($row);
                         }
                     } else {
-                        // Jika tidak ada item_id, gunakan kombinasi code + timestamp + validator sebagai fallback
+
                         $key = $row->code . '|' . $row->validated_at . '|' . $row->user_id;
                         if (!isset($seen[$key])) {
                             $seen[$key] = true;
@@ -1705,12 +1714,12 @@ class PromoController extends Controller
                     }
                 }
 
-                // Ambil owner_id dari notes jika tidak ada promo_item_id
+
                 $rows = $rows->map(function ($row) {
                     if (preg_match('/owner_id:(\d+)/', $row->notes, $matches)) {
                         $row->owner_id = (int)$matches[1];
                     } else {
-                        // Fallback: cari dari promo_items berdasarkan code
+
                         $item = \App\Models\PromoItem::where('code', $row->code)
                             ->where('promo_id', $row->promo_id)
                             ->first();
@@ -1720,7 +1729,7 @@ class PromoController extends Controller
                 });
             }
 
-            // Ambil info owner (jika ada)
+
             $ownerIds = $rows->pluck('owner_id')->filter()->unique()->values();
             $owners = $ownerIds->isNotEmpty()
                 ? User::whereIn('id', $ownerIds)->get(['id', 'name'])->keyBy('id')
@@ -1732,7 +1741,7 @@ class PromoController extends Controller
                     $promo->title = $promo->title ?? 'Promo';
                 }
 
-                // owner (pemilik item) — dari join promo_items
+
                 $owner = null;
                 if ($r->owner_id && isset($owners[$r->owner_id])) {
                     $owner = [
@@ -1741,7 +1750,7 @@ class PromoController extends Controller
                     ];
                 }
 
-                // Determine user's relationship to this validation record
+
                 $isOwner = $r->owner_id && (int)$r->owner_id === (int)$userId;
                 $isValidator = $r->user_id && (int)$r->user_id === (int)$userId;
 
@@ -1751,15 +1760,15 @@ class PromoController extends Controller
                     'validated_at' => $r->validated_at,
                     'notes'        => $r->notes,
                     'promo'        => $promo,
-                    // user = validator (tenant) -> dipakai FE untuk "Divalidasi oleh ..."
+
                     'user'         => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null,
-                    // owner = pemilik promo item -> dipakai FE sisi tenant untuk "Promo milik ..."
+
                     'owner'        => $owner,
                     'itemType'     => 'promo',
-                    // Additional context for frontend
+
                     'user_relationship' => $isOwner ? 'owner' : ($isValidator ? 'validator' : 'unknown'),
-                    'show_owner_info' => $isValidator, // Show "Promo milik" when user is validator
-                    'show_validator_info' => $isOwner, // Show "Divalidasi oleh" when user is owner
+                    'show_owner_info' => $isValidator,
+                    'show_validator_info' => $isOwner,
                 ];
             });
 

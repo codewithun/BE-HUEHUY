@@ -22,40 +22,67 @@ class VoucherItemController extends Controller
      */
     public function index(Request $request)
     {
-        $query = VoucherItem::with(['voucher', 'voucher.community', 'user']);
+        $q = \App\Models\VoucherItem::with(['voucher', 'user']);
 
-        // Filter by user_id (opsional)
+
+
+
         if ($request->filled('user_id')) {
-            $query->where('user_id', $request->user_id);
+            $q->where('user_id', (int) $request->user_id);
         }
 
-        // Default: kalau tidak ada user_id, dan user login ada → filter ke user tsb
-        if (!$request->filled('user_id') && Auth::check()) {
-            $query->where('user_id', Auth::id());
+        if ($request->filled('voucher_id')) {
+            $q->where('voucher_id', (int) $request->voucher_id);
         }
 
-        // Search by voucher name
-        if ($request->filled('search')) {
-            $query->whereHas('voucher', function ($q) use ($request) {
-                $q->where('name', 'like', '%' . $request->search . '%');
+
+        if ($request->filled('voucher_code')) {
+            $code = trim($request->input('voucher_code'));
+            $q->whereHas('voucher', function ($v) use ($code) {
+                $v->where('code', $code);
             });
         }
 
-        // Sort
-        $sortBy = $request->get('sortBy', 'created_at');
-        $sortDirection = $request->get('sortDirection', 'DESC');
-        $query->orderBy($sortBy, $sortDirection);
 
-        // Pagination
-        $paginate = (int) $request->get('paginate', 15);
-        $result = $query->paginate($paginate);
+        if ($request->filled('validation_type_filter')) {
+            $filterType = $request->input('validation_type_filter');
+            if ($filterType === 'qr_only') {
+                $q->whereHas('voucher', function ($v) {
+                    $v->where('validation_type', 'auto');
+                });
+            } elseif ($filterType === 'manual_only') {
+                $q->whereHas('voucher', function ($v) {
+                    $v->where('validation_type', 'manual');
+                });
+            }
+        }
 
-        return response([
+        if ($request->filled('search')) {
+            $s = $request->input('search');
+            $q->where(function ($w) use ($s) {
+                $w->where('code', 'like', "%{$s}%")
+                    ->orWhereHas('user', fn($u) => $u->where('name', 'like', "%{$s}%"))
+                    ->orWhereHas('voucher', fn($v) => $v->where('name', 'like', "%{$s}%"));
+            });
+        }
+
+        $sortBy  = $request->get('sortBy', 'created_at');
+        $sortDir = strtolower($request->get('sortDirection', 'desc')) === 'asc' ? 'asc' : 'desc';
+        $q->orderBy($sortBy, $sortDir);
+
+        $paginate = (int) ($request->get('paginate', 15));
+        if ($paginate <= 0) {
+            $rows = $q->get();
+            return response()->json(['success' => true, 'data' => $rows, 'total_row' => $rows->count()]);
+        }
+
+        $pg = $q->paginate($paginate);
+        return response()->json([
             'success'      => true,
-            'data'         => $result->items(),
-            'total_row'    => $result->total(),
-            'current_page' => $result->currentPage(),
-            'last_page'    => $result->lastPage(),
+            'data'         => $pg->items(),
+            'total_row'    => $pg->total(),
+            'current_page' => $pg->currentPage(),
+            'last_page'    => $pg->lastPage(),
         ]);
     }
 
@@ -129,7 +156,7 @@ class VoucherItemController extends Controller
         }
 
         if ($voucher->stock <= 0) {
-            // stok habis → tetap coba bersihkan notif agar tidak mengganggu FE
+
             $deleted = $this->cleanupNotifications($userId, $voucherId, $request->input('notification_id'));
             return response()->json([
                 'success' => false,
@@ -138,7 +165,7 @@ class VoucherItemController extends Controller
             ], 400);
         }
 
-        // Cegah double-claim
+
         $already = VoucherItem::where('user_id', $userId)
             ->where('voucher_id', $voucher->id)
             ->exists();
@@ -222,7 +249,7 @@ class VoucherItemController extends Controller
             }
 
             $result = DB::transaction(function () use ($item) {
-                // JANGAN decrement stock di sini (stok sudah berkurang saat klaim)
+
 
                 if (Schema::hasColumn('voucher_items', 'used_at')) {
                     $item->used_at = Carbon::now();
@@ -256,14 +283,14 @@ class VoucherItemController extends Controller
     {
         $deleted = 0;
 
-        // 1) spesifik by id jika dikirim FE
+
         if (!empty($notificationId)) {
             $deleted += Notification::where('id', $notificationId)
                 ->where('user_id', $userId)
-                ->delete(); // kalau mau mark read: ->update(['read_at' => now()]);
+                ->delete();
         }
 
-        // 2) guard: hapus semua notifikasi voucher yg menarget voucher ini
+
         $deleted += Notification::where('user_id', $userId)
             ->where(function ($q) use ($voucherId) {
                 $q->where(function ($q1) use ($voucherId) {

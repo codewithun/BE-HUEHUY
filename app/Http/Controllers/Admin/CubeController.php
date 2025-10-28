@@ -1022,6 +1022,17 @@ class CubeController extends Controller
                 }
                 if (!empty($preparedCubeTagsData)) {
                     CubeTag::insert($preparedCubeTagsData);
+                    
+                    // Simpan link dari cube_tags[0] ke field link_information di Cube
+                    $firstTag = $cubeTags[0] ?? null;
+                    if ($firstTag && !empty($firstTag['link'])) {
+                        $model->link_information = $firstTag['link'];
+                        $model->save();
+                        Log::info('CubeController@store saved link_information from cube_tags', [
+                            'cube_id' => $model->id,
+                            'link_information' => $firstTag['link']
+                        ]);
+                    }
                 }
             }
         } catch (\Throwable $th) {
@@ -1700,6 +1711,21 @@ class CubeController extends Controller
                 }
                 if (!empty($preparedCubeTagsData)) {
                     CubeTag::insert($preparedCubeTagsData);
+                    
+                    // Simpan link dari cube_tags[0] ke field link_information di Cube
+                    $firstTag = $cubeTags[0] ?? null;
+                    if ($firstTag && !empty($firstTag['link'])) {
+                        $model->link_information = $firstTag['link'];
+                        $model->save();
+                        Log::info('CubeController@update saved link_information from cube_tags', [
+                            'cube_id' => $model->id,
+                            'link_information' => $firstTag['link']
+                        ]);
+                    } else {
+                        // Jika tidak ada link, hapus link_information
+                        $model->link_information = null;
+                        $model->save();
+                    }
                 }
             }
         } catch (\Throwable $th) {

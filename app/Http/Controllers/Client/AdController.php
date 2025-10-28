@@ -297,11 +297,46 @@ class AdController extends Controller
 
     public function getCubeByCodeGeneral(Request $request, $code)
     {
-        $query = Cube::with('ads', 'tags', 'ads.ad_category', 'cube_type', 'user', 'corporate', 'opening_hours')
+        $query = Cube::with([
+            'ads' => function($query) {
+                $query->where('status', 'active');
+            },
+            'ads.ad_category',
+            'tags', 
+            'cube_type', 
+            'user', 
+            'corporate', 
+            'opening_hours'
+        ])
             ->select(['cubes.*'])
             ->where('cubes.status', 'active')
             ->where('code', $code)
             ->first();
+
+        // Jika tidak ditemukan, coba cari berdasarkan code di ads
+        if (!$query) {
+            $adQuery = \App\Models\Ad::with([
+                'cube' => function($query) {
+                    $query->where('status', 'active');
+                },
+                'cube.ads' => function($query) {
+                    $query->where('status', 'active');
+                },
+                'cube.ads.ad_category',
+                'cube.tags',
+                'cube.cube_type',
+                'cube.user',
+                'cube.corporate',
+                'cube.opening_hours'
+            ])
+                ->where('code', $code)
+                ->where('status', 'active')
+                ->first();
+            
+            if ($adQuery && $adQuery->cube) {
+                $query = $adQuery->cube;
+            }
+        }
 
         return response([
             'message' => 'Success',

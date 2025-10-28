@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use App\Models\Promo;
 
 class Ad extends Model
 {
@@ -50,6 +51,8 @@ class Ad extends Model
         'day_type',
         'custom_days'
     ];
+
+    protected $appends = ['remaining_stock', 'stock_source'];
 
     // =========================>
     // ## Casts
@@ -178,5 +181,43 @@ class Ad extends Model
         $toArray['image_3'] = $this->image_3 ? asset('storage/' . $this->image_3) : null;
 
         return $toArray;
+    }
+
+    public function getRemainingStockAttribute()
+    {
+        // Cari promo mirror berdasarkan code iklan
+        $promo = $this->code
+            ? Promo::where('code', $this->code)->first()
+            : null;
+
+        // Jika Promo punya stok (tidak null), pakai itu
+        if ($promo !== null && $promo->stock !== null) {
+            // pastikan integer non-negatif
+            return max(0, (int) $promo->stock);
+        }
+
+        // Fallback ke Ad: unlimited = ∞ (kita representasikan null), else max_grab
+        if ($this->unlimited_grab) {
+            return null; // artinya tak terbatas
+        }
+
+        return max(0, (int) ($this->max_grab ?? 0));
+    }
+
+    /**
+     * Untuk debug/label UI: tunjukkan dari mana stok dihitung
+     * - 'promo' jika pakai promos.stock
+     * - 'ad' kalau fallback ke Ad
+     */
+    public function getStockSourceAttribute()
+    {
+        $promo = $this->code
+            ? Promo::where('code', $this->code)->first()
+            : null;
+
+        if ($promo !== null && $promo->stock !== null) {
+            return 'promo';
+        }
+        return 'ad';
     }
 }

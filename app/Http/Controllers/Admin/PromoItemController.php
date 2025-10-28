@@ -11,6 +11,7 @@ use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
 use App\Models\Promo;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class PromoItemController extends Controller
 {
@@ -104,6 +105,17 @@ class PromoItemController extends Controller
 
     public function store(Request $request)
     {
+
+        // --- Prioritas: promo_code jika ada ---
+        if ($request->filled('promo_code')) {
+            $pc = trim((string) $request->input('promo_code'));
+            $promoByCode = \App\Models\Promo::where('code', $pc)->first();
+            if ($promoByCode) {
+                // Paksa gunakan promo-id yang benar (yang kamu restock)
+                $request->merge(['promo_id' => $promoByCode->id]);
+            }
+        }
+
         $validator = Validator::make($request->all(), [
 
             'promo_id' => [
@@ -140,7 +152,7 @@ class PromoItemController extends Controller
         $promo = Promo::find($data['promo_id']);
         $ad    = null;
 
-        if (!$promo) {
+        if (!$promo && !$request->filled('promo_code')) {
             $ad = \App\Models\Ad::find($data['promo_id']);
             if ($ad) {
 
@@ -236,8 +248,22 @@ class PromoItemController extends Controller
                     return ['ok' => false, 'reason' => 'Promo tidak ditemukan'];
                 }
 
-                if (!empty($lockedPromo->end_date) && now()->greaterThan($lockedPromo->end_date)) {
-                    return ['ok' => false, 'reason' => 'Promo kedaluwarsa'];
+                $tz = 'Asia/Jakarta';
+                $now = Carbon::now($tz);
+
+                if (!empty($lockedPromo->end_date)) {
+                    $endAt = Carbon::parse($lockedPromo->end_date, $tz)->endOfDay();
+
+                    Log::info('🕒 PromoItemController time check', [
+                        'now' => $now->format('Y-m-d H:i:s'),
+                        'endAt' => $endAt->format('Y-m-d H:i:s'),
+                        'lockedPromoId' => $lockedPromo->id ?? null,
+                        'lockedPromoCode' => $lockedPromo->code ?? null,
+                    ]);
+
+                    if ($now->gt($endAt)) {
+                        return ['ok' => false, 'reason' => 'Promo kedaluwarsa (WIB adjusted)'];
+                    }
                 }
             } elseif ($ad) {
                 $lockedAd = \App\Models\Ad::where('id', $ad->id)->lockForUpdate()->first();
@@ -315,10 +341,22 @@ class PromoItemController extends Controller
                     ($lockedPromo && !is_null($lockedPromo->stock)) ||
                     ($lockedAd && !$lockedAd->unlimited_grab)
                 )) {
-                    return ['ok' => false, 'reason' => 'Stok promo habis'];
+                    return [
+                        'ok' => false,
+                        'reason' => 'Stok promo habis',
+                        'debug' => [
+                            'source' => !is_null($lockedPromo?->stock) ? 'promo' : 'ad',
+                            'promo_id' => $lockedPromo?->id,
+                            'promo_code' => $lockedPromo?->code,
+                            'promo_stock' => $lockedPromo?->stock,
+                            'ad_id' => $lockedAd?->id,
+                            'ad_code' => $lockedAd?->code,
+                            'ad_max_grab' => $lockedAd?->max_grab,
+                            'ad_unlimited' => $lockedAd?->unlimited_grab,
+                        ]
+                    ];
                 }
             }
-
 
             if ($makeRedeemed) {
                 $data['status']      = 'redeemed';
@@ -345,10 +383,10 @@ class PromoItemController extends Controller
         if (!$result['ok']) {
             return response()->json([
                 'success' => false,
-                'message' => $result['reason'] ?? 'Stok promo habis'
+                'message' => $result['reason'] ?? 'Stok promo habis',
+                'debug'   => $result['debug'] ?? null
             ], 409);
         }
-
 
         if (!empty($result['already'])) {
             return response()->json([

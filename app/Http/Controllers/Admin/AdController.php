@@ -985,6 +985,29 @@ class AdController extends Controller
         // ? Executing
         try {
             $model->save();
+            // ✅ Sinkronisasi stok promo ke tabel promos jika ada relasi
+            try {
+                $promo = \App\Models\Promo::where('code', $model->code)->first();
+
+                if ($promo) {
+                    // Jika admin ubah max_grab, sinkronkan ke promos.stock
+                    if ($request->has('max_grab') && !$model->unlimited_grab) {
+                        $promo->stock = $request->input('max_grab');
+                        $promo->save();
+
+                        Log::info('✅ Stock promo berhasil disinkronkan dari AdController@update', [
+                            'ad_id' => $model->id,
+                            'promo_id' => $promo->id,
+                            'new_stock' => $promo->stock,
+                        ]);
+                    }
+                }
+            } catch (\Throwable $th) {
+                Log::error('❌ Gagal sinkronisasi stok promo dari AdController@update', [
+                    'ad_id' => $model->id,
+                    'error' => $th->getMessage(),
+                ]);
+            }
         } catch (\Throwable $th) {
             DB::rollBack();
             return response([
@@ -1149,13 +1172,13 @@ class AdController extends Controller
             $ad = \App\Models\Ad::select([
                 'ads.*',
                 DB::raw('CAST(IF(ads.is_daily_grab = 1,
-                            (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
-                            SUM(total_grab)
-                        ) AS SIGNED) AS total_grab'),
+                        (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
+                        SUM(total_grab)
+                    ) AS SIGNED) AS total_grab'),
                 DB::raw('CAST(IF(ads.is_daily_grab = 1,
-                            ads.max_grab - (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
-                            ads.max_grab - SUM(total_grab)
-                        ) AS SIGNED) AS total_remaining'),
+                        ads.max_grab - (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
+                        ads.max_grab - SUM(total_grab)
+                    ) AS SIGNED) AS total_remaining'),
             ])
                 ->leftJoin('summary_grabs', 'summary_grabs.ad_id', 'ads.id')
                 ->with(['cube.tags', 'cube.user', 'cube.corporate', 'ad_category'])
@@ -1167,7 +1190,19 @@ class AdController extends Controller
                 return response(['message' => 'not found'], 404);
             }
 
-            return response(['message' => 'success', 'data' => $ad], 200);
+            // ✅ Ambil stok promo (kalau ada di tabel promos)
+            $promo = \App\Models\Promo::where('code', $ad->code)->first();
+            $ad->remaining_stock = $promo ? $promo->stock : $ad->max_grab;
+            $ad->stock_source = $promo ? 'promo' : 'ad';
+
+            // Pastikan waktu dikirim ke frontend
+            $ad->jam_mulai = $ad->jam_mulai ?? '00:00:00';
+            $ad->jam_berakhir = $ad->jam_berakhir ?? '23:59:59';
+
+            return response([
+                'message' => 'success',
+                'data' => $ad
+            ], 200);
         } catch (\Throwable $e) {
             Log::error('AdController@show failed', [
                 'id' => $id,
@@ -1175,7 +1210,7 @@ class AdController extends Controller
                 'file' => $e->getFile(),
                 'line' => $e->getLine(),
             ]);
-            return response(['message' => 'Error: server side having problem!'], 500);
+            return response(['message' => 'server error'], 500);
         }
     }
 
@@ -1195,13 +1230,92 @@ class AdController extends Controller
             // Tentukan apakah ini promo atau voucher
             $itemType = ($ad->type === 'voucher') ? 'voucher' : 'promo';
 
-            // 🗓️ Validasi masa berlaku
+            // 🗓️ Validasi masa berlaku (perbaikan)
             $now = now('Asia/Jakarta');
-            if ($ad->start_validate && $now->lt(\Carbon\Carbon::parse($ad->start_validate))) {
-                return response()->json(['success' => false, 'message' => ucfirst($itemType) . ' belum dimulai'], 422);
+
+            // Hitung batas waktu mulai & berakhir gabungan (tanggal + jam)
+            // 🕒 Zona waktu lokal
+            $tz = 'Asia/Jakarta';
+            $now = Carbon::now($tz);
+
+            // 🔹 Pastikan start & end date benar-benar lokal (bukan UTC mentah)
+            $startDateOnly = $ad->start_validate
+                ? Carbon::parse($ad->start_validate, $tz)->toDateString()
+                : null;
+
+            $endDateOnly = $ad->finish_validate
+                ? Carbon::parse($ad->finish_validate, $tz)->toDateString()
+                : null;
+
+            // 🔹 Gabungkan dengan jam harian
+            $startTime = $ad->jam_mulai ?: '00:00:00';
+            $endTime   = $ad->jam_berakhir ?: '23:59:59';
+
+            $startAt = $startDateOnly
+                ? Carbon::parse("{$startDateOnly} {$startTime}", $tz)
+                : null;
+
+            $endAt = $endDateOnly
+                ? Carbon::parse("{$endDateOnly} {$endTime}", $tz)
+                : null;
+
+            // 🧠 Log debug
+            Log::info('🕒 Time check (safe)', [
+                'ad_id' => $ad->id,
+                'now' => $now->format('Y-m-d H:i:s'),
+                'startAt' => optional($startAt)->format('Y-m-d H:i:s'),
+                'endAt' => optional($endAt)->format('Y-m-d H:i:s'),
+            ]);
+
+            // 🔒 Validasi tanggal promo
+            if ($startAt && $now->lt($startAt)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => ucfirst($itemType) . ' belum dimulai (tanggal mulai)',
+                ], 422);
             }
-            if ($ad->finish_validate && $now->gt(\Carbon\Carbon::parse($ad->finish_validate))) {
-                return response()->json(['success' => false, 'message' => ucfirst($itemType) . ' sudah berakhir'], 422);
+
+            // 🕐 Cek jam berlaku harian (gabungkan dengan tanggal hari ini)
+            $currentLocal = Carbon::now($tz);
+            $todayStr = $currentLocal->toDateString();
+
+            // normalisasi "HH:mm" -> "HH:mm:ss"
+            $norm = function ($t) {
+                if (!$t) return '00:00:00';
+                if (preg_match('/^\d{1,2}:\d{2}$/', $t)) return $t . ':00';
+                if (preg_match('/^\d{1,2}:\d{2}:\d{2}$/', $t)) return $t;
+                return '00:00:00';
+            };
+
+            $startTime = $norm($ad->jam_mulai ?? '00:00:00');
+            $endTime   = $norm($ad->jam_berakhir ?? '23:59:59');
+
+            // 🔥 Tambahkan deteksi lintas hari (misal 22:00 - 03:00)
+            $startOfDay = Carbon::parse("{$todayStr} {$startTime}", $tz);
+            $endOfDay   = Carbon::parse("{$todayStr} {$endTime}", $tz);
+            if ($endOfDay->lt($startOfDay)) {
+                // berarti jam_berakhir lewat tengah malam
+                $endOfDay->addDay();
+            }
+
+            Log::info('🕐 Daily time window', [
+                'now' => $currentLocal->format('Y-m-d H:i:s'),
+                'startOfDay' => $startOfDay->format('Y-m-d H:i:s'),
+                'endOfDay' => $endOfDay->format('Y-m-d H:i:s'),
+            ]);
+
+            if ($currentLocal->lt($startOfDay)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => ucfirst($itemType) . ' belum dimulai (belum jam berlaku)',
+                ], 422);
+            }
+
+            if ($currentLocal->gt($endOfDay)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => ucfirst($itemType) . ' sudah berakhir untuk hari ini',
+                ], 422);
             }
 
             // 👥 Validasi target user

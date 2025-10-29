@@ -332,6 +332,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/communities', [CommunityController::class, 'store']);
         Route::put('/communities/{id}', [CommunityController::class, 'update'])->whereNumber('id');
         Route::delete('/communities/{id}', [CommunityController::class, 'destroy'])->whereNumber('id');
+        Route::get('/communities/{id}/cubes', [CommunityController::class, 'cubes']);
+
 
         // +++ NEW: ADMIN members +++
         Route::get('/communities/{id}/members', [CommunityController::class, 'adminMembers'])->whereNumber('id');
@@ -366,6 +368,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // === CUBE TYPES CRUD (Admin) ===
         Route::apiResource('cube-types', CubeTypeController::class);
+
+        Route::get('/communities/{communityId}/cubes', [CubeController::class, 'cubesByCommunity']);
     });
 
 

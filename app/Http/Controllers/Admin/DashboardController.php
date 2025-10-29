@@ -8,6 +8,7 @@ use App\Models\Corporate;
 use App\Models\Cube;
 use App\Models\User;
 use App\Models\World;
+use App\Models\Community;
 use Illuminate\Http\Request;
 
 class DashboardController extends Controller
@@ -20,7 +21,7 @@ class DashboardController extends Controller
         $corporates = Corporate::count('*');
         $users = User::count('*');
 
-        $worlds = World::count('*');
+        $communities = Community::count('*');
 
         return response([
             'message' => 'Success',
@@ -29,7 +30,7 @@ class DashboardController extends Controller
                 'ads' => $ads,
                 'corporates' => $corporates,
                 'users' => $users,
-                'worlds' => $worlds,
+                'communities' => $communities,
             ]
         ]);
     }

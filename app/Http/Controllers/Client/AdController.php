@@ -11,6 +11,8 @@ use App\Models\DynamicContentCube;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+
 
 class AdController extends Controller
 {
@@ -376,49 +378,69 @@ class AdController extends Controller
     public function getShuffleAds(Request $request)
     {
         $world_id = $request->get("world_id", null);
+        $communityId = $request->get("community_id", null);
         $sortBy = $request->get("sortBy", "created_at");
         $sortDirection = $request->get("sortDirection", "DESC");
 
+        // Debug logging
+        Log::info('=== SHUFFLE ADS REQUEST ===', [
+            'community_id' => $communityId,
+            'world_id' => $world_id,
+            'user_id' => Auth::id()
+        ]);
+
         $model = new Ad();
-        $query = Ad::with('cube', 'cube.cube_type');
-        
+        $query = Ad::with('cube', 'cube.cube_type', 'ad_category');
+
         if ($request->get("search") != "") {
             $query = $this->search($request->get("search"), $model, $query, ['ad_category.name']);
-        } else {
-            $query = $query;
         }
 
-        if($world_id) {
-            $query = $query->where('cubes.world_id', $world_id);
-        } else {
-            $user = Auth::user();
-            
-            // Handle case when user is not authenticated (public endpoint)
-            if ($user && $user->worlds) {
-                $worldRegisteredId = $user->worlds->map(function ($item) {
-                    return $item->world_id;
-                });
+        // Join dan filter dasar
+        $query = $query->select(['ads.*'])
+            ->join('cubes', 'cubes.id', 'ads.cube_id')
+            ->where('ads.status', 'active')
+            ->where('cubes.status', 'active')
+            ->where('cubes.is_information', 0);
 
-                $query = $query->where(function ($q) use ($worldRegisteredId) {
-                    $q->whereNull('cubes.world_id')
-                        ->orWhereIn('cubes.world_id', $worldRegisteredId);
-                });
+        // Jika ada community_id, ambil ads di komunitas tsb ATAU ads global (community_id = null)
+        if ($communityId) {
+            $query = $query->where(function($q) use ($communityId) {
+                $q->where('ads.community_id', $communityId)
+                  ->orWhereNull('ads.community_id');
+            });
+        } else {
+            // Jika tidak ada community_id, gunakan filter world seperti semula
+            if ($world_id) {
+                $query = $query->where('cubes.world_id', $world_id);
             } else {
-                // If no user or no worlds, show only ads with null world_id
-                $query = $query->whereNull('cubes.world_id');
+                $user = Auth::user();
+
+                if ($user && $user->worlds) {
+                    $worldRegisteredId = $user->worlds->map(function ($item) {
+                        return $item->world_id;
+                    });
+
+                    $query = $query->where(function ($q) use ($worldRegisteredId) {
+                        $q->whereNull('cubes.world_id')
+                          ->orWhereIn('cubes.world_id', $worldRegisteredId);
+                    });
+                } else {
+                    $query = $query->whereNull('cubes.world_id');
+                }
             }
         }
 
-        $query =  $query->select([
-                'ads.*'
-            ])
-            ->join('cubes', 'cubes.id', 'ads.cube_id')
-            ->where('cubes.status', 'active')
-            ->where('is_information', 0)
-            ->inRandomOrder()
+        $query = $query->inRandomOrder()
             ->limit(20)
             ->get();
 
+        // Debug logging hasil
+        Log::info('=== SHUFFLE ADS RESULT ===', [
+            'total_ads' => $query->count(),
+            'ads_ids' => $query->pluck('id')->toArray(),
+            'community_id' => $communityId
+        ]);
 
         return response([
             'message' => 'Success',

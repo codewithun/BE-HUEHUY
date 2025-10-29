@@ -1022,7 +1022,7 @@ class CubeController extends Controller
                 }
                 if (!empty($preparedCubeTagsData)) {
                     CubeTag::insert($preparedCubeTagsData);
-                    
+
                     // Simpan link dari cube_tags[0] ke field link_information di Cube
                     $firstTag = $cubeTags[0] ?? null;
                     if ($firstTag && !empty($firstTag['link'])) {
@@ -1711,7 +1711,7 @@ class CubeController extends Controller
                 }
                 if (!empty($preparedCubeTagsData)) {
                     CubeTag::insert($preparedCubeTagsData);
-                    
+
                     // Simpan link dari cube_tags[0] ke field link_information di Cube
                     $firstTag = $cubeTags[0] ?? null;
                     if ($firstTag && !empty($firstTag['link'])) {
@@ -2268,6 +2268,45 @@ class CubeController extends Controller
         } catch (\Throwable $e) {
             Log::error('CubeController@show failed', ['id' => $id, 'error' => $e->getMessage()]);
             return response(['message' => 'Error: server side having problem!'], 500);
+        }
+    }
+
+    // GET /api/admin/communities/{communityId}/cubes
+    public function cubesByCommunity($communityId)
+    {
+        try {
+            $cubes = Cube::whereHas('ads', function ($q) use ($communityId) {
+                $q->where('community_id', $communityId);
+            })
+                ->with([
+                    'cube_type:id,name',
+                    'user:id,name',
+                    'corporate:id,name',
+                    'ads' => function ($q) use ($communityId) {
+                        $q->where('community_id', $communityId)
+                            ->select('id', 'cube_id', 'title', 'community_id', 'promo_type', 'type', 'status');
+                    },
+                ])
+                ->select('id', 'code', 'color', 'status', 'created_at', 'user_id', 'corporate_id')
+                ->get();
+
+            if ($cubes->isEmpty()) {
+                return response()->json([
+                    'message' => 'empty data',
+                    'data' => [],
+                ]);
+            }
+
+            return response()->json([
+                'message' => 'success',
+                'data' => $cubes,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Gagal mengambil kubus komunitas', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return response()->json(['message' => 'server error'], 500);
         }
     }
 }

@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
 use App\Models\Corporate;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Log;
 
 class CommunityController extends Controller
 {
@@ -1056,6 +1057,52 @@ class CommunityController extends Controller
                 'success' => false,
                 'message' => 'Gagal menghapus member: ' . $e->getMessage(),
             ], 500);
+        }
+    }
+
+    public function cubes($communityId)
+    {
+        try {
+            $dynamicContents = \App\Models\DynamicContent::with([
+                'dynamic_content_cubes.cube' => function ($q) {
+                    // Include status so we can determine active/inactive correctly
+                    $q->select('id', 'code', 'status', 'created_at');
+                },
+                'dynamic_content_cubes.cube.ads'
+            ])
+                ->where('community_id', $communityId)
+                ->get();
+
+            // Flatten cubes dari seluruh dynamic_content komunitas ini
+            $cubes = $dynamicContents->flatMap(function ($dc) {
+                return $dc->dynamic_content_cubes->map(function ($dcc) use ($dc) {
+                    $cube = $dcc->cube;
+                    $statusRaw = $cube->status ?? null;
+                    $isActive = in_array(strtolower((string)$statusRaw), ['1', 'true', 'active'], true);
+
+                    return [
+                        'id'          => $cube->id ?? null,
+                        'name'        => $cube->ads->first()->title ?? "Cube #" . ($cube->code ?? '-'),
+                        'widget_name' => $dc->name ?? '-',
+                        'widget_type' => $dc->type ?? '-',
+                        'type'        => $isActive ? 'active' : 'inactive', // ✅ fix di sini
+                        'created_at'  => $cube->created_at,
+                    ];
+                });
+            })->filter(fn($c) => $c['id'] !== null)->values();
+
+
+            return response()->json([
+                'message' => $cubes->isEmpty() ? 'empty data' : 'success',
+                'data' => $cubes,
+                'total_row' => $cubes->count(),
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Gagal mengambil kubus komunitas', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return response()->json(['message' => 'server error'], 500);
         }
     }
 }

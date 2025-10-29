@@ -946,6 +946,7 @@ class AuthController extends Controller
                 'picture_source' => $user->picture_source ?? null,
                 'verified_at' => $user->verified_at ?? null,
                 'role_id' => (int) ($user->role_id ?? 2),
+                'code' => 'HUEHUY-' . str_pad($user->id, 6, '0', STR_PAD_LEFT), // Generate code untuk QR
                 'role' => $user->role ? [
                     'id' => $user->role->id,
                     'name' => $user->role->name,
@@ -989,6 +990,7 @@ class AuthController extends Controller
                         'id' => Auth::id() ?? 0,
                         'name' => 'User',
                         'email' => '',
+                        'code' => 'HUEHUY-' . str_pad(Auth::id() ?? 0, 6, '0', STR_PAD_LEFT),
                         'role' => null,
                         'cubes' => [],
                         'corporate_user' => null

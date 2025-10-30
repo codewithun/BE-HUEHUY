@@ -24,49 +24,50 @@ class CommunityController extends Controller
     {
         if (!$communityId) return 0;
 
-        return Promo::where('community_id', $communityId)
-            ->where(function ($q) {
-                // Promo yang always_available = true
-                $q->where('always_available', true)
-                    // ATAU promo yang masih dalam periode aktif
-                    ->orWhere(function ($qq) {
-                        $now = now();
-                        $qq->where('always_available', '!=', true)
-                            ->where(function ($qqq) use ($now) {
-                                // Start date <= now <= end date
-                                $qqq->where(function ($qqqq) use ($now) {
-                                    $qqqq->whereNotNull('start_date')
-                                        ->whereNotNull('end_date')
-                                        ->where('start_date', '<=', $now)
-                                        ->where('end_date', '>=', $now);
-                                })
-                                    // Atau hanya ada start_date dan sudah dimulai
-                                    ->orWhere(function ($qqqq) use ($now) {
-                                        $qqqq->whereNotNull('start_date')
-                                            ->whereNull('end_date')
-                                            ->where('start_date', '<=', $now);
-                                    })
-                                    // Atau hanya ada end_date dan belum berakhir
-                                    ->orWhere(function ($qqqq) use ($now) {
-                                        $qqqq->whereNull('start_date')
-                                            ->whereNotNull('end_date')
-                                            ->where('end_date', '>=', $now);
-                                    })
-                                    // Atau tidak ada tanggal sama sekali
-                                    ->orWhere(function ($qqqq) {
-                                        $qqqq->whereNull('start_date')
-                                            ->whereNull('end_date');
-                                    });
-                            });
-                    });
-            })
-            // Tambahan filter: promo yang masih ada stok (jika ada kolom stock)
-            ->where(function ($q) {
-                $q->whereNull('stock')
-                    ->orWhere('stock', '>', 0);
-            })
-            ->count();
+        try {
+            return DB::table('ads')
+                ->join('cubes', 'ads.cube_id', '=', 'cubes.id')
+                ->join('dynamic_content_cubes', 'cubes.id', '=', 'dynamic_content_cubes.cube_id')
+                ->join('dynamic_contents', 'dynamic_content_cubes.dynamic_content_id', '=', 'dynamic_contents.id')
+                ->where('dynamic_contents.community_id', $communityId)
+                ->where('ads.status', 'active')
+                ->where(function ($q) {
+                    $now = now();
+
+                    // Gunakan kolom start_validate dan finish_validate
+                    $q->where(function ($qqq) use ($now) {
+                        $qqq->whereNotNull('ads.start_validate')
+                            ->whereNotNull('ads.finish_validate')
+                            ->where('ads.start_validate', '<=', $now)
+                            ->where('ads.finish_validate', '>=', $now);
+                    })
+                        ->orWhere(function ($qqq) use ($now) {
+                            $qqq->whereNotNull('ads.start_validate')
+                                ->whereNull('ads.finish_validate')
+                                ->where('ads.start_validate', '<=', $now);
+                        })
+                        ->orWhere(function ($qqq) use ($now) {
+                            $qqq->whereNull('ads.start_validate')
+                                ->whereNotNull('ads.finish_validate')
+                                ->where('ads.finish_validate', '>=', $now);
+                        })
+                        ->orWhere(function ($qqq) {
+                            // Kalau tidak punya batas waktu sama sekali, tetap dianggap aktif
+                            $qqq->whereNull('ads.start_validate')
+                                ->whereNull('ads.finish_validate');
+                        });
+                })
+                ->distinct('ads.id')
+                ->count('ads.id');
+        } catch (\Throwable $e) {
+            Log::error('Failed to count active promos per community', [
+                'community_id' => $communityId,
+                'error' => $e->getMessage(),
+            ]);
+            return 0;
+        }
     }
+
 
     /**
      * Helper: bentuk payload untuk FE (prefill + readable)

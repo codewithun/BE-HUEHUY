@@ -155,7 +155,8 @@ Route::get('/events/{id}', [EventController::class, 'show'])->whereNumber('id');
  * =======================
  */
 Route::get('/communities', [CommunityController::class, 'index']);
-Route::get('/communities/{id}', [CommunityController::class, 'show'])->whereNumber('id');
+// 👇 route publik, tetap ada untuk listing / tampilan tanpa login
+Route::get('/communities/public/{id}', [CommunityController::class, 'show'])->whereNumber('id');
 
 /**
  * +++ NEW: PUBLIC members fallback +++
@@ -182,6 +183,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/account', [AuthController::class, 'account']);
     Route::get('/account-authenticated', [AuthController::class, 'account']);
+
+    // 👇 route privat, pakai auth supaya bisa baca Bearer token
+    Route::get('/communities/{id}', [CommunityController::class, 'show'])->whereNumber('id');
 
     // === Notifications ===
     Route::get('/notification', [NotificationController::class, 'index']);

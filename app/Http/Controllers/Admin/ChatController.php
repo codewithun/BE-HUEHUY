@@ -206,12 +206,21 @@ class ChatController extends Controller
         $partnerId   = $request->query('partner_id');     // id user lawan bicara yang ingin difilter
         $communityId = $request->query('community_id');   // optional
         $corporateId = $request->query('corporate_id');   // optional
+        // Optional behavior: only list chats that have replies from the partner (default true to preserve current behavior)
+        $repliedOnly = filter_var($request->query('replied_only', '1'), FILTER_VALIDATE_BOOLEAN);
 
         $query = Chat::with([
             'sender:id,name,picture_source',
             'receiver:id,name,picture_source',
-            'messages' => fn($q) => $q->latest()->limit(1)
-        ]);
+            // Use latest-of-many relation for robust per-parent latest message retrieval
+            'lastMessage'
+        ])
+            // Compute unread_count efficiently without N+1
+            ->withCount([
+                'messages as unread_count' => function ($q) use ($user) {
+                    $q->where('sender_id', '!=', $user->id)->where('is_read', false);
+                }
+            ]);
 
         // hanya chat yang melibatkan user login
         $query->where(function ($q) use ($user) {
@@ -219,11 +228,12 @@ class ChatController extends Controller
                 ->orWhere('receiver_id', $user->id);
         });
 
-        // 🔥 PERBAIKAN: Hanya tampilkan chat dengan aktivitas dari kedua pihak
-        // Chat baru dibuat tapi belum ada balasan TIDAK akan muncul
-        $query->whereHas('messages', function ($q) use ($user) {
-            $q->where('sender_id', '!=', $user->id);
-        });
+        // 🔥 Optional filter: only chats with at least one reply from partner
+        if ($repliedOnly) {
+            $query->whereHas('messages', function ($q) use ($user) {
+                $q->where('sender_id', '!=', $user->id);
+            });
+        }
 
         // filter partner tertentu (hanya chat dengan A)
         if (!empty($partnerId)) {
@@ -247,17 +257,12 @@ class ChatController extends Controller
         $chats = $query->orderByDesc('updated_at')
             ->get()
             ->map(function ($chat) use ($user) {
-                $last = $chat->messages->first();
+                $last = $chat->lastMessage;
 
                 $partner = $chat->sender_id === $user->id ? $chat->receiver : $chat->sender;
                 if (!$partner || $partner->id === $user->id) {
                     return null;
                 }
-
-                $unreadCount = ChatMessage::where('chat_id', $chat->id)
-                    ->where('sender_id', '!=', $user->id)
-                    ->where('is_read', false)
-                    ->count();
 
                 return [
                     'id' => $chat->id,
@@ -268,7 +273,7 @@ class ChatController extends Controller
                     ],
                     'last_message' => $last?->message ?? '(belum ada pesan)',
                     'created_at' => $last?->created_at,
-                    'unread_count' => $unreadCount,
+                    'unread_count' => (int) ($chat->unread_count ?? 0),
                 ];
             })
             ->filter();

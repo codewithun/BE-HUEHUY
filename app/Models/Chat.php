@@ -33,4 +33,12 @@ class Chat extends Model
     {
         return $this->hasMany(ChatMessage::class);
     }
+
+    /**
+     * Get latest single message for this chat (per parent, safe and efficient).
+     */
+    public function lastMessage()
+    {
+        return $this->hasOne(ChatMessage::class)->latestOfMany('created_at');
+    }
 }

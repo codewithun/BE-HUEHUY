@@ -401,7 +401,13 @@ class AdController extends Controller
             ->join('cubes', 'cubes.id', 'ads.cube_id')
             ->where('ads.status', 'active')
             ->where('cubes.status', 'active')
-            ->where('cubes.is_information', 0);
+            ->where('cubes.is_information', 0)
+            // Filter out voucher cubes/ads
+            ->where('ads.type', '!=', 'voucher')
+            ->where(function($q) {
+                $q->whereNull('cubes.content_type')
+                  ->orWhere('cubes.content_type', '!=', 'voucher');
+            });
 
         // Jika ada community_id, ambil ads di komunitas tsb ATAU ads global (community_id = null)
         if ($communityId) {
@@ -439,7 +445,9 @@ class AdController extends Controller
         Log::info('=== SHUFFLE ADS RESULT ===', [
             'total_ads' => $query->count(),
             'ads_ids' => $query->pluck('id')->toArray(),
-            'community_id' => $communityId
+            'community_id' => $communityId,
+            'voucher_filter_applied' => true,
+            'note' => 'Voucher cubes/ads have been filtered out from shuffle ads'
         ]);
 
         return response([

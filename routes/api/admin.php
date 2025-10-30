@@ -43,6 +43,7 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::get('/cube', [PicklistController::class, 'cube']);
         // Standardize: ad-category options served by OptionController (with image + wrapper)
         Route::get('/ad-category', [OptionController::class, 'adCategory']);
+        Route::get('/ad-category/{id}', [OptionController::class, 'adCategoryById']);
         Route::get('/corporate', [PicklistController::class, 'corporate']);
         Route::get('/world', [PicklistController::class, 'world']);
         Route::get('/user', [PicklistController::class, 'user']);

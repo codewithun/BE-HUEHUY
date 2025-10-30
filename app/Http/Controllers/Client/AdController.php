@@ -447,4 +447,103 @@ class AdController extends Controller
             'data' => $query
         ]);
     }
+
+    /**
+     * Get cubes by ad category for community category page
+     */
+    public function getCubesByCategory(Request $request)
+    {
+        try {
+            $adCategoryId = $request->get('ad_category_id');
+            $communityId = $request->get('community_id');
+            $limit = $request->get('limit', 50);
+
+            // Debug logging
+            Log::info('=== CUBES BY CATEGORY REQUEST ===', [
+                'ad_category_id' => $adCategoryId,
+                'community_id' => $communityId,
+                'limit' => $limit,
+                'user_id' => Auth::id()
+            ]);
+
+            if (!$adCategoryId) {
+                return response([
+                    'message' => 'ad_category_id is required',
+                    'data' => []
+                ], 400);
+            }
+
+            $query = Ad::with(['cube', 'cube.cube_type', 'ad_category'])
+                ->where('ads.status', 'active')
+                ->where('ads.ad_category_id', $adCategoryId)
+                ->whereHas('cube', function($q) {
+                    $q->where('status', 'active');
+                });
+
+            // Filter by community if provided
+            if ($communityId) {
+                $query = $query->where(function($q) use ($communityId) {
+                    $q->where('ads.community_id', $communityId)
+                      ->orWhereNull('ads.community_id');
+                });
+            } else {
+                // Apply world filter if no community specified
+                $user = Auth::user();
+                if ($user && $user->worlds) {
+                    $worldRegisteredId = $user->worlds->pluck('world_id')->toArray();
+
+                    $query = $query->whereHas('cube', function($q) use ($worldRegisteredId) {
+                        $q->where(function($subQ) use ($worldRegisteredId) {
+                            $subQ->whereNull('world_id')
+                                 ->orWhereIn('world_id', $worldRegisteredId);
+                        });
+                    });
+                } else {
+                    $query = $query->whereHas('cube', function($q) {
+                        $q->whereNull('world_id');
+                    });
+                }
+            }
+
+            $ads = $query->orderBy('ads.created_at', 'DESC')
+                ->limit($limit)
+                ->get();
+
+            // Transform data to include both ad and cube information
+            $transformedData = $ads->map(function ($ad) {
+                return [
+                    'id' => $ad->id,
+                    'title' => $ad->title,
+                    'description' => $ad->description,
+                    'image' => $ad->image_1 ?: $ad->picture_source,
+                    'merchant' => $ad->cube->name ?? 'Merchant',
+                    'ad' => $ad,
+                    'cube' => $ad->cube,
+                    'category' => $ad->ad_category
+                ];
+            });
+
+            // Debug logging hasil
+            Log::info('=== CUBES BY CATEGORY RESULT ===', [
+                'total_cubes' => $transformedData->count(),
+                'ad_category_id' => $adCategoryId,
+                'community_id' => $communityId
+            ]);
+
+            return response([
+                'message' => 'success',
+                'data' => $transformedData
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Error in getCubesByCategory: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response([
+                'message' => 'Internal server error',
+                'data' => []
+            ], 500);
+        }
+    }
 }

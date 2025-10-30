@@ -194,6 +194,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('/cubes', CubeController::class);
     Route::get('/get-cube-by-code/{code}', [AdController::class, 'getCubeByCode']);
     Route::get('/menu-cube/{id}', [AdController::class, 'getMenuCubes'])->whereNumber('id');
+    Route::get('/cubes-by-category', [AdController::class, 'getCubesByCategory']);
 
     // === Opening Hours ===
     Route::apiResource('/opening-hours', OpeningHourController::class)->only(['store', 'update', 'destroy']);

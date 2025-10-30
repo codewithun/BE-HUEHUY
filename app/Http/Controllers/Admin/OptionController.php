@@ -46,4 +46,46 @@ class OptionController extends Controller
             'total_row' => $data->count(),
         ]);
     }
+
+    public function adCategoryById(Request $request, $id)
+    {
+        $community_id = $request->get('community_id', null);
+
+        $query = AdCategory::query()
+            ->where('id', $id)
+            ->select('id', 'name', 'picture_source', 'community_id');
+
+        // filter berdasarkan komunitas jika ada
+        if ($community_id) {
+            $query->where(function ($q) use ($community_id) {
+                $q->whereNull('community_id')
+                    ->orWhere('community_id', $community_id);
+            });
+        }
+
+        $category = $query->first();
+
+        if (!$category) {
+            return response()->json([
+                'message' => 'Category not found',
+                'data' => null,
+            ], 404);
+        }
+
+        $data = [
+            'id' => $category->id,
+            'label' => $category->name,
+            'value' => $category->id,
+            'name' => $category->name,
+            'picture_source' => $category->picture_source,
+            'image' => $category->picture_source
+                ? asset('storage/' . $category->picture_source)
+                : asset('storage/ad-category/hotel.png'),
+        ];
+
+        return response()->json([
+            'message' => 'success',
+            'data' => $data,
+        ]);
+    }
 }

@@ -1221,6 +1221,8 @@ class AdController extends Controller
             return response()->json(['success' => false, 'message' => 'Unauthenticated'], 401);
         }
 
+        // Diagnostic: log which claim path is used by frontend
+        Log::info('CLAIM_PATH=AdController@claim', ['ad_id' => $id, 'user_id' => $user->id]);
         try {
             $ad = \App\Models\Ad::find($id);
             if (!$ad) {
@@ -1358,11 +1360,45 @@ class AdController extends Controller
                 return response()->json(['success' => false, 'message' => 'Anda sudah klaim ' . $itemType . ' ini sebelumnya'], 409);
             }
 
+            // Perform claim inside a DB transaction with locks to avoid races
             DB::beginTransaction();
 
-            // ✅ Simpan klaim ke summary_grabs
+            // Lock the ad row for update
+            $lockedAd = \App\Models\Ad::where('id', $ad->id)->lockForUpdate()->first();
+
+            // Lock related voucher (if any)
+            $voucher = null;
+            if ($lockedAd && $lockedAd->type === 'voucher') {
+                $voucher = Voucher::where('ad_id', $lockedAd->id)->lockForUpdate()->first();
+            }
+
+            // Recompute remaining using latest summary_grabs under lock
+            $totalGrab = DB::table('summary_grabs')
+                ->where('ad_id', $lockedAd->id)
+                ->when($lockedAd->is_daily_grab, fn($q) => $q->whereDate('date', now('Asia/Jakarta')->toDateString()))
+                ->sum('total_grab');
+
+            $remaining = $lockedAd->unlimited_grab ? null : ($lockedAd->max_grab - $totalGrab);
+            if (!$lockedAd->unlimited_grab && $remaining <= 0) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => ucfirst($itemType) . ' sudah habis'], 422);
+            }
+
+            // Re-check double-claim under lock
+            $alreadyClaimed = DB::table('summary_grabs')
+                ->where('ad_id', $lockedAd->id)
+                ->where('user_id', $user->id)
+                ->when($lockedAd->is_daily_grab, fn($q) => $q->whereDate('date', now('Asia/Jakarta')->toDateString()))
+                ->exists();
+
+            if ($alreadyClaimed) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'Anda sudah klaim ' . $itemType . ' ini sebelumnya'], 409);
+            }
+
+            // Insert summary_grabs now that checks passed
             DB::table('summary_grabs')->insert([
-                'ad_id' => $ad->id,
+                'ad_id' => $lockedAd->id,
                 'user_id' => $user->id,
                 'date' => now('Asia/Jakarta')->toDateString(),
                 'total_grab' => 1,
@@ -1370,26 +1406,53 @@ class AdController extends Controller
                 'updated_at' => now(),
             ]);
 
-            // 🪄 Buat entri berdasarkan tipe
-            if ($ad->type === 'voucher') {
-                // Buat voucher_item
-                $voucher = Voucher::where('ad_id', $ad->id)->first();
-                if ($voucher) {
-                    $voucherItem = new VoucherItem();
-                    $voucherItem->user_id = $user->id;
-                    $voucherItem->voucher_id = $voucher->id;
-                    $voucherItem->code = $voucherItem->generateCode(); // pakai method dari model
-                    $voucherItem->used_at = null;
-                    $voucherItem->save();
+            // Handle voucher or promo specifics
+            if ($lockedAd->type === 'voucher') {
+                if (!$voucher) {
+                    DB::rollBack();
+                    return response()->json(['success' => false, 'message' => 'Voucher terkait tidak ditemukan'], 422);
+                }
+
+                if ($voucher->stock <= 0) {
+                    DB::rollBack();
+                    return response()->json(['success' => false, 'message' => 'Voucher sudah habis'], 422);
+                }
+
+                // Create voucher item
+                $voucherItem = new VoucherItem();
+                $voucherItem->user_id = $user->id;
+                $voucherItem->voucher_id = $voucher->id;
+                $voucherItem->code = $voucherItem->generateCode();
+                $voucherItem->used_at = null;
+                $voucherItem->save();
+
+                // Decrement voucher stock safely
+                $voucher->decrement('stock', 1);
+                Log::info('VOUCHER_DEC_AFTER from AdController@claim', ['voucher_id' => $voucher->id, 'stock' => DB::table('vouchers')->where('id', $voucher->id)->value('stock')]);
+
+                // Decrement ads.max_grab if applicable (not null and > 0)
+                if (!is_null($lockedAd->max_grab)) {
+                    $affected = DB::table('ads')
+                        ->where('id', $lockedAd->id)
+                        ->whereNotNull('max_grab')
+                        ->where('max_grab', '>', 0)
+                        ->decrement('max_grab', 1);
+
+                    if ($affected) {
+                        DB::table('ads')->where('id', $lockedAd->id)->update(['updated_at' => now()]);
+                        Log::info('DEC ads.max_grab after AdController@claim', ['ad_id' => $lockedAd->id, 'remaining_after' => DB::table('ads')->where('id', $lockedAd->id)->value('max_grab')]);
+                    } else {
+                        Log::info('Skip decrement max_grab: tidak memenuhi syarat', ['ad_id' => $lockedAd->id, 'max_grab' => $lockedAd->max_grab]);
+                    }
                 }
             } else {
-                // Buat promo_item via PromoItemController
+                // Promo flow (unchanged) - create promo item via controller
                 $promoItemController = new \App\Http\Controllers\Admin\PromoItemController();
                 $claimRequest = new \Illuminate\Http\Request([
-                    'promo_id' => $ad->id, // gunakan ad.id sebagai promo_id
+                    'promo_id' => $lockedAd->id,
                     'user_id' => $user->id,
                     'claim' => true,
-                    'expires_at' => $ad->finish_validate,
+                    'expires_at' => $lockedAd->finish_validate,
                 ]);
                 $claimRequest->setUserResolver(function () use ($user) {
                     return $user;
@@ -1404,17 +1467,22 @@ class AdController extends Controller
                 }
             }
 
+            // Mark notification as read if provided
+            if ($request->has('_notification_id')) {
+                DB::table('notifications')->where('id', $request->input('_notification_id'))->update(['read_at' => now()]);
+            }
+
             DB::commit();
 
             return response()->json([
                 'success' => true,
                 'message' => ucfirst($itemType) . ' berhasil diklaim!',
                 'data' => [
-                    'ad_id' => $ad->id,
-                    'title' => $ad->title,
+                    'ad_id' => $lockedAd->id,
+                    'title' => $lockedAd->title,
                     'type' => $itemType,
                     'remaining' => $remaining !== null ? max(0, $remaining - 1) : null,
-                    'expired_at' => $ad->finish_validate,
+                    'expired_at' => $lockedAd->finish_validate,
                 ],
             ]);
         } catch (\Throwable $e) {

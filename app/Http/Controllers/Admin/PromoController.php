@@ -237,6 +237,58 @@ class PromoController extends Controller
         return [$name, $phone ? trim((string)$phone) : null];
     }
 
+    /**
+     * Parse a human-friendly time limit string into seconds.
+     * Examples supported: "01:30" (HH:mm), "2:30:00" (HH:mm:ss), "90m", "2h", "3600s", or plain number = minutes.
+     */
+    private function parseTimeLimitToSeconds($raw): int
+    {
+        if ($raw === null) return 0;
+        $s = strtolower(trim((string)$raw));
+        if ($s === '') return 0;
+
+        // HH:mm[:ss]
+        if (preg_match('/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/', $s, $m)) {
+            $h = (int)$m[1];
+            $min = (int)$m[2];
+            $sec = isset($m[3]) ? (int)$m[3] : 0;
+            return max(0, $h * 3600 + $min * 60 + $sec);
+        }
+
+        // 90m, 2h, 3600s
+        if (preg_match('/^(\d+(?:\.\d+)?)([smh])$/', $s, $m)) {
+            $v = (float)$m[1];
+            $u = $m[2];
+            if ($u === 's') return (int)round($v);
+            if ($u === 'm') return (int)round($v * 60);
+            if ($u === 'h') return (int)round($v * 3600);
+        }
+
+        // plain number -> minutes
+        if (is_numeric($s)) return max(0, (int)$s * 60);
+
+        return 0;
+    }
+
+    /**
+     * Safely read promo time limit (seconds) from promo model or fallback config.
+     */
+    private function getPromoTimeLimitSeconds(Promo $promo): int
+    {
+        // Try reading column 'validation_time_limit' if available
+        try {
+            if (\Illuminate\Support\Facades\Schema::hasColumn('promos', 'validation_time_limit')) {
+                $val = $promo->getAttribute('validation_time_limit');
+                $sec = $this->parseTimeLimitToSeconds($val);
+                if ($sec > 0) return $sec;
+            }
+        } catch (\Throwable $e) {
+            // ignore and fallback
+        }
+        $fallback = config('app.promo_validation_default', null);
+        return $this->parseTimeLimitToSeconds($fallback);
+    }
+
 
     public function index(Request $request)
     {
@@ -1271,6 +1323,20 @@ class PromoController extends Controller
 
 
             $updates = ['redeemed_at' => now()];
+            // Ensure expires_at exists and reflects promo's validation_time_limit when possible
+            try {
+                if (Schema::hasColumn('promo_items', 'expires_at') && empty($locked->expires_at)) {
+                    $limitSec = $this->getPromoTimeLimitSeconds($promo);
+                    if ($limitSec > 0) {
+                        $expiresAt = now()->addSeconds($limitSec);
+                    } else {
+                        $expiresAt = $promo->end_date ?? null;
+                    }
+                    if ($expiresAt) $updates['expires_at'] = $expiresAt;
+                }
+            } catch (\Throwable $e) {
+                // ignore and continue
+            }
             if (Schema::hasColumn('promo_items', 'status')) $updates['status'] = 'redeemed';
 
             $affected = \App\Models\PromoItem::where('id', $locked->id)
@@ -1345,14 +1411,23 @@ class PromoController extends Controller
 
                 $masterCode = $promo->code ?? $enteredCode;
 
-                $item = \App\Models\PromoItem::create([
+                $limitSec = $this->getPromoTimeLimitSeconds($promo);
+                if ($limitSec > 0) {
+                    $expiresAt = now()->addSeconds($limitSec);
+                } else {
+                    $expiresAt = $promo->end_date ?? null;
+                }
+
+                $itemData = [
                     'promo_id'    => $promo->id,
                     'user_id'     => $ownerHint,
                     'code'        => $masterCode,
                     'status'      => 'redeemed',
                     'redeemed_at' => now(),
-                    'expires_at'  => $promo->end_date,
-                ]);
+                ];
+                if ($expiresAt) $itemData['expires_at'] = $expiresAt;
+
+                $item = \App\Models\PromoItem::create($itemData);
             } else {
 
                 if (is_null($item->redeemed_at)) {

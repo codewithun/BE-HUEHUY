@@ -19,6 +19,7 @@ class PromoItemController extends Controller
     {
         $query = PromoItem::with([
             'promo',
+            'ad:id,cube_id,title,code,validation_time_limit,picture_source,image_1,image_2,image_3,status,unlimited_grab,max_grab,created_at,updated_at',
             'ad.cube.user',
             'ad.cube.corporate',
             'ad.cube.tags',
@@ -84,6 +85,7 @@ class PromoItemController extends Controller
     {
         $items = PromoItem::with([
             'promo',
+            'ad:id,title,code,validation_time_limit,picture_source,image_1,image_2,image_3,status,created_at,updated_at',
             'ad.cube.user',
             'ad.cube.corporate',
             'ad.cube.tags',
@@ -101,6 +103,14 @@ class PromoItemController extends Controller
             return response()->json(['success' => false, 'message' => 'Promo item not found'], 404);
         }
         return response()->json(['success' => true, 'data' => $item]);
+    }
+
+    private function timeToSeconds(?string $time): int
+    {
+        if (!$time) return 0;
+        // Format 'HH:MM:SS'
+        [$h, $m, $s] = array_pad(explode(':', $time), 3, 0);
+        return ((int)$h) * 3600 + ((int)$m) * 60 + ((int)$s);
     }
 
     public function store(Request $request)
@@ -215,9 +225,9 @@ class PromoItemController extends Controller
         $requestedStatus = $request->input('status');
         $isClaimAction   = $request->boolean('claim');
 
-        if (empty($data['expires_at']) && $promo && $promo->end_date) {
-            $data['expires_at'] = $promo->end_date;
-        }
+        // NOTE: removed fallback that forced expires_at to promo end_date.
+        // The expires_at should reflect the per-item validation deadline (e.g. reserved + validation_time_limit),
+        // not always fallback to promo end_date here. Calculation is done later when item is reserved/claimed.
 
 
         if ($promo && !empty($promo->code)) {
@@ -368,6 +378,41 @@ class PromoItemController extends Controller
                 $data['user_id']     = $authUserId;
             } else {
                 $data['status']      = $isActive ? 'available' : 'expired';
+            }
+
+            // === Hitung final deadline untuk item yang di-claim/reserve ===
+            if (($data['status'] ?? null) === 'reserved') {
+                // Ambil sumber ad untuk validation_time_limit
+                $adForLimit = $lockedAd;
+                if (!$adForLimit) {
+                    // fallback via code promo
+                    $promoCode = $lockedPromo->code ?? null;
+                    if ($promoCode) {
+                        $adForLimit = \App\Models\Ad::where('code', $promoCode)->first();
+                    }
+                }
+
+                $limitSeconds = $this->timeToSeconds($adForLimit->validation_time_limit ?? null);
+
+                $reservedAt = isset($data['reserved_at']) ? Carbon::parse($data['reserved_at']) : Carbon::now();
+                $byLimit    = $limitSeconds > 0 ? $reservedAt->copy()->addSeconds($limitSeconds) : null;
+
+                $promoEnd   = $lockedPromo?->end_date ? Carbon::parse($lockedPromo->end_date) : null;
+
+                // final_deadline = min(reserved_at + limit, end_date) bila keduanya ada
+                $finalDeadline = match (true) {
+                    $byLimit && $promoEnd => $byLimit->min($promoEnd),
+                    $byLimit              => $byLimit,
+                    $promoEnd             => $promoEnd,
+                    default               => null,
+                };
+
+                // Set ke expires_at (sumber kebenaran di FE)
+                if ($finalDeadline) {
+                    $data['expires_at'] = $finalDeadline->toDateTimeString();
+                } else {
+                    unset($data['expires_at']); // biar nggak salah isi
+                }
             }
 
             $item = PromoItem::create($data);

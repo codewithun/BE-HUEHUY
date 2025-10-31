@@ -1639,7 +1639,7 @@ class VoucherController extends Controller
 
     public function voucherItems(Request $request)
     {
-
+        // === CABANG 1: berdasarkan voucher_code (untuk tabel admin/detail) ===
         if ($request->filled('voucher_code')) {
             $code     = trim((string)$request->input('voucher_code'));
             $page     = max((int)$request->input('page', 1), 1);
@@ -1652,7 +1652,13 @@ class VoucherController extends Controller
                 return response()->json(['success' => true, 'data' => [], 'total_row' => 0]);
             }
 
-            $base = VoucherItem::with(['user:id,name', 'voucher:id,code'])
+            // >>> TAMBAHAN: siapkan ad_id & ad_limit dari ads
+            $adId = $voucher->ad_id ?? null;
+            $adLimit = $adId
+                ? DB::table('ads')->where('id', $adId)->value('validation_time_limit')
+                : null;
+
+            $base = VoucherItem::with(['user:id,name', 'voucher:id,code,ad_id'])
                 ->where('voucher_id', $voucher->id);
 
             if ($s = trim((string)$request->input('search', ''))) {
@@ -1670,15 +1676,21 @@ class VoucherController extends Controller
                 ->take($paginate)
                 ->get();
 
-            $data = $rows->map(fn($r) => [
-                'id'         => $r->id,
-                'user_id'    => $r->user_id,
-                'user'       => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null,
-                'code'       => $r->code,
-                'voucher_id' => $r->voucher_id,
-                'used_at'    => $r->used_at,
-                'created_at' => $r->created_at,
-            ]);
+            $data = $rows->map(function ($r) use ($adId, $adLimit) {
+                return [
+                    'id'         => $r->id,
+                    'user_id'    => $r->user_id,
+                    'user'       => $r->user ? ['id' => $r->user->id, 'name' => $r->user->name] : null,
+                    'code'       => $r->code,
+                    'voucher_id' => $r->voucher_id,
+                    'used_at'    => $r->used_at,
+                    'created_at' => $r->created_at,
+
+                    // >>> TAMBAHAN: field flat untuk FE
+                    'ad_id'      => $adId,
+                    'ad_limit'   => $adLimit, // format "HH:MM:SS" bila ada
+                ];
+            });
 
             return response()->json([
                 'success'   => true,
@@ -1687,17 +1699,69 @@ class VoucherController extends Controller
             ]);
         }
 
-
+        // === CABANG 2: daftar voucher item milik user login (profil user) ===
         try {
             $userId = $request->user()?->id ?? auth()->id();
             if (!$userId) {
                 return response()->json(['success' => false, 'message' => 'User tidak terautentikasi'], 401);
             }
 
-            $voucherItems = VoucherItem::with(['voucher.community'])
+            $voucherItems = VoucherItem::with([
+                'voucher' => function ($q) {
+                    // Kolom aman yang FE butuh + hindari error accessor
+                    $q->select(
+                        'id',
+                        'code',
+                        'ad_id',
+                        'valid_until',
+                        'name',
+                        'description',
+                        'image',
+                        'type',
+                        'tenant_location',
+                        'stock',
+                        'validation_type'
+                    );
+
+                    // Tambah kolom opsional kalau ada di DB (hindari error "either does not exist")
+                    if (\Illuminate\Support\Facades\Schema::hasColumn('vouchers', 'image_updated_at')) {
+                        $q->addSelect('image_updated_at');
+                    }
+                    if (\Illuminate\Support\Facades\Schema::hasColumn('vouchers', 'community_id')) {
+                        $q->addSelect('community_id');
+                    }
+                },
+                // load community minimal id+name (hindari select *)
+                'voucher.community:id,name,description'
+            ])
                 ->where('user_id', $userId)
                 ->orderBy('created_at', 'desc')
                 ->get();
+            // Matikan appends/accessor pada relasi voucher agar tidak menyentuh atribut non-selected
+            $voucherItems->each(function ($vi) {
+                if ($vi->relationLoaded('voucher') && $vi->voucher) {
+                    $vi->voucher->setAppends([]); // cegah getImageUrl* yang butuh image_updated_at/community_id
+                }
+            });
+
+            // >>> TAMBAHAN: sisipkan ad_id & ad_limit ke setiap item
+            $adLimitCache = [];
+            $voucherItems = $voucherItems->map(function ($it) use (&$adLimitCache) {
+                $adId = $it->voucher->ad_id ?? null;
+                $adLimit = null;
+                if ($adId) {
+                    if (!array_key_exists($adId, $adLimitCache)) {
+                        $adLimitCache[$adId] = DB::table('ads')
+                            ->where('id', $adId)
+                            ->value('validation_time_limit');
+                    }
+                    $adLimit = $adLimitCache[$adId];
+                }
+                // set attribute agar ikut terserialisasi
+                $it->setAttribute('ad_id', $adId);
+                $it->setAttribute('ad_limit', $adLimit);
+                return $it;
+            });
 
             return response()->json(['success' => true, 'data' => $voucherItems]);
         } catch (\Throwable $e) {
@@ -1876,10 +1940,21 @@ class VoucherController extends Controller
 
     public function claim(Request $request, string $id)
     {
+        Log::info('CLAIM_PATH=VoucherController@claim', [
+            'voucher_id' => $id,
+            'user_id' => $request->user()?->id,
+            'at' => now()->toDateTimeString(),
+        ]);
         $user = $request->user();
         if (!$user) {
             return response()->json(['success' => false, 'message' => 'Unauthenticated'], 401);
         }
+
+        // quick hit log to identify which endpoint is invoked from FE
+        Log::info('CLAIM VC hit', [
+            'voucher_id' => $id,
+            'user_id' => $user->id ?? null,
+        ]);
 
         return DB::transaction(function () use ($request, $id, $user) {
             $voucher = Voucher::lockForUpdate()->find($id);
@@ -1937,6 +2012,34 @@ class VoucherController extends Controller
             ]);
             if (!is_null($voucher->stock)) {
                 $voucher->decrement('stock');
+            }
+
+            Log::info('VOUCHER_DEC_AFTER', [
+                'id' => $voucher->id,
+                'stock_db' => DB::table('vouchers')->where('id', $voucher->id)->value('stock'),
+            ]);
+
+            // --- Sync ke ads.max_grab (jika voucher terhubung ke ads) ---
+            if (!is_null($voucher->ad_id)) {
+                // Kurangi 1 hanya jika max_grab ada & > 0
+                $affected = DB::table('ads')
+                    ->where('id', $voucher->ad_id)
+                    ->whereNotNull('max_grab')
+                    ->where('max_grab', '>', 0)
+                    ->decrement('max_grab', 1);
+
+                if ($affected === 0) {
+                    Log::warning('Skip decrement max_grab: tidak memenuhi syarat', [
+                        'ad_id' => $voucher->ad_id,
+                    ]);
+                } else {
+                    // sentuh updated_at
+                    DB::table('ads')->where('id', $voucher->ad_id)->update(['updated_at' => now()]);
+                    Log::info('DEC ads.max_grab after claim', [
+                        'ad_id' => $voucher->ad_id,
+                        'max_grab_now' => DB::table('ads')->where('id', $voucher->ad_id)->value('max_grab'),
+                    ]);
+                }
             }
 
             if ($nid = $request->input('notification_id')) {

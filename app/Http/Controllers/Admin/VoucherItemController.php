@@ -139,6 +139,11 @@ class VoucherItemController extends Controller
      */
     public function claim(Request $request, $voucherId)
     {
+        Log::info('CLAIM_PATH=VoucherItemController@claim', [
+            'voucher_id' => $voucherId,
+            'user_id' => $request->user()?->id,
+            'at' => now()->toDateTimeString(),
+        ]);
         $userId = $request->user()?->id ?? Auth::id();
         if (!$userId) {
             return response()->json([
@@ -146,6 +151,12 @@ class VoucherItemController extends Controller
                 'message' => 'Unauthenticated'
             ], 401);
         }
+
+        // quick hit log to identify which endpoint is invoked from FE
+        Log::info('CLAIM VI hit', [
+            'voucher_id' => $voucherId,
+            'user_id' => $userId ?? null,
+        ]);
 
         $voucher = Voucher::find($voucherId);
         if (!$voucher) {
@@ -189,6 +200,32 @@ class VoucherItemController extends Controller
             $item->save();
 
             $voucher->decrement('stock');
+
+            Log::info('VOUCHER_ITEM_DEC_AFTER', [
+                'id' => $voucher->id,
+                'stock_db' => DB::table('vouchers')->where('id', $voucher->id)->value('stock'),
+            ]);
+
+            // --- Sync ke ads.max_grab (jika voucher terhubung ke ads) ---
+            if (!is_null($voucher->ad_id)) {
+                $affected = DB::table('ads')
+                    ->where('id', $voucher->ad_id)
+                    ->whereNotNull('max_grab')
+                    ->where('max_grab', '>', 0)
+                    ->decrement('max_grab', 1);
+
+                if ($affected === 0) {
+                    Log::warning('Skip decrement max_grab: tidak memenuhi syarat', [
+                        'ad_id' => $voucher->ad_id,
+                    ]);
+                } else {
+                    DB::table('ads')->where('id', $voucher->ad_id)->update(['updated_at' => now()]);
+                    Log::info('DEC ads.max_grab after VI-claim', [
+                        'ad_id' => $voucher->ad_id,
+                        'max_grab_now' => DB::table('ads')->where('id', $voucher->ad_id)->value('max_grab'),
+                    ]);
+                }
+            }
 
             $deleted = $this->cleanupNotifications($userId, $voucher->id, $request->input('notification_id'));
 

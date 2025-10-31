@@ -128,8 +128,8 @@ class DynamicContentController extends Controller
             'name' => 'required|string|max:255',
             'description' => 'required|string|max:255',
             'type' => ['required', Rule::in(['home', 'hunting', 'information'])],
-            'content_type' => ['required', Rule::in(['nearby', 'horizontal', 'vertical', 'category', 'ad_category', 'recommendation', 'promo'])],
-            'source_type' => ['nullable', Rule::in(['cube', 'ad', 'shuffle_cube', 'promo_selected', 'ad_category'])],
+            'content_type' => ['required', Rule::in(['nearby', 'horizontal', 'vertical', 'category', 'category_box', 'ad_category', 'recommendation', 'promo'])],
+            'source_type' => ['nullable', Rule::in(['cube', 'ad', 'shuffle_cube', 'promo_selected', 'ad_category', 'category_box'])],
             'size' => ['nullable', Rule::in(['S', 'M', 'L', 'XL', 'XL-Ads'])],
             'community_id' => 'nullable|numeric|exists:communities,id',
             'dynamic_content_cubes' => [Rule::requiredIf(function () use ($request) {
@@ -161,6 +161,14 @@ class DynamicContentController extends Controller
 
         if ($request->content_type === 'category') {
             $model->source_type = 'ad_category';
+        }
+
+        if ($request->content_type === 'category_box') {
+            $model->source_type = 'category_box';
+        }
+
+        if ($request->content_type === 'category_box') {
+            $model->source_type = 'category_box';
         }
 
         // ? Executing
@@ -255,8 +263,8 @@ class DynamicContentController extends Controller
             'name' => 'nullable|string|max:255',
             'description' => 'nullable|string|max:255',
             'type' => ['nullable', Rule::in(['home', 'hunting', 'information'])],
-            'content_type' => ['nullable', Rule::in(['nearby', 'horizontal', 'vertical', 'category', 'ad_category', 'recommendation', 'promo'])],
-            'source_type' => ['nullable', Rule::in(['cube', 'ad', 'shuffle_cube', 'promo_selected', 'ad_category'])],
+            'content_type' => ['nullable', Rule::in(['nearby', 'horizontal', 'vertical', 'category', 'category_box', 'ad_category', 'recommendation', 'promo'])],
+            'source_type' => ['nullable', Rule::in(['cube', 'ad', 'shuffle_cube', 'promo_selected', 'ad_category', 'category_box'])],
             'size' => ['nullable', Rule::in(['S', 'M', 'L', 'XL', 'XL-Ads'])],
             'level' => 'nullable|numeric',
             'is_active' => 'nullable|boolean',

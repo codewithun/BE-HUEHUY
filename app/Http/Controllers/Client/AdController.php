@@ -402,12 +402,9 @@ class AdController extends Controller
             ->where('ads.status', 'active')
             ->where('cubes.status', 'active')
             ->where('cubes.is_information', 0)
-            // Filter out voucher cubes/ads
-            ->where('ads.type', '!=', 'voucher')
-            ->where(function($q) {
-                $q->whereNull('cubes.content_type')
-                  ->orWhere('cubes.content_type', '!=', 'voucher');
-            });
+            // HAPUS filter ke kolom cubes.content_type karena kolom tsb tidak ada
+            // Filter cukup via tipe ads agar tidak menampilkan voucher
+            ->where('ads.type', '!=', 'voucher');
 
         // Jika ada community_id, ambil ads di komunitas tsb ATAU ads global (community_id = null)
         if ($communityId) {

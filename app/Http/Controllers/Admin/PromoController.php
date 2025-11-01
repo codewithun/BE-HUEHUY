@@ -865,6 +865,155 @@ class PromoController extends Controller
                 Storage::disk('public')->delete($promo->image);
             }
 
+            // Also remove any Ads that were created as a mirror of this Promo
+            // Ads may be surfaced by the application UI (ads list), so remove them
+            // to ensure the promo no longer appears in the app.
+            try {
+                $promoCode = $promo->code ?? null;
+
+                // Delete ads that have the same code (and cleanup their dependent rows)
+                if (!empty($promoCode)) {
+                    $ads = \App\Models\Ad::where('code', $promoCode)->get();
+                    foreach ($ads as $ad) {
+                        try {
+                            // pivot ad_target_users
+                            if (\Illuminate\Support\Facades\Schema::hasTable('ad_target_users')) {
+                                DB::table('ad_target_users')->where('ad_id', $ad->id)->delete();
+                            }
+                            // summary_grabs
+                            if (\Illuminate\Support\Facades\Schema::hasTable('summary_grabs')) {
+                                DB::table('summary_grabs')->where('ad_id', $ad->id)->delete();
+                            }
+                            // qrcodes pointing to ad
+                            if (class_exists(\App\Models\Qrcode::class)) {
+                                \App\Models\Qrcode::where('ad_id', $ad->id)->delete();
+                            }
+                            // notifications targeting this ad
+                            if (class_exists(\App\Models\Notification::class)) {
+                                \App\Models\Notification::where('target_type', 'ad')->where('target_id', $ad->id)->delete();
+                            }
+
+                            // Also remove vouchers linked to this ad (and their dependents)
+                            $relatedVouchers = \App\Models\Voucher::where('ad_id', $ad->id)->get();
+                            foreach ($relatedVouchers as $rv) {
+                                try {
+                                    \App\Models\VoucherItem::where('voucher_id', $rv->id)->delete();
+                                    \App\Models\VoucherValidation::where('voucher_id', $rv->id)->delete();
+                                    if (class_exists(\App\Models\Qrcode::class)) {
+                                        \App\Models\Qrcode::where('voucher_id', $rv->id)->delete();
+                                    }
+                                    if (class_exists(\App\Models\Notification::class)) {
+                                        \App\Models\Notification::where('target_type', 'voucher')->where('target_id', $rv->id)->delete();
+                                        \App\Models\Notification::where('type', 'voucher')->where('target_id', $rv->id)->delete();
+                                    }
+                                    $rv->delete();
+                                } catch (\Throwable $e) {
+                                    Log::warning('Failed cleanup related voucher when deleting ad', ['voucher_id' => $rv->id, 'error' => $e->getMessage()]);
+                                }
+                            }
+
+                            // finally delete ad row
+                            $ad->delete();
+                        } catch (\Throwable $e) {
+                            Log::warning('Failed cleanup while deleting ad', ['ad_id' => $ad->id, 'error' => $e->getMessage()]);
+                        }
+                    }
+                }
+
+                // Also delete ad if promo keeps an explicit ad_id pointer (same cleanup)
+                if (!empty($promo->ad_id)) {
+                    $ad = \App\Models\Ad::find($promo->ad_id);
+                    if ($ad) {
+                        try {
+                            if (\Illuminate\Support\Facades\Schema::hasTable('ad_target_users')) {
+                                DB::table('ad_target_users')->where('ad_id', $ad->id)->delete();
+                            }
+                            if (\Illuminate\Support\Facades\Schema::hasTable('summary_grabs')) {
+                                DB::table('summary_grabs')->where('ad_id', $ad->id)->delete();
+                            }
+                            if (class_exists(\App\Models\Qrcode::class)) {
+                                \App\Models\Qrcode::where('ad_id', $ad->id)->delete();
+                            }
+                            if (class_exists(\App\Models\Notification::class)) {
+                                \App\Models\Notification::where('target_type', 'ad')->where('target_id', $ad->id)->delete();
+                            }
+
+                            $relatedVouchers = \App\Models\Voucher::where('ad_id', $ad->id)->get();
+                            foreach ($relatedVouchers as $rv) {
+                                try {
+                                    \App\Models\VoucherItem::where('voucher_id', $rv->id)->delete();
+                                    \App\Models\VoucherValidation::where('voucher_id', $rv->id)->delete();
+                                    if (class_exists(\App\Models\Qrcode::class)) {
+                                        \App\Models\Qrcode::where('voucher_id', $rv->id)->delete();
+                                    }
+                                    if (class_exists(\App\Models\Notification::class)) {
+                                        \App\Models\Notification::where('target_type', 'voucher')->where('target_id', $rv->id)->delete();
+                                        \App\Models\Notification::where('type', 'voucher')->where('target_id', $rv->id)->delete();
+                                    }
+                                    $rv->delete();
+                                } catch (\Throwable $e) {
+                                    Log::warning('Failed cleanup related voucher when deleting ad (by ad_id)', ['voucher_id' => $rv->id, 'error' => $e->getMessage()]);
+                                }
+                            }
+
+                            $ad->delete();
+                        } catch (\Throwable $e) {
+                            Log::warning('Failed cleanup while deleting ad by ad_id', ['ad_id' => $ad->id, 'error' => $e->getMessage()]);
+                        }
+                    }
+                }
+
+                // Additionally delete any vouchers that reference this promo by code or ad_id (not covered above)
+                try {
+                    if (!empty($promoCode)) {
+                        $vouchersByCode = \App\Models\Voucher::where('code', $promoCode)->get();
+                        foreach ($vouchersByCode as $rv) {
+                            \App\Models\VoucherItem::where('voucher_id', $rv->id)->delete();
+                            \App\Models\VoucherValidation::where('voucher_id', $rv->id)->delete();
+                            if (class_exists(\App\Models\Qrcode::class)) {
+                                \App\Models\Qrcode::where('voucher_id', $rv->id)->delete();
+                            }
+                            if (class_exists(\App\Models\Notification::class)) {
+                                \App\Models\Notification::where('target_type', 'voucher')->where('target_id', $rv->id)->delete();
+                                \App\Models\Notification::where('type', 'voucher')->where('target_id', $rv->id)->delete();
+                            }
+                            $rv->delete();
+                        }
+                    }
+                    if (!empty($promo->ad_id)) {
+                        $vouchersByAd = \App\Models\Voucher::where('ad_id', $promo->ad_id)->get();
+                        foreach ($vouchersByAd as $rv) {
+                            \App\Models\VoucherItem::where('voucher_id', $rv->id)->delete();
+                            \App\Models\VoucherValidation::where('voucher_id', $rv->id)->delete();
+                            if (class_exists(\App\Models\Qrcode::class)) {
+                                \App\Models\Qrcode::where('voucher_id', $rv->id)->delete();
+                            }
+                            if (class_exists(\App\Models\Notification::class)) {
+                                \App\Models\Notification::where('target_type', 'voucher')->where('target_id', $rv->id)->delete();
+                                \App\Models\Notification::where('type', 'voucher')->where('target_id', $rv->id)->delete();
+                            }
+                            $rv->delete();
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    Log::warning('Failed cleanup extra vouchers for promo', ['promo_id' => $promo->id ?? null, 'error' => $e->getMessage()]);
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Failed to delete related ads/vouchers for promo: ' . $e->getMessage(), ['promo_id' => $promo->id ?? null]);
+            }
+
+            // Remove any notifications and qrcodes directly referencing this promo
+            try {
+                if (class_exists(\App\Models\Notification::class)) {
+                    \App\Models\Notification::where('target_type', 'promo')->where('target_id', $promo->id)->delete();
+                    \App\Models\Notification::where('type', 'promo')->where('target_id', $promo->id)->delete();
+                }
+                if (class_exists(\App\Models\Qrcode::class)) {
+                    \App\Models\Qrcode::where('promo_id', $promo->id)->delete();
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Failed to delete notifications/qrcodes for promo', ['promo_id' => $promo->id ?? null, 'error' => $e->getMessage()]);
+            }
 
             $promo->delete();
 

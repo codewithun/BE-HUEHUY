@@ -1020,10 +1020,28 @@ class VoucherController extends Controller
             VoucherValidation::where('voucher_id', $id)->delete();
 
 
+            // delete notifications that point to this voucher (both type and target_type usage)
+            try {
+                if (class_exists(\App\Models\Notification::class)) {
+                    \App\Models\Notification::where('target_type', 'voucher')->where('target_id', $model->id)->delete();
+                    \App\Models\Notification::where('type', 'voucher')->where('target_id', $model->id)->delete();
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Failed to delete notifications for voucher', ['voucher_id' => $model->id, 'error' => $e->getMessage()]);
+            }
+
+            // delete qrcodes referencing this voucher
+            try {
+                if (class_exists(\App\Models\Qrcode::class)) {
+                    \App\Models\Qrcode::where('voucher_id', $model->id)->delete();
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Failed to delete qrcodes for voucher', ['voucher_id' => $model->id, 'error' => $e->getMessage()]);
+            }
+
             if ($model->image && Storage::disk('public')->exists($model->image)) {
                 Storage::disk('public')->delete($model->image);
             }
-
 
             $model->delete();
 

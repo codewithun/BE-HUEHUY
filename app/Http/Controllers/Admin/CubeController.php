@@ -1802,6 +1802,64 @@ class CubeController extends Controller
             // Lanjutkan proses delete cube meskipun voucher gagal dihapus
         }
 
+        // * Remove related ads and linked promos/promo validations/promo items (fix orphaned promos)
+        try {
+            $relatedAds = Ad::where('cube_id', $id)->get();
+            foreach ($relatedAds as $ad) {
+                // Delete promo(s) that were created from this ad by matching on code or title
+                try {
+                    if (!empty($ad->code)) {
+                        $promos = Promo::where('code', $ad->code)->get();
+                    } else {
+                        $promos = Promo::where('title', $ad->title)
+                            ->when($ad->community_id, function ($q) use ($ad) {
+                                return $q->where('community_id', $ad->community_id);
+                            })
+                            ->get();
+                    }
+
+                    foreach ($promos as $promo) {
+                        // Delete promo items and validations referencing this promo
+                        try {
+                            \App\Models\PromoItem::where('promo_id', $promo->id)->delete();
+                        } catch (\Throwable $e) {
+                            Log::warning('Failed to delete PromoItems for promo during cube destroy', ['promo_id' => $promo->id, 'error' => $e->getMessage()]);
+                        }
+
+                        try {
+                            PromoValidation::where('promo_id', $promo->id)->delete();
+                        } catch (\Throwable $e) {
+                            Log::warning('Failed to delete PromoValidations for promo during cube destroy', ['promo_id' => $promo->id, 'error' => $e->getMessage()]);
+                        }
+
+                        try {
+                            $promo->delete();
+                            Log::info('✅ Related promo deleted successfully from CubeController', ['cube_id' => $id, 'ad_id' => $ad->id, 'promo_id' => $promo->id]);
+                        } catch (\Throwable $e) {
+                            Log::warning('Failed to delete promo during cube destroy', ['promo_id' => $promo->id, 'error' => $e->getMessage()]);
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    Log::warning('Error while searching/deleting promos for ad during cube destroy', ['ad_id' => $ad->id, 'error' => $e->getMessage()]);
+                }
+
+                // Finally delete the ad itself
+                try {
+                    // Delete any ad-specific summary or related models if necessary (safely)
+                    Ad::where('id', $ad->id)->delete();
+                    Log::info('✅ Related ad deleted successfully from CubeController', ['cube_id' => $id, 'ad_id' => $ad->id]);
+                } catch (\Throwable $e) {
+                    Log::warning('Failed to delete ad during cube destroy', ['ad_id' => $ad->id, 'error' => $e->getMessage()]);
+                }
+            }
+        } catch (\Throwable $th) {
+            Log::error('❌ Failed to delete related ads/promos from CubeController', [
+                'cube_id' => $id,
+                'error' => $th->getMessage()
+            ]);
+            // Lanjutkan proses delete cube meskipun beberapa bagian gagal dihapus
+        }
+
         // ? Executing
         try {
             $model->delete();

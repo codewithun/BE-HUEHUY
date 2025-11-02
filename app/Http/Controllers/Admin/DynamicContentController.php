@@ -44,7 +44,8 @@ class DynamicContentController extends Controller
             'dynamic_content_cubes.cube.user',
             'dynamic_content_cubes.cube.corporate',
             'dynamic_content_cubes.cube.opening_hours',
-            'ad_category'
+            'ad_category',
+            'community' // Tambahkan relasi community
         ]);
 
         // ? When search

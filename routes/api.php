@@ -375,6 +375,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::apiResource('cube-types', CubeTypeController::class);
 
         Route::get('/communities/{communityId}/cubes', [CubeController::class, 'cubesByCommunity']);
+
+        // Stream file QR (with CORS via api middleware)
+        Route::get('/qrcodes/{id}/file', [\App\Http\Controllers\Admin\QrcodeController::class, 'file'])
+            ->whereNumber('id');
     });
 
 

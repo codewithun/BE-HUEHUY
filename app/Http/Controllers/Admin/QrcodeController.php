@@ -36,14 +36,14 @@ class QrcodeController extends Controller
                 $s = trim($search);
                 $q->where(function ($qq) use ($s) {
                     $qq->where('tenant_name', 'like', "%{$s}%")
-                       ->orWhereHas('voucher', function ($qv) use ($s) {
-                           $qv->where('name', 'like', "%{$s}%")
-                              ->orWhere('code', 'like', "%{$s}%");
-                       })
-                       ->orWhereHas('promo', function ($qp) use ($s) {
-                           $qp->where('name', 'like', "%{$s}%")
-                              ->orWhere('title', 'like', "%{$s}%");
-                       });
+                        ->orWhereHas('voucher', function ($qv) use ($s) {
+                            $qv->where('name', 'like', "%{$s}%")
+                                ->orWhere('code', 'like', "%{$s}%");
+                        })
+                        ->orWhereHas('promo', function ($qp) use ($s) {
+                            $qp->where('name', 'like', "%{$s}%")
+                                ->orWhere('title', 'like', "%{$s}%");
+                        });
                 });
             });
 
@@ -114,7 +114,7 @@ class QrcodeController extends Controller
                 'qr_code'    => $fileName,
                 'voucher_id' => $voucherId,
                 'promo_id'   => $promoId,
-                'tenant_name'=> $tenantName,
+                'tenant_name' => $tenantName,
             ]);
 
             return response()->json([
@@ -124,7 +124,7 @@ class QrcodeController extends Controller
                 'qrcode'  => $qrcode->load(['voucher', 'promo.community']),
             ]);
         } catch (Throwable $e) {
-            Log::error('QR generate failed: '.$e->getMessage(), ['trace' => $e->getTraceAsString()]);
+            Log::error('QR generate failed: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
             return response()->json(['success' => false, 'message' => 'Gagal membuat QR code'], 500);
         }
     }
@@ -170,7 +170,7 @@ class QrcodeController extends Controller
                 'qr_code'    => $fileName,
                 'voucher_id' => $request->voucher_id,
                 'promo_id'   => $request->promo_id,
-                'tenant_name'=> $request->tenant_name,
+                'tenant_name' => $request->tenant_name,
             ]);
 
             return response()->json([
@@ -181,7 +181,7 @@ class QrcodeController extends Controller
         } catch (ModelNotFoundException $e) {
             return response()->json(['success' => false, 'message' => 'QR code tidak ditemukan'], 404);
         } catch (Throwable $e) {
-            Log::error('QR update failed: '.$e->getMessage());
+            Log::error('QR update failed: ' . $e->getMessage());
             return response()->json(['success' => false, 'message' => 'Gagal memperbarui QR code'], 500);
         }
     }
@@ -207,6 +207,29 @@ class QrcodeController extends Controller
         }
     }
 
+    public function file(Request $request, $id)
+    {
+        $adminId = Auth::id();
+
+        $qrcode = Qrcode::where('id', $id)
+            ->where('admin_id', $adminId)
+            ->firstOrFail();
+
+        $path = $qrcode->qr_code;
+        if (!$path || !Storage::disk('public')->exists($path)) {
+            return response()->json(['message' => 'File not found'], 404);
+        }
+
+        // Resolve full filesystem path for the "public" disk (storage/app/public)
+        $fullPath = storage_path('app/public/' . ltrim($path, '/'));
+        $mime = @mime_content_type($fullPath) ?: 'application/octet-stream';
+
+        return response()->file($fullPath, [
+            'Content-Type'  => $mime,
+            'Cache-Control' => 'public, max-age=31536000',
+        ]);
+    }
+
     private function buildQrTargetUrl(?int $voucherId, ?int $promoId): string
     {
         $baseUrl = config('app.frontend_url', 'https://v2.huehuy.com');
@@ -215,7 +238,8 @@ class QrcodeController extends Controller
             $promo = Promo::findOrFail($promoId);
             try {
                 $promo->loadMissing('community');
-            } catch (Throwable $e) {}
+            } catch (Throwable $e) {
+            }
             $communityId = $promo->community->id ?? $promo->community_id ?? 'global';
             return "{$baseUrl}/app/komunitas/promo/detail_promo?promoId={$promoId}&communityId={$communityId}&autoRegister=1&source=qr_scan";
         }

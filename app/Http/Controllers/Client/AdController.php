@@ -491,6 +491,14 @@ class AdController extends Controller
                     $q->where('ads.community_id', $communityId)
                       ->orWhereNull('ads.community_id');
                 });
+                
+                // Also filter cubes by community
+                $query = $query->whereHas('cube', function($q) use ($communityId) {
+                    $q->where(function($subQ) use ($communityId) {
+                        $subQ->where('community_id', $communityId)
+                             ->orWhereNull('community_id');
+                    });
+                });
             } else {
                 // Apply world filter if no community specified
                 $user = Auth::user();

@@ -46,10 +46,6 @@ class AdController extends Controller
 
             return $dt->format('Y-m-d');
         } catch (\Throwable $e) {
-            Log::warning('AdController date normalization failed', [
-                'raw' => $value,
-                'error' => $e->getMessage(),
-            ]);
             return null;
         }
     }
@@ -99,11 +95,7 @@ class AdController extends Controller
 
         $voucherSyncData = $request->input('_voucher_sync_data', []);
 
-        Log::info('Voucher sync triggered', [
-            'ad_id' => $ad->id,
-            'is_update' => $isUpdate,
-            'sync_data' => $voucherSyncData
-        ]);
+
 
         try {
             if ($isUpdate) {
@@ -120,14 +112,8 @@ class AdController extends Controller
                 // Create voucher baru
                 $this->createVoucherFromSyncData($ad, $voucherSyncData);
             }
-
-            Log::info('Voucher sync completed successfully', ['ad_id' => $ad->id]);
         } catch (\Throwable $e) {
-            Log::error('Voucher sync failed', [
-                'ad_id' => $ad->id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
+
             throw $e;
         }
     }
@@ -163,11 +149,7 @@ class AdController extends Controller
         // Create voucher
         $voucher = Voucher::create($voucherSyncData);
 
-        Log::info('✅ Voucher created with consistent code', [
-            'voucher_id' => $voucher->id,
-            'ad_id' => $ad->id,
-            'consistent_code' => $consistentCode
-        ]);
+
 
         return $voucher;
     }
@@ -179,6 +161,19 @@ class AdController extends Controller
     {
         // Resolve owner info jika perlu
         $voucherSyncData = $this->resolveOwnerInfo($voucherSyncData);
+
+        // ✅ PERBAIKAN: Handle code update ketika validation_type berubah
+        $validationType = $voucherSyncData['validation_type'] ?? $voucher->validation_type;
+
+        if ($validationType === 'manual' && isset($voucherSyncData['code']) && !empty($voucherSyncData['code'])) {
+            // Untuk manual validation, gunakan kode dari input admin
+            $voucherSyncData['code'] = $voucherSyncData['code'];
+        } elseif ($validationType === 'auto' && isset($voucherSyncData['code'])) {
+            // Untuk auto validation, tetap gunakan generated code atau yang sudah ada
+
+            // Hapus code dari update data agar tidak ter-override
+            unset($voucherSyncData['code']);
+        }
 
         // Hapus field yang tidak ada di tabel vouchers atau tidak boleh diupdate
         unset($voucherSyncData['owner_user_id'], $voucherSyncData['ad_id'], $voucherSyncData['cube_id']);
@@ -300,12 +295,14 @@ class AdController extends Controller
             'ad_category_id' => 'required|numeric|exists:ad_categories,id',
             'title' => 'required|string|max:255',
             'description' => 'nullable|string',
+            'detail' => 'nullable|string',
             'max_grab' => 'nullable|numeric',
             'unlimited_grab' => 'nullable',
             'is_daily_grab' => 'nullable',
             'status' => 'nullable|string',
             'type' => ['required', Rule::in(['general', 'voucher', 'huehuy', 'iklan'])],
             'promo_type' => ['required', Rule::in(['offline', 'online'])],
+            'online_store_link' => 'nullable|string|max:500',
             'validation_type' => ['nullable', 'string', Rule::in(['auto', 'manual'])],
             'code' => [
                 'nullable',
@@ -478,15 +475,6 @@ class AdController extends Controller
         $model->validation_time_limit = $validation_time_limit;
 
         // Log data untuk debugging
-        Log::info('AdController@store processing data', [
-            'unlimited_grab' => $model->unlimited_grab,
-            'jam_mulai' => $model->jam_mulai,
-            'jam_berakhir' => $model->jam_berakhir,
-            'day_type' => $model->day_type,
-            'custom_days' => $model->custom_days,
-            'validation_type' => $model->validation_type,
-            'code' => $model->code
-        ]);
 
         // ? Executing
         try {
@@ -505,10 +493,7 @@ class AdController extends Controller
                 // Sync target users menggunakan tabel pivot
                 $model->target_users()->sync($request->input('target_user_ids', []));
             } catch (\Throwable $th) {
-                Log::error('AdController@store sync target users failed', [
-                    'ad_id' => $model->id,
-                    'error' => $th->getMessage()
-                ]);
+
                 // Don't rollback for this, just log the error
             }
         }
@@ -522,15 +507,8 @@ class AdController extends Controller
             // Gunakan helper method untuk voucher sync lengkap
             try {
                 $this->handleVoucherSync($request, $model, false);
-                Log::info('✅ Voucher synced successfully from frontend data', [
-                    'ad_id' => $model->id,
-                    'title' => $model->title,
-                ]);
             } catch (\Throwable $th) {
-                Log::error('❌ Voucher sync failed', [
-                    'ad_id' => $model->id,
-                    'error' => $th->getMessage(),
-                ]);
+
                 // Tidak rollback karena ads sudah berhasil dibuat
             }
         }
@@ -550,17 +528,7 @@ class AdController extends Controller
                         'target_type' => 'all',
                     ]
                 );
-
-                Log::info('✅ Voucher auto-created from AdController (legacy)', [
-                    'ad_id' => $model->id,
-                    'title' => $model->title,
-                    'content_type' => $request->input('content_type'),
-                ]);
             } catch (\Throwable $th) {
-                Log::error('❌ Failed to auto-create voucher from ad', [
-                    'ad_id' => $model->id,
-                    'error' => $th->getMessage(),
-                ]);
             }
         }
 
@@ -577,16 +545,18 @@ class AdController extends Controller
     public function update(Request $request, string $id)
     {
         // Log incoming request for debugging
-        Log::info('AdController@update received request', [
-            'ad_id' => $id,
-            'method' => $request->method(),
-            'content_type' => $request->header('Content-Type'),
-            'all_data' => $request->all(),
-            'files' => array_keys($request->allFiles()),
-            'is_daily_grab_value' => $request->input('is_daily_grab'),
-            'jam_berakhir_value' => $request->input('jam_berakhir'),
-            'unlimited_grab_value' => $request->input('unlimited_grab'),
-        ]);
+
+        // ✅ MAP: cube_tags[0][link] -> online_store_link (untuk konsistensi frontend)
+        if (!$request->filled('online_store_link')) {
+            $cubeTags = $request->input('cube_tags', []);
+            if (is_array($cubeTags) && isset($cubeTags[0]['link']) && !empty($cubeTags[0]['link'])) {
+                $request->merge(['online_store_link' => $cubeTags[0]['link']]);
+                Log::info('✅ AdController@update mapped cube_tags[0][link] to online_store_link', [
+                    'ad_id' => $id,
+                    'link' => $cubeTags[0]['link']
+                ]);
+            }
+        }
 
         // Convert empty date strings to null so 'nullable|date' passes
         if ($request->has('start_validate') && $request->input('start_validate') === '') {
@@ -610,11 +580,13 @@ class AdController extends Controller
             'ad_category_id' => 'nullable|numeric|exists:ad_categories,id',
             'title' => 'nullable|string|max:255',
             'description' => 'nullable|string',
+            'detail' => 'nullable|string',
             'max_grab' => 'nullable|numeric',
             'unlimited_grab' => 'nullable',
             'is_daily_grab' => 'nullable',
             'type' => ['nullable', Rule::in(['general', 'voucher', 'huehuy', 'iklan'])],
             'promo_type' => ['nullable', Rule::in(['offline', 'online'])],
+            'online_store_link' => 'nullable|string|max:500',
             'validation_type' => ['nullable', 'string', Rule::in(['auto', 'manual'])],
             'code' => [
                 'nullable',
@@ -665,28 +637,12 @@ class AdController extends Controller
         ]);
 
         if ($validation) {
-            Log::error('AdController@update validation failed', [
-                'ad_id' => $id,
-                'validation_errors' => $validation->getData(),
-                'request_data' => $request->all()
-            ]);
+
             return $validation;
         }
 
         // Log request data untuk debugging
-        Log::info('AdController@update received data', [
-            'ad_id' => $id,
-            'all_request' => $request->all(),
-            'files' => array_keys($request->allFiles()),
-            'has_ads_image_1_bracket' => $request->hasFile('ads[image_1]'),
-            'has_ads_image_1_dot' => $request->hasFile('ads.image_1'),
-            'existing_data' => [
-                'picture_source' => $model->picture_source,
-                'image_1' => $model->image_1,
-                'image_2' => $model->image_2,
-                'image_3' => $model->image_3,
-            ]
-        ]);
+
 
         // ? Manual field assignment instead of dump_field for better control
         if ($request->has('title')) {
@@ -701,6 +657,9 @@ class AdController extends Controller
         if ($request->has('description')) {
             $model->description = $request->input('description');
         }
+        if ($request->has('detail')) {
+            $model->detail = $request->input('detail');
+        }
         if ($request->has('ad_category_id')) {
             $adCategoryId = $request->input('ad_category_id');
             // Handle empty string or null
@@ -709,11 +668,32 @@ class AdController extends Controller
         if ($request->has('promo_type')) {
             $model->promo_type = $request->input('promo_type');
         }
+        if ($request->has('online_store_link')) {
+            $model->online_store_link = $request->input('online_store_link');
+        }
         if ($request->has('validation_type')) {
             $model->validation_type = $request->input('validation_type', 'auto');
         }
         if ($request->has('code')) {
-            $model->code = $request->input('code');
+            $candidateCode = $request->input('code');
+
+            // ✅ VALIDASI EXTRA: Jika validation_type adalah manual dan kode masih pattern auto-generated
+            // maka ini bug frontend, kita REJECT dan throw error agar frontend fix
+            if ($model->validation_type === 'manual' && $candidateCode && preg_match('/^(KUBUS|VCR)-\d{13,}-\d{1,5}$/', $candidateCode)) {
+
+
+                DB::rollBack();
+                return response([
+                    "message" => "Error: Kode untuk validasi manual tidak boleh menggunakan pattern auto-generated. Harap masukkan kode unik manual.",
+                    "error_code" => "INVALID_MANUAL_CODE",
+                    "rejected_code" => $candidateCode,
+                    "errors" => [
+                        "code" => ["Kode untuk validasi manual tidak boleh menggunakan pattern auto-generated (KUBUS-xxx atau VCR-xxx). Harap masukkan kode unik manual seperti: MYCODE123, VOUCHER-001, atau PROMO2025."]
+                    ]
+                ], 422);
+            }
+
+            $model->code = $candidateCode;
         }
         if ($request->has('target_type')) {
             $model->target_type = $request->input('target_type', 'all');
@@ -809,26 +789,7 @@ class AdController extends Controller
         }
 
         // Log data untuk debugging
-        Log::info('AdController@update processing data', [
-            'ad_id' => $id,
-            'unlimited_grab' => $model->unlimited_grab,
-            'jam_mulai' => $model->jam_mulai,
-            'jam_berakhir' => $model->jam_berakhir,
-            'day_type' => $model->day_type,
-            'custom_days' => $model->custom_days,
-            'validation_type' => $model->validation_type,
-            'code' => $model->code,
-            'title' => $model->title,
-            'description' => $model->description,
-            'promo_type' => $model->promo_type,
-            'start_validate' => $model->start_validate,
-            'finish_validate' => $model->finish_validate,
-            'original_title' => $model->getOriginal('title'),
-            'original_description' => $model->getOriginal('description'),
-            'request_title' => $request->input('title'),
-            'request_description' => $request->input('description'),
-            'dirty_fields' => $model->getDirty(),
-        ]);
+
 
         // * Check if has upload file
         if ($request->hasFile('image')) {
@@ -875,12 +836,6 @@ class AdController extends Controller
                 } else {
                     $model->image_1 = $existingImage1;
                 }
-
-                Log::info('AdController@update preserved existing image_1', [
-                    'ad_id' => $id,
-                    'original_url' => $existingImage1,
-                    'converted_path' => $model->image_1
-                ]);
             }
         }
 
@@ -919,12 +874,6 @@ class AdController extends Controller
                 } else {
                     $model->image_2 = $existingImage2;
                 }
-
-                Log::info('AdController@update preserved existing image_2', [
-                    'ad_id' => $id,
-                    'original_url' => $existingImage2,
-                    'converted_path' => $model->image_2
-                ]);
             }
         }
 
@@ -963,12 +912,6 @@ class AdController extends Controller
                 } else {
                     $model->image_3 = $existingImage3;
                 }
-
-                Log::info('AdController@update preserved existing image_3', [
-                    'ad_id' => $id,
-                    'original_url' => $existingImage3,
-                    'converted_path' => $model->image_3
-                ]);
             }
         }
 
@@ -985,6 +928,62 @@ class AdController extends Controller
         // ? Executing
         try {
             $model->save();
+
+            // 🔍 DEBUG: Check kondisi sync
+            Log::info('🔍 AdController@update checking sync conditions', [
+                'ad_id' => $model->id,
+                'has_online_store_link' => $request->has('online_store_link'),
+                'has_cube_tags' => $request->has('cube_tags'),
+                'online_store_link_value' => $model->online_store_link,
+                'cube_id' => $model->cube_id
+            ]);
+
+            // ✅ Sinkronisasi online_store_link ke cube, cube_tags, dan promo
+            // PERBAIKAN: Cek jika model->online_store_link tidak null, bukan hanya request
+            if ($model->online_store_link !== null && $model->cube_id) {
+                try {
+                    $linkToSync = $model->online_store_link;
+
+                    // Update cube.link_information
+                    $cube = \App\Models\Cube::find($model->cube_id);
+                    if ($cube) {
+                        $cube->link_information = $linkToSync;
+                        $cube->save();
+                        Log::info('✅ AdController@update synced online_store_link to cube.link_information', [
+                            'ad_id' => $model->id,
+                            'cube_id' => $cube->id,
+                            'link' => $linkToSync
+                        ]);
+
+                        // ✅ IMPORTANT: Update cube_tags.link juga agar frontend bisa baca saat edit
+                        $affectedRows = \App\Models\CubeTag::where('cube_id', $cube->id)->update(['link' => $linkToSync]);
+                        Log::info('✅ AdController@update synced online_store_link to cube_tags', [
+                            'ad_id' => $model->id,
+                            'cube_id' => $cube->id,
+                            'link' => $linkToSync,
+                            'affected_rows' => $affectedRows
+                        ]);
+                    }                    // Update promo.online_store_link jika ada promo dengan code yang sama
+                    if ($model->code) {
+                        $promo = \App\Models\Promo::where('code', $model->code)->first();
+                        if ($promo) {
+                            $promo->online_store_link = $linkToSync;
+                            $promo->save();
+                            Log::info('✅ AdController@update synced online_store_link to promo', [
+                                'ad_id' => $model->id,
+                                'promo_id' => $promo->id,
+                                'link' => $linkToSync
+                            ]);
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    Log::error('❌ AdController@update failed to sync online_store_link', [
+                        'ad_id' => $model->id,
+                        'error' => $e->getMessage()
+                    ]);
+                }
+            }
+
             // ✅ Sinkronisasi stok promo ke tabel promos jika ada relasi
             try {
                 $promo = \App\Models\Promo::where('code', $model->code)->first();
@@ -994,19 +993,9 @@ class AdController extends Controller
                     if ($request->has('max_grab') && !$model->unlimited_grab) {
                         $promo->stock = $request->input('max_grab');
                         $promo->save();
-
-                        Log::info('✅ Stock promo berhasil disinkronkan dari AdController@update', [
-                            'ad_id' => $model->id,
-                            'promo_id' => $promo->id,
-                            'new_stock' => $promo->stock,
-                        ]);
                     }
                 }
             } catch (\Throwable $th) {
-                Log::error('❌ Gagal sinkronisasi stok promo dari AdController@update', [
-                    'ad_id' => $model->id,
-                    'error' => $th->getMessage(),
-                ]);
             }
         } catch (\Throwable $th) {
             DB::rollBack();
@@ -1022,10 +1011,7 @@ class AdController extends Controller
                 // Sync target users menggunakan tabel pivot
                 $model->target_users()->sync($request->input('target_user_ids', []));
             } catch (\Throwable $th) {
-                Log::error('AdController@update sync target users failed', [
-                    'ad_id' => $model->id,
-                    'error' => $th->getMessage()
-                ]);
+
                 // Don't rollback for this, just log the error
             }
         }
@@ -1037,15 +1023,8 @@ class AdController extends Controller
             // Gunakan helper method untuk voucher sync lengkap
             try {
                 $this->handleVoucherSync($request, $model, true);
-                Log::info('✅ Voucher synced successfully from frontend data (update)', [
-                    'ad_id' => $model->id,
-                    'title' => $model->title,
-                ]);
             } catch (\Throwable $th) {
-                Log::error('❌ Voucher sync failed (update)', [
-                    'ad_id' => $model->id,
-                    'error' => $th->getMessage(),
-                ]);
+
                 // Tidak rollback karena ads sudah berhasil diupdate
             }
         }
@@ -1063,33 +1042,35 @@ class AdController extends Controller
                     $voucher->code = $voucher->generateVoucherCode();
 
                     $voucher->save();
-                    Log::info('✅ Voucher auto-created from AdController (legacy update)', [
-                        'ad_id' => $model->id,
-                        'title' => $model->title,
-                    ]);
                 } catch (\Throwable $th) {
-                    Log::error('❌ Failed to auto-create voucher from ad (update)', [
-                        'ad_id' => $model->id,
-                        'error' => $th->getMessage(),
-                    ]);
+
                     // Tidak rollback karena ads sudah berhasil diupdate
                 }
             } else {
-                // Update voucher name jika ada perubahan title
-                if ($voucher->name !== $model->title) {
-                    try {
-                        $voucher->update(['name' => $model->title]);
-                        Log::info('✅ Voucher name updated from AdController (legacy)', [
-                            'ad_id' => $model->id,
-                            'old_name' => $voucher->name,
-                            'new_name' => $model->title,
-                        ]);
-                    } catch (\Throwable $th) {
-                        Log::error('❌ Failed to update voucher name', [
-                            'ad_id' => $model->id,
-                            'error' => $th->getMessage(),
-                        ]);
+                // ✅ PERBAIKAN: Update voucher name, code, dan validation_type jika ada perubahan
+                try {
+                    $updateData = [];
+
+                    // Update name jika berubah
+                    if ($voucher->name !== $model->title) {
+                        $updateData['name'] = $model->title;
                     }
+
+                    // Update validation_type jika berubah
+                    if ($request->has('validation_type') && $voucher->validation_type !== $model->validation_type) {
+                        $updateData['validation_type'] = $model->validation_type;
+                    }
+
+                    // Update code jika validation_type adalah manual dan code berubah
+                    if ($model->validation_type === 'manual' && $request->has('code') && $voucher->code !== $model->code) {
+                        $updateData['code'] = $model->code;
+                    }
+
+                    // Lakukan update jika ada perubahan
+                    if (!empty($updateData)) {
+                        $voucher->update($updateData);
+                    }
+                } catch (\Throwable $th) {
                 }
             }
         }
@@ -1137,16 +1118,9 @@ class AdController extends Controller
                 VoucherItem::where('voucher_id', $relatedVoucher->id)->delete();
                 // Hapus voucher
                 $relatedVoucher->delete();
-                Log::info('✅ Related voucher deleted successfully', [
-                    'ad_id' => $id,
-                    'voucher_id' => $relatedVoucher->id
-                ]);
             }
         } catch (\Throwable $th) {
-            Log::error('❌ Failed to delete related voucher', [
-                'ad_id' => $id,
-                'error' => $th->getMessage()
-            ]);
+
             // Lanjutkan proses delete ad meskipun voucher gagal dihapus
         }
 
@@ -1204,12 +1178,6 @@ class AdController extends Controller
                 'data' => $ad
             ], 200);
         } catch (\Throwable $e) {
-            Log::error('AdController@show failed', [
-                'id' => $id,
-                'error' => $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-            ]);
             return response(['message' => 'server error'], 500);
         }
     }
@@ -1222,7 +1190,6 @@ class AdController extends Controller
         }
 
         // Diagnostic: log which claim path is used by frontend
-        Log::info('CLAIM_PATH=AdController@claim', ['ad_id' => $id, 'user_id' => $user->id]);
         try {
             $ad = \App\Models\Ad::find($id);
             if (!$ad) {
@@ -1262,12 +1229,7 @@ class AdController extends Controller
                 : null;
 
             // 🧠 Log debug
-            Log::info('🕒 Time check (safe)', [
-                'ad_id' => $ad->id,
-                'now' => $now->format('Y-m-d H:i:s'),
-                'startAt' => optional($startAt)->format('Y-m-d H:i:s'),
-                'endAt' => optional($endAt)->format('Y-m-d H:i:s'),
-            ]);
+
 
             // 🔒 Validasi tanggal promo
             if ($startAt && $now->lt($startAt)) {
@@ -1300,11 +1262,7 @@ class AdController extends Controller
                 $endOfDay->addDay();
             }
 
-            Log::info('🕐 Daily time window', [
-                'now' => $currentLocal->format('Y-m-d H:i:s'),
-                'startOfDay' => $startOfDay->format('Y-m-d H:i:s'),
-                'endOfDay' => $endOfDay->format('Y-m-d H:i:s'),
-            ]);
+
 
             if ($currentLocal->lt($startOfDay)) {
                 return response()->json([
@@ -1428,7 +1386,7 @@ class AdController extends Controller
 
                 // Decrement voucher stock safely
                 $voucher->decrement('stock', 1);
-                Log::info('VOUCHER_DEC_AFTER from AdController@claim', ['voucher_id' => $voucher->id, 'stock' => DB::table('vouchers')->where('id', $voucher->id)->value('stock')]);
+
 
                 // Decrement ads.max_grab if applicable (not null and > 0)
                 if (!is_null($lockedAd->max_grab)) {
@@ -1440,9 +1398,7 @@ class AdController extends Controller
 
                     if ($affected) {
                         DB::table('ads')->where('id', $lockedAd->id)->update(['updated_at' => now()]);
-                        Log::info('DEC ads.max_grab after AdController@claim', ['ad_id' => $lockedAd->id, 'remaining_after' => DB::table('ads')->where('id', $lockedAd->id)->value('max_grab')]);
                     } else {
-                        Log::info('Skip decrement max_grab: tidak memenuhi syarat', ['ad_id' => $lockedAd->id, 'max_grab' => $lockedAd->max_grab]);
                     }
                 }
             } else {
@@ -1487,12 +1443,6 @@ class AdController extends Controller
             ]);
         } catch (\Throwable $e) {
             DB::rollBack();
-            Log::error('AdController@claim error', [
-                'ad_id' => $id,
-                'user_id' => $user->id ?? null,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
             return response()->json(['success' => false, 'message' => 'Terjadi kesalahan server'], 500);
         }
     }

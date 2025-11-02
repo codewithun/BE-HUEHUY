@@ -22,6 +22,7 @@ class Ad extends Model
         'title',
         'slug',
         'description',
+        'detail',
         'picture_source',
         'image_1',
         'image_2',

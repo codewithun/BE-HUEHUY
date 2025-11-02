@@ -479,6 +479,7 @@ class PromoController extends Controller
                 'owner_contact' => $promo->owner_contact ?? '',
                 'location' => $promo->location ?? '',
                 'promo_type' => $promo->promo_type ?? '',
+                'online_store_link' => $promo->online_store_link ?? '',
                 'always_available' => $promo->always_available ?? true,
                 'start_date' => $promo->start_date ?? null,
                 'end_date' => $promo->end_date ?? null,
@@ -564,6 +565,14 @@ class PromoController extends Controller
             }
         }
 
+        // ✅ MAP: cube_tags[0][link] -> online_store_link (untuk konsistensi frontend)
+        if (!$request->filled('online_store_link')) {
+            $cubeTags = $request->input('cube_tags', []);
+            if (is_array($cubeTags) && isset($cubeTags[0]['link']) && !empty($cubeTags[0]['link'])) {
+                $request->merge(['online_store_link' => $cubeTags[0]['link']]);
+            }
+        }
+
         $validator = Validator::make($request->all(), [
             'owner_user_id'   => 'nullable|integer|exists:users,id',
 
@@ -576,6 +585,7 @@ class PromoController extends Controller
             'always_available' => 'required|in:0,1,true,false',
             'stock'           => 'required|integer|min:0',
             'promo_type'      => 'required|string|in:offline,online',
+            'online_store_link' => 'nullable|string|max:500',
             'validation_type' => 'required|string|in:auto,manual',
             'location'        => 'nullable|string',
             'owner_name'      => 'required|string|max:255',
@@ -686,6 +696,13 @@ class PromoController extends Controller
             }
         }
 
+        // ✅ MAP: cube_tags[0][link] -> online_store_link (untuk konsistensi frontend)
+        if (!$request->filled('online_store_link')) {
+            $cubeTags = $request->input('cube_tags', []);
+            if (is_array($cubeTags) && isset($cubeTags[0]['link']) && !empty($cubeTags[0]['link'])) {
+                $request->merge(['online_store_link' => $cubeTags[0]['link']]);
+            }
+        }
 
         $validationRules = [
             'owner_user_id'   => 'nullable|integer|exists:users,id',
@@ -699,6 +716,7 @@ class PromoController extends Controller
             'always_available' => 'nullable|in:0,1,true,false',
             'stock'           => 'nullable|integer|min:0',
             'promo_type'      => 'sometimes|required|string|in:offline,online',
+            'online_store_link' => 'nullable|string|max:500',
             'validation_type' => 'nullable|string|in:auto,manual',
             'location'        => 'nullable|string',
             'owner_name'      => 'sometimes|string|max:255',
@@ -1175,6 +1193,7 @@ class PromoController extends Controller
                 'owner_contact' => $promo->owner_contact ?? '',
                 'location' => $promo->location ?? '',
                 'promo_type' => $promo->promo_type ?? 'offline',
+                'online_store_link' => $promo->online_store_link ?? '',
                 'promo_distance' => $promo->promo_distance ?? 0,
                 'always_available' => $promo->always_available ?? true,
                 'start_date' => $promo->start_date ?? null,

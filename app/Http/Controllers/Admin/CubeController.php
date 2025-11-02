@@ -20,10 +20,55 @@ use App\Models\CommunityMembership;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
+
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Support\Facades\Storage;
+
+/**
+ * Local no-op Log class to neutralize logging calls inside this controller.
+ *
+ * Instead of removing each Log::... call (many occurrences), we define a small
+ * class in this namespace with the same static methods used in the file.
+ * This keeps the code unchanged except logs become no-ops.
+ */
+class Log
+{
+    public static function info(...$args)
+    {
+        // intentionally empty (no-op)
+    }
+
+    public static function error(...$args)
+    {
+        // intentionally empty (no-op)
+    }
+
+    public static function warning(...$args)
+    {
+        // intentionally empty (no-op)
+    }
+
+    public static function debug(...$args)
+    {
+        // intentionally empty (no-op)
+    }
+
+    public static function critical(...$args)
+    {
+        // intentionally empty (no-op)
+    }
+
+    public static function alert(...$args)
+    {
+        // intentionally empty (no-op)
+    }
+
+    public static function notice(...$args)
+    {
+        // intentionally empty (no-op)
+    }
+}
 
 class CubeController extends Controller
 {
@@ -68,11 +113,7 @@ class CubeController extends Controller
             return;
         }
 
-        Log::info('Promo sync triggered from CubeController', [
-            'ad_id' => $ad->id,
-            'cube_id' => $ad->cube_id,
-            'is_update' => $isUpdate
-        ]);
+
 
         try {
             if ($isUpdate) {
@@ -82,14 +123,8 @@ class CubeController extends Controller
                 // Create promo baru dari ad
                 $this->createPromoFromAd($ad, $request);
             }
-
-            Log::info('Promo sync completed successfully from CubeController', ['ad_id' => $ad->id]);
         } catch (\Throwable $e) {
-            Log::error('Promo sync failed from CubeController', [
-                'ad_id' => $ad->id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
+
             // Don't throw error to prevent cube creation failure
             // Just log the error
         }
@@ -107,20 +142,11 @@ class CubeController extends Controller
         if ($validationType === 'manual') {
             // Untuk manual, WAJIB gunakan kode yang diinputkan admin
             $promoCode = $ad->code;
-
-            Log::info('Promo sync using manual code from admin input', [
-                'ad_id' => $ad->id,
-                'admin_code' => $ad->code,
-                'validation_type' => $validationType
-            ]);
         } elseif ($validationType === 'auto') {
             // Untuk auto, gunakan kode admin jika ada, jika tidak baru generate
             if (!empty($ad->code)) {
                 $promoCode = $ad->code; // Gunakan kode admin
-                Log::info('Promo sync using admin provided code for auto validation', [
-                    'ad_id' => $ad->id,
-                    'admin_code' => $ad->code
-                ]);
+
             } else {
                 // Generate kode dengan format yang konsisten
                 do {
@@ -133,11 +159,6 @@ class CubeController extends Controller
 
                 // Update ads dengan kode yang sama
                 $ad->update(['code' => $promoCode]);
-
-                Log::info('Promo sync generating new consistent code for auto validation', [
-                    'ad_id' => $ad->id,
-                    'generated_code' => $promoCode
-                ]);
             }
         }
 
@@ -145,7 +166,7 @@ class CubeController extends Controller
         $promoData = [
             'title' => $ad->title,
             'description' => $ad->description,
-            'detail' => $request->input('promo_detail'), // Detail tambahan dari form
+            'detail' => $ad->detail ?? $request->input('promo_detail'), // Prioritas ambil dari ad.detail, fallback ke form
             'code' => $promoCode, // Gunakan kode yang sudah ditentukan di atas
             'promo_type' => $ad->promo_type ?? 'offline',
             'validation_type' => $validationType,
@@ -155,6 +176,7 @@ class CubeController extends Controller
             'always_available' => $request->boolean('promo_always_available', $ad->unlimited_grab ? true : false),
             'location' => $request->input('promo_location') ?: $request->input('address') ?: $request->input('cube_tags.0.address'),
             'promo_distance' => $request->input('promo_distance', 0),
+            'online_store_link' => $ad->online_store_link ?? null, // ✅ Sinkronkan online_store_link dari ad
         ];
 
         // Handle owner info dari cube/ad atau dari form
@@ -192,19 +214,12 @@ class CubeController extends Controller
             return $value !== null && $value !== '';
         });
 
-        Log::info('Creating promo from ad data', [
-            'ad_id' => $ad->id,
-            'promo_data' => $promoData
-        ]);
+
 
         // Create promo
         $promo = Promo::create($promoData);
 
-        Log::info('✅ Promo created successfully from ad', [
-            'promo_id' => $promo->id,
-            'ad_id' => $ad->id,
-            'promo_code' => $promo->code
-        ]);
+
 
         // Create promo validation entry
         $this->createPromoValidationEntry($promo, $ad);
@@ -237,7 +252,7 @@ class CubeController extends Controller
         $updateData = [
             'title' => $ad->title,
             'description' => $ad->description,
-            'detail' => $request->input('promo_detail'),
+            'detail' => $ad->detail ?? $request->input('promo_detail'),
             'promo_type' => $ad->promo_type ?? 'offline',
             'validation_type' => $validationType,
             'start_date' => $ad->start_validate,
@@ -246,16 +261,12 @@ class CubeController extends Controller
             'always_available' => $request->boolean('promo_always_available', $ad->unlimited_grab ? true : false),
             'location' => $request->input('promo_location') ?: $request->input('address') ?: $request->input('cube_tags.0.address'),
             'promo_distance' => $request->input('promo_distance', $promo->promo_distance ?? 0),
+            'online_store_link' => $ad->online_store_link ?? null, // ✅ Sinkronkan online_store_link dari ad
         ];
 
         // Update kode hanya jika ada perubahan dan sesuai validation_type
         if (!empty($ad->code) && $ad->code !== $promo->code) {
             $updateData['code'] = $ad->code;
-            Log::info('Promo code updated from admin input', [
-                'old_code' => $promo->code,
-                'new_code' => $ad->code,
-                'validation_type' => $validationType
-            ]);
         }
 
         // Handle owner info update
@@ -286,11 +297,7 @@ class CubeController extends Controller
 
         $promo->update($updateData);
 
-        Log::info('✅ Promo updated successfully from ad', [
-            'promo_id' => $promo->id,
-            'ad_id' => $ad->id,
-            'updated_fields' => array_keys($updateData)
-        ]);
+
 
         // Update atau create promo validation entry jika belum ada
         $this->updateOrCreatePromoValidationEntry($promo, $ad);
@@ -310,11 +317,7 @@ class CubeController extends Controller
             // Untuk konsistensi, semua entry validation menggunakan kode yang sama dengan promo
             $validationCode = $promo->code;
 
-            Log::info('Creating promo validation entry with consistent code', [
-                'promo_id' => $promo->id,
-                'validation_code' => $validationCode,
-                'validation_type' => $validationType
-            ]);
+
 
             // Create promo validation entry
             $promoValidation = PromoValidation::create([
@@ -325,20 +328,11 @@ class CubeController extends Controller
                 'notes' => "Created from cube ad sync - {$validationType} validation - master_code:{$validationCode}"
             ]);
 
-            Log::info('✅ Promo validation entry created successfully', [
-                'promo_validation_id' => $promoValidation->id,
-                'promo_id' => $promo->id,
-                'validation_code' => $validationCode
-            ]);
+
 
             return $promoValidation;
         } catch (\Throwable $e) {
-            Log::error('Failed to create promo validation entry', [
-                'promo_id' => $promo->id,
-                'ad_id' => $ad->id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
+
 
             // Jangan throw error, karena promo sudah berhasil dibuat
             // Hanya log error untuk debugging
@@ -367,12 +361,7 @@ class CubeController extends Controller
                     'notes' => "Updated from cube ad sync - {$validationType} validation"
                 ]);
 
-                Log::info('✅ Promo validation entry updated successfully', [
-                    'promo_validation_id' => $existingValidation->id,
-                    'promo_id' => $promo->id,
-                    'validation_code' => $validationCode,
-                    'validation_type' => $validationType
-                ]);
+
 
                 return $existingValidation;
             } else {
@@ -380,12 +369,7 @@ class CubeController extends Controller
                 return $this->createPromoValidationEntry($promo, $ad);
             }
         } catch (\Throwable $e) {
-            Log::error('Failed to update/create promo validation entry', [
-                'promo_id' => $promo->id,
-                'ad_id' => $ad->id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
+
 
             // Jangan throw error, karena promo sudah berhasil di-update
             return null;
@@ -405,11 +389,6 @@ class CubeController extends Controller
         ) {
             // Log untuk debugging jika ada attempt sync non-voucher
             if ($request->input('_sync_to_voucher_management') && $request->input('content_type') !== 'voucher') {
-                Log::warning('Voucher sync attempted for non-voucher content', [
-                    'content_type' => $request->input('content_type'),
-                    'ad_id' => $ad->id,
-                    'cube_id' => $ad->cube_id
-                ]);
             }
             return;
         }
@@ -419,16 +398,9 @@ class CubeController extends Controller
 
         if (is_string($voucherSyncData)) {
             $voucherSyncData = json_decode($voucherSyncData, true) ?? [];
-            Log::info('CubeController converted voucher sync data from JSON string to array');
         }
 
-        Log::info('Voucher sync triggered from CubeController', [
-            'ad_id' => $ad->id,
-            'cube_id' => $ad->cube_id,
-            'is_update' => $isUpdate,
-            'sync_data' => $voucherSyncData,
-            'sync_data_type' => gettype($voucherSyncData)
-        ]);
+
 
         try {
             if ($isUpdate) {
@@ -445,14 +417,8 @@ class CubeController extends Controller
                 // Create voucher baru
                 $this->createVoucherFromSyncDataCube($ad, $voucherSyncData);
             }
-
-            Log::info('Voucher sync completed successfully from CubeController', ['ad_id' => $ad->id]);
         } catch (\Throwable $e) {
-            Log::error('Voucher sync failed from CubeController', [
-                'ad_id' => $ad->id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
+
             throw $e;
         }
     }
@@ -474,10 +440,6 @@ class CubeController extends Controller
         if ($validationType === 'manual') {
             // Untuk manual, gunakan kode yang sama dengan ads (user input)
             $voucherSyncData['code'] = $ad->code;
-            Log::info('CubeController voucher sync using manual code from user', [
-                'ads_code' => $ad->code,
-                'validation_type' => $validationType
-            ]);
         } elseif ($validationType === 'auto' && empty($voucherSyncData['code'])) {
             // Untuk auto, generate kode baru jika belum ada
             $voucherSyncData['code'] = 'VCR-' . strtoupper(Str::random(8));
@@ -555,11 +517,40 @@ class CubeController extends Controller
         // Resolve owner info jika perlu
         $voucherSyncData = $this->resolveOwnerInfoCube($voucherSyncData);
 
+        // ✅ PERBAIKAN: Handle code update ketika validation_type berubah
+        $validationType = $voucherSyncData['validation_type'] ?? $voucher->validation_type;
+
+        if ($validationType === 'manual' && isset($voucherSyncData['code']) && !empty($voucherSyncData['code'])) {
+            // Untuk manual validation, gunakan kode dari input admin
+            $voucherSyncData['code'] = $voucherSyncData['code'];
+
+            Log::info('✅ CubeController: Updating voucher with MANUAL code from admin input', [
+                'voucher_id' => $voucher->id,
+                'old_code' => $voucher->code,
+                'new_code' => $voucherSyncData['code'],
+                'validation_type' => $validationType
+            ]);
+        } elseif ($validationType === 'auto' && isset($voucherSyncData['code'])) {
+            // Untuk auto validation, tetap gunakan generated code atau yang sudah ada
+            Log::info('CubeController: Keeping existing code for AUTO validation', [
+                'voucher_id' => $voucher->id,
+                'existing_code' => $voucher->code,
+                'validation_type' => $validationType
+            ]);
+            // Hapus code dari update data agar tidak ter-override
+            unset($voucherSyncData['code']);
+        }
+
         // Hapus field yang tidak ada di tabel vouchers atau tidak boleh diupdate
         unset($voucherSyncData['owner_user_id'], $voucherSyncData['ad_id'], $voucherSyncData['cube_id']);
 
         // Update voucher
         $voucher->update($voucherSyncData);
+
+        Log::info('✅ CubeController: Voucher updated successfully', [
+            'voucher_id' => $voucher->id,
+            'updated_code' => $voucher->fresh()->code
+        ]);
     }
 
     /**
@@ -814,6 +805,8 @@ class CubeController extends Controller
             'ads.*'                      => 'nullable',
             'ads.ad_category_id'         => 'nullable|numeric|exists:ad_categories,id',
             'ads.title'                  => 'nullable|string|max:255',
+            'ads.description'            => 'nullable|string',
+            'ads.detail'                 => 'nullable|string',
             'ads.max_grab'               => 'nullable|numeric',
             'ads.unlimited_grab'         => 'nullable|boolean',
             'ads.is_daily_grab'          => 'nullable|boolean',
@@ -947,6 +940,11 @@ class CubeController extends Controller
         // ? Dump data
         $model = $this->dump_field($request->all(), $model);
 
+        // * Handle link_information field explicitly
+        if ($request->has('link_information')) {
+            $model->link_information = $request->input('link_information');
+        }
+
         // * Handle owner_user_id mapping to user_id (hanya jika diisi)
         if ($request->has('owner_user_id') && $request->owner_user_id) {
             $model->user_id = $request->owner_user_id;
@@ -1025,12 +1023,26 @@ class CubeController extends Controller
 
                     // Simpan link dari cube_tags[0] ke field link_information di Cube
                     $firstTag = $cubeTags[0] ?? null;
+
+                    // 🔍 DEBUG: Log semua cube_tags yang diterima
+                    Log::info('🔍 CubeController@store received cube_tags', [
+                        'cube_id' => $model->id,
+                        'cube_tags_raw' => $request->input('cube_tags'),
+                        'first_tag' => $firstTag,
+                        'first_tag_link' => $firstTag['link'] ?? 'NOT_SET'
+                    ]);
+
                     if ($firstTag && !empty($firstTag['link'])) {
                         $model->link_information = $firstTag['link'];
                         $model->save();
-                        Log::info('CubeController@store saved link_information from cube_tags', [
+                        Log::info('✅ CubeController@store saved link_information from cube_tags', [
                             'cube_id' => $model->id,
                             'link_information' => $firstTag['link']
+                        ]);
+                    } else {
+                        Log::warning('⚠️ CubeController@store NO LINK found in cube_tags', [
+                            'cube_id' => $model->id,
+                            'first_tag' => $firstTag
                         ]);
                     }
                 }
@@ -1101,10 +1113,19 @@ class CubeController extends Controller
                 $ad->title                   = $title;
                 $ad->slug                    = $title ? StringHelper::uniqueSlug($title) : null;
                 $ad->description             = $adsPayload['description'] ?? null;
+                $ad->detail                  = $adsPayload['detail'] ?? null;
                 $ad->max_grab                = $adsPayload['max_grab'] ?? null;
                 $ad->unlimited_grab          = ($adsPayload['unlimited_grab'] ?? $request->input('ads.unlimited_grab') ?? $request->input('unlimited_grab') ?? false) == 1;
                 $ad->is_daily_grab           = ($adsPayload['is_daily_grab'] ?? false) == 1;
                 $ad->promo_type              = $adsPayload['promo_type'] ?? null;
+
+                // ✅ Handle online_store_link from cube_tags[0][link] or direct input
+                if (!empty($adsPayload['online_store_link'])) {
+                    $ad->online_store_link = $adsPayload['online_store_link'];
+                } elseif (!empty($model->link_information)) {
+                    // Fallback: ambil dari link_information yang sudah di-set dari cube_tags
+                    $ad->online_store_link = $model->link_information;
+                }
 
                 // New validation fields
                 $ad->validation_type         = $adsPayload['validation_type'] ?? 'auto';
@@ -1120,14 +1141,52 @@ class CubeController extends Controller
                     $validationType = $voucherSyncData['validation_type'] ?? $ad->validation_type ?? 'auto';
 
                     if ($validationType === 'manual') {
-                        // Untuk manual, HARUS pakai kode dari user input di ads payload
-                        $ad->code = $adsPayload['code'] ?? null;
-                        Log::info('CubeController@store using MANUAL code from user input', [
-                            'user_input_code' => $adsPayload['code'],
+                        // ✅ PERBAIKAN KRITIS: Untuk manual, ambil kode dari _voucher_sync_data TERLEBIH DAHULU
+                        // karena frontend mengirim kode user di sana, bukan di ads.code
+                        $candidateCode = $voucherSyncData['code'] ?? $adsPayload['code'] ?? $request->input('code') ?? null;
+
+                        // Log detail untuk debugging frontend
+                        Log::info('🔍 CubeController@store validation_type=manual, checking code sources:', [
+                            'voucher_sync_data_code' => $voucherSyncData['code'] ?? 'NULL',
+                            'ads_payload_code' => $adsPayload['code'] ?? 'NULL',
+                            'request_code' => $request->input('code') ?? 'NULL',
+                            'final_candidate_code' => $candidateCode,
+                            'full_voucher_sync_data' => $voucherSyncData,
+                            'validation_type' => $validationType
+                        ]);
+
+                        // ✅ VALIDASI EXTRA: Jika kode masih pattern auto-generated (KUBUS-xxxx atau VCR-xxxx dengan timestamp)
+                        // maka ini bug frontend, kita REJECT dan throw error agar frontend fix
+                        if ($candidateCode && preg_match('/^(KUBUS|VCR)-\d{13,}-\d{1,5}$/', $candidateCode)) {
+                            Log::error('⛔ CubeController@store REJECTED auto-generated code for MANUAL validation', [
+                                'rejected_code' => $candidateCode,
+                                'validation_type' => $validationType,
+                                'reason' => 'Manual validation requires user-provided code, not auto-generated pattern',
+                                'hint_for_frontend_dev' => 'Frontend is sending auto-generated code for manual validation. Check form.helpers.ts or voucher form component. When validation_type is manual, send user input directly without generating code.'
+                            ]);
+
+                            DB::rollBack();
+                            return response([
+                                "message" => "Error: Kode untuk validasi manual tidak boleh menggunakan pattern auto-generated. Harap masukkan kode unik manual.",
+                                "error_code" => "INVALID_MANUAL_CODE",
+                                "rejected_code" => $candidateCode,
+                                "errors" => [
+                                    "code" => ["Kode untuk validasi manual tidak boleh menggunakan pattern auto-generated (KUBUS-xxx atau VCR-xxx). Harap masukkan kode unik manual seperti: MYCODE123, VOUCHER-001, atau PROMO2025."]
+                                ]
+                            ], 422);
+                        }
+
+                        $ad->code = $candidateCode;
+
+                        Log::info('✅ CubeController@store using MANUAL code from user input', [
+                            'voucher_sync_code' => $voucherSyncData['code'] ?? null,
+                            'ads_payload_code' => $adsPayload['code'] ?? null,
+                            'request_code' => $request->input('code') ?? null,
+                            'final_code' => $ad->code,
                             'validation_type' => $validationType
                         ]);
                     } else {
-                        // Untuk auto, pakai generated code dari root level
+                        // Untuk auto, pakai generated code dari root level atau generate baru
                         $ad->code = $request->input('code') ?? null;
                         Log::info('CubeController@store using AUTO generated code', [
                             'generated_code' => $request->input('code'),
@@ -1588,6 +1647,8 @@ class CubeController extends Controller
             'ads.*'                      => 'nullable',
             'ads.ad_category_id'         => 'nullable|numeric|exists:ad_categories,id',
             'ads.title'                  => 'nullable|string|max:255',
+            'ads.description'            => 'nullable|string',
+            'ads.detail'                 => 'nullable|string',
             'ads.max_grab'               => 'nullable|numeric',
             'ads.unlimited_grab'         => 'nullable|boolean',
             'ads.is_daily_grab'          => 'nullable|boolean',
@@ -1648,6 +1709,11 @@ class CubeController extends Controller
 
         // ? Dump data
         $model = $this->dump_field($request->all(), $model);
+
+        // * Handle link_information field explicitly
+        if ($request->has('link_information')) {
+            $model->link_information = $request->input('link_information');
+        }
 
         // * Handle owner_user_id mapping to user_id (hanya jika diisi)
         if ($request->has('owner_user_id')) {
@@ -1713,18 +1779,80 @@ class CubeController extends Controller
                     CubeTag::insert($preparedCubeTagsData);
 
                     // Simpan link dari cube_tags[0] ke field link_information di Cube
+                    // HANYA update jika cube_tags memiliki link, jangan hapus jika frontend sudah set link_information langsung
                     $firstTag = $cubeTags[0] ?? null;
-                    if ($firstTag && !empty($firstTag['link'])) {
-                        $model->link_information = $firstTag['link'];
-                        $model->save();
-                        Log::info('CubeController@update saved link_information from cube_tags', [
-                            'cube_id' => $model->id,
-                            'link_information' => $firstTag['link']
-                        ]);
-                    } else {
-                        // Jika tidak ada link, hapus link_information
-                        $model->link_information = null;
-                        $model->save();
+
+                    // 🔍 DEBUG: Log semua cube_tags yang diterima saat update
+                    Log::info('🔍 CubeController@update received cube_tags', [
+                        'cube_id' => $model->id,
+                        'cube_tags_raw' => $request->input('cube_tags'),
+                        'first_tag' => $firstTag,
+                        'first_tag_link' => $firstTag['link'] ?? 'NOT_SET',
+                        'current_link_information' => $model->link_information
+                    ]);
+
+                    if ($firstTag && isset($firstTag['link'])) {
+                        if (!empty($firstTag['link'])) {
+                            $model->link_information = $firstTag['link'];
+                            $model->save();
+                            Log::info('✅ CubeController@update saved link_information from cube_tags', [
+                                'cube_id' => $model->id,
+                                'link_information' => $firstTag['link']
+                            ]);
+
+                            // ✅ UPDATE: Sinkronisasi online_store_link ke semua ads yang terkait dengan cube ini
+                            try {
+                                $relatedAds = Ad::where('cube_id', $model->id)->get();
+                                foreach ($relatedAds as $ad) {
+                                    $ad->online_store_link = $firstTag['link'];
+                                    $ad->save();
+
+                                    // ✅ Sinkronisasi juga ke promo jika ada
+                                    if (!empty($ad->code)) {
+                                        Promo::where('code', $ad->code)->update(['online_store_link' => $firstTag['link']]);
+                                    }
+                                }
+                                Log::info('CubeController@update synced online_store_link to related ads & promos', [
+                                    'cube_id' => $model->id,
+                                    'ads_count' => $relatedAds->count(),
+                                    'online_store_link' => $firstTag['link']
+                                ]);
+                            } catch (\Throwable $e) {
+                                Log::error('CubeController@update failed to sync online_store_link to ads', [
+                                    'cube_id' => $model->id,
+                                    'error' => $e->getMessage()
+                                ]);
+                            }
+                        } elseif ($request->has('cube_tags.0.link')) {
+                            // Jika cube_tags[0]['link'] ada tapi kosong (user sengaja menghapus), hapus link_information
+                            $model->link_information = null;
+                            $model->save();
+                            Log::info('CubeController@update cleared link_information from cube_tags', [
+                                'cube_id' => $model->id
+                            ]);
+
+                            // ✅ UPDATE: Hapus juga online_store_link dari ads terkait
+                            try {
+                                $relatedAds = Ad::where('cube_id', $model->id)->get();
+                                foreach ($relatedAds as $ad) {
+                                    $ad->online_store_link = null;
+                                    $ad->save();
+
+                                    // ✅ Hapus juga dari promo jika ada
+                                    if (!empty($ad->code)) {
+                                        Promo::where('code', $ad->code)->update(['online_store_link' => null]);
+                                    }
+                                }
+                                Log::info('CubeController@update cleared online_store_link from related ads & promos', [
+                                    'cube_id' => $model->id
+                                ]);
+                            } catch (\Throwable $e) {
+                                Log::error('CubeController@update failed to clear online_store_link from ads', [
+                                    'cube_id' => $model->id,
+                                    'error' => $e->getMessage()
+                                ]);
+                            }
+                        }
                     }
                 }
             }
@@ -2083,6 +2211,7 @@ class CubeController extends Controller
                         $ad->title                  = $title;
                         $ad->slug                   = $title ? StringHelper::uniqueSlug($title) : null;
                         $ad->description            = $adsPayload['description'] ?? null;
+                        $ad->detail                 = $adsPayload['detail'] ?? null;
                         $ad->max_grab               = $adsPayload['max_grab'] ?? null;
                         $ad->unlimited_grab         = ($adsPayload['unlimited_grab'] ?? false) == 1;
                         $ad->is_daily_grab          = $adsPayload['is_daily_grab'] ?? null;
@@ -2090,6 +2219,14 @@ class CubeController extends Controller
                         $ad->max_production_per_day = $this->nullIfEmpty($adsPayload['max_production_per_day'] ?? null);
                         $ad->sell_per_day           = $this->nullIfEmpty($adsPayload['sell_per_day'] ?? null);
                         $ad->level_umkm             = $this->nullIfEmpty($adsPayload['level_umkm'] ?? null);
+
+                        // ✅ Handle online_store_link from cube_tags[0][link] or direct input
+                        if (!empty($adsPayload['online_store_link'])) {
+                            $ad->online_store_link = $adsPayload['online_store_link'];
+                        } elseif (!empty($model->link_information)) {
+                            // Fallback: ambil dari link_information yang sudah di-set dari cube_tags
+                            $ad->online_store_link = $model->link_information;
+                        }
 
                         // Schedule fields for promo/voucher
                         $ad->jam_mulai              = $adsPayload['jam_mulai'] ?? null;

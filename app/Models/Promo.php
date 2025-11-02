@@ -25,6 +25,7 @@ class Promo extends Model
         'always_available',
         'stock',
         'promo_type',
+        'online_store_link',  // link untuk promo online
         'validation_type',   // simpan tipe validasi: auto|manual
         'location',
         'owner_name',

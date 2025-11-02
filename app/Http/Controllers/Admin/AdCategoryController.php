@@ -7,7 +7,7 @@ use App\Models\AdCategory;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\Log; // tambahkan
+use Illuminate\Support\Facades\Log;
 
 class AdCategoryController extends Controller
 {
@@ -15,28 +15,20 @@ class AdCategoryController extends Controller
     // ## Display a listing of the resource.
     // ========================================>
     public function index(Request $request)
-    {   
-        // ? Initial params
-        $sortDirection = $request->get("sortDirection", "DESC");
-        $sortby = $request->get("sortBy", "created_at");
-        $paginate = $request->get("paginate", 10);
-        $filter = $request->get("filter", null);
+    {
+        $sortDirection = $request->get('sortDirection', 'DESC');
+        $sortby = $request->get('sortBy', 'created_at');
+        $paginate = $request->get('paginate', 10);
+        $filter = $request->get('filter');
 
-        // ? Preparation
         $columnAliases = [];
-
-        // ? Begin
         $model = new AdCategory();
         $query = AdCategory::query();
 
-        // ? When search
-        if ($request->get("search") != "") {
-            $query = $this->search($request->get("search"), $model, $query);
-        } else {
-            $query = $query;
+        if ($request->filled('search')) {
+            $query = $this->search($request->get('search'), $model, $query);
         }
 
-        // ? When Filter
         if ($filter) {
             $filters = json_decode($filter);
             foreach ($filters as $column => $value) {
@@ -44,29 +36,58 @@ class AdCategoryController extends Controller
             }
         }
 
-        // Filter opsional berdasarkan community (tampilkan global + spesifik jika tidak diisi)
+        // filter community (global + spesifik jika diisi)
         if ($request->filled('community_id') && $request->community_id !== 'null') {
             $query->where('community_id', $request->community_id);
         }
 
-        // ? Sort & executing with pagination
-        $query = $query->orderBy($this->remark_column($sortby, $columnAliases), $sortDirection)
-            ->select($model->selectable)->paginate($paginate);
+        $query->orderBy($this->remark_column($sortby, $columnAliases), $sortDirection);
 
-        // ? When empty
-        if (empty($query->items())) {
+        // transformer agar FE dapat label/value + semua field asli
+        $mapRow = function ($row) {
+            return [
+                'id'                => $row->id,
+                'label'             => $row->name,
+                'value'             => $row->id,
+                'name'              => $row->name,
+                'picture_source'    => $row->picture_source,
+                'image'             => $row->picture_source ? Storage::url($row->picture_source) : null,
+                'parent_id'         => $row->parent_id,
+                'is_primary_parent' => (int) $row->is_primary_parent,
+                'is_home_display'   => (int) $row->is_home_display,
+                'community_id'      => $row->community_id,
+                'created_at'        => $row->created_at,
+                'updated_at'        => $row->updated_at,
+            ];
+        };
+
+        // === penting: dukung paginate=all ===
+        $isAll = is_string($paginate) && strtolower($paginate) === 'all';
+        if ($isAll) {
+            $rows = $query->get();
+            if ($rows->isEmpty()) {
+                return response(['message' => 'empty data', 'data' => []], 200);
+            }
             return response([
-                "message" => "empty data",
-                "data" => [],
+                'message'   => 'success',
+                'data'      => $rows->map($mapRow)->values(),
+                'total_row' => $rows->count(),
             ], 200);
         }
 
-        // ? When success
+        // numeric paginate
+        $perPage = (int) $paginate;
+        $page = $query->paginate($perPage);
+
+        if (empty($page->items())) {
+            return response(['message' => 'empty data', 'data' => []], 200);
+        }
+
         return response([
-            "message" => "success",
-            "data" => $query->all(),
-            "total_row" => $query->total(),
-        ]);
+            'message'   => 'success',
+            'data'      => collect($page->items())->map($mapRow)->values(),
+            'total_row' => $page->total(),
+        ], 200);
     }
 
     // =============================================>
@@ -115,15 +136,10 @@ class AdCategoryController extends Controller
         try {
             $model->save();
             DB::commit();
-            return response([ "message" => "success", "data" => $model ], 201);
+            return response(["message" => "success", "data" => $model], 201);
         } catch (\Throwable $th) {
             DB::rollBack();
-            Log::error('AdCategory store failed', [
-                'error' => $th->getMessage(),
-                'trace' => $th->getTraceAsString(),
-                'payload' => $payload,
-            ]);
-            return response([ "message" => "Error: server side having problem! - ".$th->getMessage() ], 500);
+            return response(["message" => "Error: server side having problem! - " . $th->getMessage()], 500);
         }
     }
 
@@ -177,16 +193,10 @@ class AdCategoryController extends Controller
         try {
             $model->save();
             DB::commit();
-            return response([ "message" => "success", "data" => $model ]);
+            return response(["message" => "success", "data" => $model]);
         } catch (\Throwable $th) {
             DB::rollBack();
-            Log::error('AdCategory update failed', [
-                'error' => $th->getMessage(),
-                'trace' => $th->getTraceAsString(),
-                'payload' => $payload,
-                'id' => $id,
-            ]);
-            return response([ "message" => "Error: server side having problem! - ".$th->getMessage() ], 500);
+            return response(["message" => "Error: server side having problem! - " . $th->getMessage()], 500);
         }
     }
 
@@ -207,18 +217,16 @@ class AdCategoryController extends Controller
     // ===============================================>
     public function options(Request $request)
     {
-        // Basic: return id + name; filter by parent or top-level if needed
         $q = AdCategory::query();
 
         if ($request->filled('parent_only')) {
-            $q->whereNull('parent_id'); // for top-level
+            $q->whereNull('parent_id');
         }
 
-        // Tambahan: filter by community agar konsisten dengan create/update
+        // tampilkan global + spesifik community
         if ($request->filled('community_id') && $request->community_id !== 'null') {
             $q->where(function ($qq) use ($request) {
-                $qq->whereNull('community_id')
-                   ->orWhere('community_id', $request->community_id);
+                $qq->whereNull('community_id')->orWhere('community_id', $request->community_id);
             });
         }
 
@@ -226,10 +234,34 @@ class AdCategoryController extends Controller
             $q->where('name', 'like', '%' . $request->get('search') . '%');
         }
 
+        $rows = $q->orderBy('name')->get();
+
+        // full=1 -> semua field + url gambar
+        if ($request->boolean('full')) {
+            $data = $rows->map(function ($row) {
+                return [
+                    'id'                => $row->id,
+                    'label'             => $row->name,
+                    'value'             => $row->id,
+                    'name'              => $row->name,
+                    'picture_source'    => $row->picture_source,
+                    'image'             => $row->picture_source ? Storage::url($row->picture_source) : null,
+                    'parent_id'         => $row->parent_id,
+                    'is_primary_parent' => (int) $row->is_primary_parent,
+                    'is_home_display'   => (int) $row->is_home_display,
+                    'community_id'      => $row->community_id,
+                    'created_at'        => $row->created_at,
+                    'updated_at'        => $row->updated_at,
+                ];
+            });
+            return response(['message' => 'success', 'data' => $data], 200);
+        }
+
+        // default ringan
         return response([
             'message' => 'success',
-            'data' => $q->orderBy('name')->get(['id as value', 'name as label']),
-        ]);
+            'data'    => $rows->map(fn($r) => ['value' => $r->id, 'label' => $r->name]),
+        ], 200);
     }
 
     // ===============================================>

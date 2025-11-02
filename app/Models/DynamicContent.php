@@ -61,4 +61,9 @@ class DynamicContent extends Model
     {
         return $this->belongsTo(\App\Models\AdCategory::class, 'ad_category_id', 'id');
     }
+
+    public function community()
+    {
+        return $this->belongsTo(\App\Models\Community::class, 'community_id', 'id');
+    }
 }

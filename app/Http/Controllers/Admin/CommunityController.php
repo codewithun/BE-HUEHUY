@@ -260,6 +260,12 @@ class CommunityController extends Controller
 
             $membership = $community->addMember($user);
 
+            \App\Models\MemberHistory::create([
+                'community_id' => $community->id,
+                'user_id' => $user->id,
+                'action' => 'joined',
+            ]);
+
             $community->load('adminContacts.role');
             return response()->json([
                 'success' => true,
@@ -410,8 +416,13 @@ class CommunityController extends Controller
                 // Tandai sebagai keluar (biarkan row tetap ada)
                 $membership->update([
                     'status' => 'left',
-                    // updated_at otomatis di-set; optional:
-                    // 'updated_at' => now(),
+                ]);
+
+                // Tambah history: left (b)
+                \App\Models\MemberHistory::create([
+                    'community_id' => $community->id,
+                    'user_id'      => $user->id,
+                    'action'       => 'left',
                 ]);
 
                 return response()->json([
@@ -575,6 +586,13 @@ class CommunityController extends Controller
                 'joined_at' => now(),
             ]
         );
+
+        // Tambah history: joined (admin menambahkan member)
+        \App\Models\MemberHistory::create([
+            'community_id' => $community->id,
+            'user_id'      => $user->id,
+            'action'       => 'joined',
+        ]);
 
         return response()->json([
             'success' => true,
@@ -953,6 +971,13 @@ class CommunityController extends Controller
             'joined_at' => now(),
         ]);
 
+        // Tambah history: joined (d)
+        \App\Models\MemberHistory::create([
+            'community_id' => $membership->community_id,
+            'user_id'      => $membership->user_id,
+            'action'       => 'joined',
+        ]);
+
         return response()->json([
             'success' => true,
             'message' => 'Permintaan disetujui',
@@ -987,41 +1012,31 @@ class CommunityController extends Controller
      */
     public function adminMemberHistory(Request $request, $id)
     {
-        $community = Community::findOrFail($id);
+        $community = \App\Models\Community::findOrFail($id);
 
-        $memberships = CommunityMembership::with('user')
+        $history = \App\Models\MemberHistory::with('user')
             ->where('community_id', $community->id)
-            ->whereIn('status', ['active', 'removed', 'left']) // ✅ tambahkan left
-            ->orderByDesc('updated_at')
-            ->get();
-
-        $history = $memberships->map(function ($m) {
-            $action = match ($m->status) {
-                'active'  => 'joined',
-                'left'    => 'left',
-                'removed' => 'removed',
-                default   => 'unknown',
-            };
-
-            return [
-                'user_id'    => $m->user->id,
-                'user_name'  => $m->user->name,
-                'action'     => $action,
-                'created_at' => match ($action) {
-                    'joined'  => $m->joined_at ?? $m->created_at,
-                    'left', 'removed' => $m->updated_at ?? $m->created_at,
-                    default => $m->created_at,
-                },
-                'user'       => ['name' => $m->user->name],
-            ];
-        })->sortByDesc(fn($row) => \Carbon\Carbon::parse($row['created_at'])->timestamp)->values();
+            ->orderByDesc('created_at')
+            ->get()
+            ->map(fn($h) => [
+                'user_id'    => $h->user_id,
+                'user_name'  => $h->user->name ?? '-',
+                'action'     => $h->action,
+                'created_at' => $h->created_at,
+                'user'       => [
+                    'name'  => $h->user->name ?? '-',
+                    'email' => $h->user->email ?? '-',
+                ],
+            ])
+            ->values();
 
         return response()->json([
-            'success'    => true,
-            'data'       => $history,
-            'total_row'  => $history->count(),
+            'success'   => true,
+            'data'      => $history,
+            'total_row' => $history->count(),
         ]);
     }
+
 
 
     /**
@@ -1047,6 +1062,13 @@ class CommunityController extends Controller
             // ubah status jadi removed atau hapus langsung
             $membership->update([
                 'status' => 'removed',
+            ]);
+
+            // Tambah history: removed (c)
+            \App\Models\MemberHistory::create([
+                'community_id' => (int) $communityId,
+                'user_id'      => (int) $userId,
+                'action'       => 'removed',
             ]);
 
             return response()->json([

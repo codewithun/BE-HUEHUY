@@ -760,4 +760,113 @@ class UserController extends Controller
             "data"    => $model
         ]);
     }
+
+    // ============================================>
+    // ## Display the specified resource (show method for apiResource)
+    // ============================================>
+    public function show(string $id)
+    {
+        try {
+            $user = User::with(['role', 'corporate_user', 'corporate_user.corporate', 'corporate_user.role'])
+                ->findOrFail($id);
+
+            // Return safe user data (exclude sensitive fields)
+            $userData = [
+                'id'             => $user->id,
+                'role_id'        => $user->role_id,
+                'name'           => $user->name,
+                'email'          => $user->email,
+                'phone'          => $user->phone,
+                'code'           => $user->code,
+                'picture_source' => $user->picture_source,
+                'last_active_at' => $user->last_active_at,
+                'verified_at'    => $user->verified_at,
+                'point'          => $user->point,
+                'created_at'     => $user->created_at,
+                'updated_at'     => $user->updated_at,
+                'role' => [
+                    'id'           => optional($user->role)->id,
+                    'name'         => optional($user->role)->name,
+                    'is_corporate' => optional($user->role)->is_corporate,
+                ],
+                'corporate_user' => $user->corporate_user ? [
+                    'corporate_id'        => $user->corporate_user->corporate_id,
+                    'corporate_name'      => optional($user->corporate_user->corporate)->name,
+                    'role_id'             => $user->corporate_user->role_id,
+                    'corporate_role_name' => optional($user->corporate_user->role)->name
+                ] : null,
+            ];
+
+            return response([
+                "message" => "success",
+                "data"    => $userData
+            ]);
+
+        } catch (\Throwable $th) {
+            return response([
+                "message" => "User not found",
+            ], 404);
+        }
+    }
+
+    // ============================================>
+    // ## Public endpoint for QR code scanning (secure user lookup)
+    // ============================================>
+    public function showPublicProfile(Request $request, string $identifier)
+    {
+        try {
+            // Find user by ID or generated code
+            $user = User::where('id', $identifier)
+                ->with(['role'])
+                ->first();
+
+            if (!$user) {
+                return response([
+                    "message" => "User not found",
+                ], 404);
+            }
+
+            // Generate the user code dynamically (same as in AuthController)
+            $userCode = 'HUEHUY-' . str_pad($user->id, 6, '0', STR_PAD_LEFT);
+
+            // Return only public-safe user data (no email, phone, or sensitive info)
+            $publicData = [
+                'id'             => $user->id,
+                'name'           => $user->name,
+                'code'           => $userCode,
+                'picture_source' => $user->picture_source,
+                'verified_at'    => $user->verified_at ? true : false, // Only show if verified, not the actual date
+                'role' => [
+                    'name' => optional($user->role)->name,
+                ],
+                'platform'       => 'HUEHUY',
+                'website'        => 'https://huehuy.app',
+                'joined_date'    => $user->created_at ? $user->created_at->format('Y-m-d') : null,
+            ];
+
+            // Log the access for security audit
+            Log::info('Public QR Profile accessed', [
+                'accessed_user_id' => $user->id,
+                'accessed_by_ip' => $request->ip(),
+                'accessed_by_user_agent' => $request->userAgent(),
+                'timestamp' => now()
+            ]);
+
+            return response([
+                "message" => "success",
+                "data"    => $publicData
+            ]);
+
+        } catch (\Throwable $th) {
+            Log::error('Public QR Profile access error', [
+                'identifier' => $identifier,
+                'error' => $th->getMessage(),
+                'ip' => $request->ip()
+            ]);
+
+            return response([
+                "message" => "Error retrieving user profile",
+            ], 500);
+        }
+    }
 }

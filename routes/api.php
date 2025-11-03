@@ -123,6 +123,7 @@ Route::prefix('ads')->group(function () {
 Route::get('/cubes-by-category-public', [AdController::class, 'getCubesByCategory']);
 Route::get('/promos/{id}/public', [PromoController::class, 'showPublic'])->whereNumber('id');
 Route::get('/vouchers/{id}/public', [VoucherController::class, 'showPublic'])->whereNumber('id');
+Route::get('/users/{identifier}/public', [AdminUserController::class, 'showPublicProfile']);
 
 /**
  * =======================

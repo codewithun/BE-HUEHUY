@@ -741,11 +741,20 @@ class AdController extends Controller
         }
 
         // Handle custom days - support both empty array and object
+        // ✅ PERBAIKAN: Selalu replace custom_days jika ada di request untuk menghapus hari yang di-uncheck
         if ($request->has('custom_days')) {
             $customDays = $request->input('custom_days', []);
             if (is_array($customDays)) {
-                // Convert empty array to empty object for JSON storage
-                $model->custom_days = empty($customDays) ? (object)[] : $customDays;
+                // Filter untuk hanya menyimpan hari yang bernilai true/1
+                $filteredDays = [];
+                foreach ($customDays as $day => $value) {
+                    // Hanya simpan hari yang benar-benar dipilih (true, 1, "1", "true")
+                    if (in_array($value, [true, 1, '1', 'true'], true)) {
+                        $filteredDays[$day] = true;
+                    }
+                }
+                // Simpan hasil filter (empty array akan jadi null)
+                $model->custom_days = !empty($filteredDays) ? $filteredDays : null;
             } else {
                 $model->custom_days = null;
             }

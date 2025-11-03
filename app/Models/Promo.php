@@ -81,6 +81,14 @@ class Promo extends Model
         return $this->hasMany(PromoValidation::class);
     }
 
+    /**
+     * Ad yang berpasangan via code (promo.code == ads.code)
+     */
+    public function adByCode()
+    {
+        return $this->hasOne(\App\Models\Ad::class, 'code', 'code');
+    }
+
     // (opsional) scope aktif
     public function scopeActive($query)
     {

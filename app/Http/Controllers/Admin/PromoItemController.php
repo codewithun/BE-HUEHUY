@@ -18,12 +18,12 @@ class PromoItemController extends Controller
     public function index(Request $request)
     {
         $query = PromoItem::with([
-            'promo',
-            'ad:id,cube_id,title,code,validation_time_limit,picture_source,image_1,image_2,image_3,status,unlimited_grab,max_grab,created_at,updated_at',
-            'ad.cube.user',
-            'ad.cube.corporate',
-            'ad.cube.tags',
-            'user'
+            'promo:id,code,validation_type,start_date,end_date,always_available,stock,status',
+            'promo.adByCode:id,cube_id,title,code,validation_time_limit,picture_source,image_1,image_2,image_3,status,unlimited_grab,max_grab,created_at,updated_at',
+            'promo.adByCode.cube.user',
+            'promo.adByCode.cube.corporate',
+            'promo.adByCode.cube.tags',
+            'user',
         ]);
 
 
@@ -77,6 +77,13 @@ class PromoItemController extends Controller
         }
 
         $items = $query->orderBy('created_at', 'desc')->get();
+        $items->transform(function ($it) {
+            // inject 'ad' = adByCode (yang benar)
+            $it->setRelation('ad', optional($it->promo)->adByCode);
+            // pastikan accessor ikut terkirim
+            $it->setAttribute('resolved_ad_id', $it->resolved_ad_id);
+            return $it;
+        });
 
         return response()->json(['success' => true, 'data' => $items]);
     }
@@ -84,24 +91,41 @@ class PromoItemController extends Controller
     public function indexByPromo($promoId)
     {
         $items = PromoItem::with([
-            'promo',
-            'ad:id,title,code,validation_time_limit,picture_source,image_1,image_2,image_3,status,created_at,updated_at',
-            'ad.cube.user',
-            'ad.cube.corporate',
-            'ad.cube.tags',
-            'user'
+            'promo:id,code,validation_type,start_date,end_date,always_available,stock,status',
+            'promo.adByCode:id,cube_id,title,code,validation_time_limit,picture_source,image_1,image_2,image_3,status,unlimited_grab,max_grab,created_at,updated_at',
+            'promo.adByCode.cube.user',
+            'promo.adByCode.cube.corporate',
+            'promo.adByCode.cube.tags',
+            'user',
         ])
             ->where('promo_id', $promoId)
             ->get();
+
+        $items->transform(function ($it) {
+            $it->setRelation('ad', optional($it->promo)->adByCode);
+            $it->setAttribute('resolved_ad_id', $it->resolved_ad_id);
+            return $it;
+        });
+
         return response()->json(['success' => true, 'data' => $items]);
     }
 
     public function show($id)
     {
-        $item = PromoItem::with(['promo', 'ad', 'user'])->find($id);
+        $item = PromoItem::with([
+            'promo:id,code,validation_type,start_date,end_date,always_available,stock,status',
+            'promo.adByCode:id,cube_id,title,code,validation_time_limit,picture_source,image_1,image_2,image_3,status,unlimited_grab,max_grab,created_at,updated_at',
+            'promo.adByCode.cube.user',
+            'promo.adByCode.cube.corporate',
+            'promo.adByCode.cube.tags',
+            'user',
+        ])->find($id);
         if (! $item) {
             return response()->json(['success' => false, 'message' => 'Promo item not found'], 404);
         }
+        // inject relasi 'ad' yang benar + id ter-resolve
+        $item->setRelation('ad', optional($item->promo)->adByCode);
+        $item->setAttribute('resolved_ad_id', $item->resolved_ad_id);
         return response()->json(['success' => true, 'data' => $item]);
     }
 

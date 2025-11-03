@@ -1227,7 +1227,12 @@ class CubeController extends Controller
 
                 // First try from ads payload
                 if (!empty($adsPayload['custom_days']) && is_array($adsPayload['custom_days'])) {
-                    $customDays = $adsPayload['custom_days'];
+                    // ✅ Filter hanya hari yang bernilai true
+                    foreach ($adsPayload['custom_days'] as $day => $value) {
+                        if (in_array($value, [true, 1, '1', 'true'], true)) {
+                            $customDays[$day] = true;
+                        }
+                    }
                 } else {
                     // Check individual day fields from frontend (custom_days[monday], etc.)
                     $dayNames = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
@@ -1241,7 +1246,11 @@ class CubeController extends Controller
                     // Also check from top-level custom_days if it's an array
                     $topLevelCustomDays = $request->input('custom_days');
                     if (is_array($topLevelCustomDays)) {
-                        $customDays = array_merge($customDays, $topLevelCustomDays);
+                        foreach ($topLevelCustomDays as $day => $value) {
+                            if (in_array($value, [true, 1, '1', 'true'], true)) {
+                                $customDays[$day] = true;
+                            }
+                        }
                     }
                 }
 
@@ -2239,7 +2248,12 @@ class CubeController extends Controller
                         // Handle custom days
                         $customDays = [];
                         if (!empty($adsPayload['custom_days']) && is_array($adsPayload['custom_days'])) {
-                            $customDays = $adsPayload['custom_days'];
+                            // ✅ Filter hanya hari yang bernilai true
+                            foreach ($adsPayload['custom_days'] as $day => $value) {
+                                if (in_array($value, [true, 1, '1', 'true'], true)) {
+                                    $customDays[$day] = true;
+                                }
+                            }
                         }
                         $ad->custom_days = !empty($customDays) ? $customDays : null;
 

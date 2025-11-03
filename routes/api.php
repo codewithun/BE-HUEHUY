@@ -119,6 +119,8 @@ Route::prefix('ads')->group(function () {
     Route::get('/promo-nearest/{lat}/{long}', [AdController::class, 'getPromoNearest']);
 });
 
+// Endpoint publik untuk cubes-by-category (tanpa auth)
+Route::get('/cubes-by-category-public', [AdController::class, 'getCubesByCategory']);
 Route::get('/promos/{id}/public', [PromoController::class, 'showPublic'])->whereNumber('id');
 Route::get('/vouchers/{id}/public', [VoucherController::class, 'showPublic'])->whereNumber('id');
 

@@ -26,7 +26,6 @@ class DatabaseSeeder extends Seeder
             AdCategorySeeder::class,
             BannerSeeder::class,
             CubeSeeder::class,
-            DynamicContentSeeder::class,
         ]);
     }
 }

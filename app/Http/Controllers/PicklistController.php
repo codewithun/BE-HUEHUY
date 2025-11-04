@@ -34,20 +34,28 @@ class PicklistController extends Controller
     public function cube(Request $request)
     {
         $corporate = $request->get('corporate_id', '');
+        $search = $request->get('search', '');
+
+        $query = Cube::leftJoin('cube_types', 'cube_types.id', 'cubes.cube_type_id')
+            ->select([
+                'cubes.id as value',
+                DB::raw('cubes.code as label'),
+                'cubes.picture_source'
+            ]);
 
         if ($corporate && $corporate != '') {
-
-            return Cube::join('cube_types', 'cube_types.id', 'cubes.id')
-                ->where('corporate_id', $corporate)
-                ->get([
-                    'cubes.id as value', DB::raw('CONCAT(cubes.code, " (", cube_types.code, ")") as label'), 'picture_source'
-                ]);
+            $query->where('cubes.corporate_id', $corporate);
         }
 
-        return Cube::leftJoin('cube_types', 'cube_types.id', 'cubes.id')
-            ->get([
-                'cubes.id as value', DB::raw('cubes.code as label'), 'picture_source'
-            ]);
+        if ($search && $search != '') {
+            $query->where(function($q) use ($search) {
+                $q->where('cubes.code', 'LIKE', "%{$search}%")
+                  ->orWhere('cube_types.name', 'LIKE', "%{$search}%")
+                  ->orWhere('cube_types.code', 'LIKE', "%{$search}%");
+            });
+        }
+
+        return $query->orderBy('cubes.code')->get();
     }
 
     public function adCategory()

@@ -211,29 +211,22 @@ class HomeController extends Controller
     public function getDynamicContentConfig(Request $request)
     {
         $filterType = $request->get('type', '');
-        $world_id = $request->get("world_id", null);
 
-        $model = null;
+        // Load relasi yang diperlukan untuk FE
+        $query = DynamicContent::with([
+            'dynamic_content_cubes' => function($query) {
+                $query->with('cube');
+            },
+            'ad_category',
+            'community'
+        ]);
 
-
-        if ($world_id != '') {
-            $model = DynamicContent::where('type', $filterType)
-                ->where('world_id', $world_id)
-                ->orderBy('level', 'asc')
-                ->get();
-
-            if(count($model) < 1) {
-                $model = DynamicContent::where('type', $filterType)
-                    ->orderBy('level', 'asc')
-                    ->get();
-            }
-        } else if ($filterType != '') {
-            $model = DynamicContent::where('type', $filterType)
-                ->whereNull('world_id')
+        if ($filterType != '') {
+            $model = $query->where('type', $filterType)
                 ->orderBy('level', 'asc')
                 ->get();
         } else {
-            $model = DynamicContent::orderBy('level', 'asc')->get();
+            $model = $query->orderBy('level', 'asc')->get();
         }
 
         return response([

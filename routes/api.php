@@ -30,6 +30,9 @@ use App\Http\Controllers\Admin\AdCategoryController;
 use App\Http\Controllers\Admin\ChatController;
 use App\Http\Controllers\Admin\CubeTypeController;
 
+use App\Http\Controllers\Corporate\CommunityController as CorporateCommunityController;
+use App\Models\Corporate;
+
 /**
  * Unauthorized helper
  */
@@ -396,6 +399,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/send', [ChatController::class, 'send']);
         Route::get('/{chatId}/messages', [ChatController::class, 'messages'])->whereNumber('chatId');
         Route::post('/{chatId}/read', [ChatController::class, 'markAsRead'])->whereNumber('chatId');
+    });
+
+    Route::prefix('corporate')->group(function () {
+        Route::get('communities', [CorporateCommunityController::class, 'index']);
+        Route::post('communities', [CorporateCommunityController::class, 'store']);
+        Route::get('communities/{id}', [CorporateCommunityController::class, 'show']);
+        Route::put('communities/{id}', [CorporateCommunityController::class, 'update']);
+        Route::delete('communities/{id}', [CorporateCommunityController::class, 'destroy']);
     });
 
     Route::get('/chat-rooms', [ChatController::class, 'chatRooms']);

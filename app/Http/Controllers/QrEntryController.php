@@ -212,8 +212,11 @@ class QrEntryController extends Controller
             $baseParsed = parse_url($baseUrl);
 
             // Pastikan host sama dengan frontend URL untuk keamanan
-            if ($parsedUrl['host'] === $baseParsed['host']) {
-                return $qrData;
+            if (isset($parsedUrl['host']) && isset($baseParsed['host']) && $parsedUrl['host'] === $baseParsed['host']) {
+                // Extract path dan query string
+                $path = $parsedUrl['path'] ?? '/app';
+                $query = $parsedUrl['query'] ?? '';
+                return $path . ($query ? '?' . $query : '');
             }
         }
 

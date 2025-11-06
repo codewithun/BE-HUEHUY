@@ -15,6 +15,34 @@ use Illuminate\Support\Facades\Log;
 
 class PromoItemController extends Controller
 {
+    /**
+     * Helper: Cek apakah user adalah member dari komunitas promo (jika promo punya komunitas)
+     * Return true jika:
+     * - Promo tidak punya komunitas (promo umum)
+     * - User adalah member aktif dari komunitas promo
+     */
+    private function canUserAccessPromo($promoId, $userId)
+    {
+        $promo = Promo::find($promoId);
+        
+        if (!$promo) {
+            return false;
+        }
+
+        // Jika promo tidak punya komunitas, semua user bisa akses
+        if (!$promo->community_id) {
+            return true;
+        }
+
+        // Cek apakah user adalah member aktif dari komunitas
+        $isMember = \App\Models\CommunityMembership::where('community_id', $promo->community_id)
+            ->where('user_id', $userId)
+            ->where('status', 'active')
+            ->exists();
+
+        return $isMember;
+    }
+
     public function index(Request $request)
     {
         $query = PromoItem::with([
@@ -281,6 +309,20 @@ class PromoItemController extends Controller
                 if (!$lockedPromo) {
                     return ['ok' => false, 'reason' => 'Promo tidak ditemukan'];
                 }
+
+                // ✅ VALIDASI KOMUNITAS: Cek apakah user bisa akses promo ini
+                if ($lockedPromo->community_id) {
+                    // Promo punya komunitas, cek membership
+                    $isMember = \App\Models\CommunityMembership::where('community_id', $lockedPromo->community_id)
+                        ->where('user_id', $authUserId)
+                        ->where('status', 'active')
+                        ->exists();
+
+                    if (!$isMember) {
+                        return ['ok' => false, 'reason' => 'Anda harus menjadi member komunitas untuk mengklaim promo ini'];
+                    }
+                }
+                // Jika promo tidak punya komunitas (community_id = null), semua user bisa klaim
 
                 $tz = 'Asia/Jakarta';
                 $now = Carbon::now($tz);

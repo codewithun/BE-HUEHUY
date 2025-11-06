@@ -235,12 +235,13 @@ class QrcodeController extends Controller
         $baseUrl = config('app.frontend_url', 'https://v2.huehuy.com');
 
         if ($promoId) {
-            $promo = Promo::with('community')->findOrFail($promoId);
-            $communityId = $promo->community ? $promo->community->id : null;
-            if (!$communityId) {
-                throw new \Exception('Promo tidak memiliki komunitas terkait.');
+            $promo = Promo::findOrFail($promoId);
+            $communityId = $promo->community_id;
+            $url = $baseUrl . '/app/komunitas/promo/' . $promo->id . '?autoRegister=1&source=qr_scan';
+            if ($communityId) {
+                $url .= '&communityId=' . $communityId;
             }
-            return $baseUrl . '/app/komunitas/promo/' . $promo->id . '?communityId=' . $communityId . '&autoRegister=1&source=qr_scan';
+            return $url;
         }
 
         $voucher = Voucher::findOrFail($voucherId);

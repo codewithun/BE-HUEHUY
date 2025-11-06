@@ -313,7 +313,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/admin/promo-items', [PromoItemController::class, 'index']);
     Route::post('/admin/promo-items', [PromoItemController::class, 'claimDirect']);
     Route::get('/admin/promo-items/{id}', [PromoItemController::class, 'show'])->whereNumber('id');
-    Route::put('/admin/promo-items/{id}', [PromoItemController::class, 'update'])->whereNumber('id');
+    Route::post('/admin/promos/{id}/items', [PromoItemController::class, 'claim'])->whereNumber('id');
+    
+    // ✅ TAMBAHAN: Route untuk fetch promo by ID (untuk QR scan)
+    Route::get('/admin/promos/{id}', [PromoController::class, 'show'])->whereNumber('id');
     Route::delete('/admin/promo-items/{id}', [PromoItemController::class, 'destroy'])->whereNumber('id');
     Route::post('/admin/promo-items/{id}/redeem', [PromoItemController::class, 'redeem'])->whereNumber('id');
     Route::post('/admin/promos/{id}/items', [PromoItemController::class, 'claim'])->whereNumber('id');

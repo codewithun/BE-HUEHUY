@@ -147,11 +147,22 @@ class QrEntryController extends Controller
             Log::info('QR Entry - Email verified:', ['user_id' => $user->id, 'email' => $email]);
         }
 
+        // Create token for immediate login after verification
+        $token = null;
+        if ($user) {
+            try {
+                $token = $user->createToken('sanctum')->plainTextToken;
+            } catch (\Throwable $e) {
+                Log::warning('QR Entry - Failed to create token on verify', ['user_id' => $user->id, 'err' => $e->getMessage()]);
+            }
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Email verified successfully.',
             'data' => [
                 'user' => $user,
+                'token' => $token,
                 'verified_at' => now()->toISOString(),
                 'qr_data' => $request->qr_data,
                 'redirect_url' => $this->buildRedirectUrl($request->qr_data), // TAMBAHAN

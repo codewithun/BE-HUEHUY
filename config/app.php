@@ -57,6 +57,8 @@ return [
 
     'url' => env('APP_URL', 'http://localhost'),
 
+    'frontend_url' => env('FRONTEND_URL', 'https://v2.huehuy.com'),
+
     'asset_url' => env('ASSET_URL'),
 
     /*

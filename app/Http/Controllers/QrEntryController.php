@@ -205,29 +205,19 @@ class QrEntryController extends Controller
             return '/app'; // Default redirect
         }
 
-        try {
-            $decoded = json_decode($qrData, true);
-            
-            if ($decoded && isset($decoded['type'])) {
-                switch ($decoded['type']) {
-                    case 'voucher':
-                        if (isset($decoded['voucherId'])) {
-                            // Use public endpoint for QR access
-                            return "/api/vouchers/{$decoded['voucherId']}/public";
-                        }
-                        break;
-                    case 'promo':
-                        if (isset($decoded['promoId'])) {
-                            // Use public endpoint for QR access
-                            return "/api/promos/{$decoded['promoId']}/public";
-                        }
-                        break;
-                }
+        // Jika qrData adalah URL yang valid, gunakan langsung
+        if (filter_var($qrData, FILTER_VALIDATE_URL)) {
+            $parsedUrl = parse_url($qrData);
+            $baseUrl = config('app.frontend_url', 'https://v2.huehuy.com');
+            $baseParsed = parse_url($baseUrl);
+
+            // Pastikan host sama dengan frontend URL untuk keamanan
+            if ($parsedUrl['host'] === $baseParsed['host']) {
+                return $qrData;
             }
-        } catch (\Exception $e) {
-            Log::warning('Failed to parse QR data for redirect:', ['qr_data' => $qrData, 'error' => $e->getMessage()]);
         }
 
-        return '/app'; // Fallback
+        // Fallback jika tidak valid
+        return '/app';
     }
 }

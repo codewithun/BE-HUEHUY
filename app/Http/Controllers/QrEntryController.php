@@ -49,20 +49,16 @@ class QrEntryController extends Controller
             $user->password = Hash::make($request->password);
             $user->save();
 
-            Log::info('QR Entry - User created:', ['user_id' => $user->id, 'email' => $user->email]);
+            Log::info('QR Entry - User created:', ['user_id' => $user->id]);
 
             DB::commit();
 
-            // 3) Create verification code (outside transaction)
+            // 3) Send verification email
             try {
                 $verificationCode = EmailVerificationCode::createForEmail($user->email);
-                
-                // 4) Send verification email
                 Mail::to($user->email)->send(new VerificationCodeMail($verificationCode->code));
                 
-                Log::info('QR Entry - Verification email sent:', ['email' => $user->email]);
-                
-                // 5) Create token for immediate login
+                // 5) Create token untuk immediate login
                 $userToken = $user->createToken('sanctum')->plainTextToken;
 
                 return response()->json([
@@ -72,15 +68,13 @@ class QrEntryController extends Controller
                         'user' => $user,
                         'user_token' => $userToken,
                         'verification_expires_at' => $verificationCode->expires_at->toISOString(),
-                        'qr_data' => $request->qr_data, // Pass QR data for later use
-                        'redirect_url' => $this->buildRedirectUrl($request->qr_data), // TAMBAHAN
+                        'redirect_url' => $this->buildRedirectUrl($request->qr_data),
                     ]
                 ], 201);
 
             } catch (\Throwable $th) {
                 Log::error('QR Entry - Email sending failed:', ['error' => $th->getMessage()]);
                 
-                // User created but email failed - still return success
                 $userToken = $user->createToken('sanctum')->plainTextToken;
                 
                 return response()->json([
@@ -90,8 +84,7 @@ class QrEntryController extends Controller
                         'user' => $user,
                         'user_token' => $userToken,
                         'email_failed' => true,
-                        'qr_data' => $request->qr_data,
-                        'redirect_url' => $this->buildRedirectUrl($request->qr_data), // TAMBAHAN
+                        'redirect_url' => $this->buildRedirectUrl($request->qr_data),
                     ]
                 ], 201);
             }
@@ -144,18 +137,10 @@ class QrEntryController extends Controller
         $user = User::where('email', $email)->first();
         if ($user && !$user->verified_at) {
             $user->update(['verified_at' => now()]);
-            Log::info('QR Entry - Email verified:', ['user_id' => $user->id, 'email' => $email]);
         }
 
-        // Create token for immediate login after verification
-        $token = null;
-        if ($user) {
-            try {
-                $token = $user->createToken('sanctum')->plainTextToken;
-            } catch (\Throwable $e) {
-                Log::warning('QR Entry - Failed to create token on verify', ['user_id' => $user->id, 'err' => $e->getMessage()]);
-            }
-        }
+        // Create token
+        $token = $user ? $user->createToken('sanctum')->plainTextToken : null;
 
         return response()->json([
             'success' => true,
@@ -164,8 +149,7 @@ class QrEntryController extends Controller
                 'user' => $user,
                 'token' => $token,
                 'verified_at' => now()->toISOString(),
-                'qr_data' => $request->qr_data,
-                'redirect_url' => $this->buildRedirectUrl($request->qr_data), // TAMBAHAN
+                'redirect_url' => $this->buildRedirectUrl($request->qr_data),
             ]
         ]);
     }
@@ -208,7 +192,7 @@ class QrEntryController extends Controller
     }
 
     /**
-     * TAMBAHAN: Build redirect URL berdasarkan QR data
+     * Build redirect URL berdasarkan QR data (AMAN - extract promo ID saja)
      */
     private function buildRedirectUrl($qrData)
     {
@@ -216,22 +200,21 @@ class QrEntryController extends Controller
             return '/app'; // Default redirect
         }
 
-        // Jika qrData adalah URL yang valid, gunakan langsung
-        if (filter_var($qrData, FILTER_VALIDATE_URL)) {
+        try {
             $parsedUrl = parse_url($qrData);
             $baseUrl = config('app.frontend_url', 'https://v2.huehuy.com');
             $baseParsed = parse_url($baseUrl);
 
-            // Pastikan host sama dengan frontend URL untuk keamanan
+            // ✅ VALIDASI KEAMANAN: Pastikan host sama dengan frontend URL
             if (isset($parsedUrl['host']) && isset($baseParsed['host']) && $parsedUrl['host'] === $baseParsed['host']) {
-                // Extract path dan query string
                 $path = $parsedUrl['path'] ?? '/app';
                 $query = $parsedUrl['query'] ?? '';
                 return $path . ($query ? '?' . $query : '');
             }
+        } catch (\Exception $e) {
+            Log::warning('QR Entry - Invalid QR data URL', ['qr_data' => $qrData]);
         }
 
-        // Fallback jika tidak valid
         return '/app';
     }
 }

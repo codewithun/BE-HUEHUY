@@ -455,9 +455,7 @@ class PromoItemController extends Controller
                         ->decrement('stock');
                     $lockedPromo->refresh();
                 } else {
-
-
-
+                    // 2) Promo stok = null → fallback ke Ad dengan kode yang sama
                     if (!$lockedAd) {
                         $adByCode = \App\Models\Ad::where('code', $lockedPromo?->code)
                             ->lockForUpdate()
@@ -473,12 +471,15 @@ class PromoItemController extends Controller
                             ->where('max_grab', '>', 0)
                             ->decrement('max_grab');
                         $lockedAd->refresh();
+                    } else if ($lockedAd && $lockedAd->unlimited_grab) {
+                        // Ad unlimited → tidak perlu decrement, tetapi mark affected supaya lolos validasi
+                        $affected = 1;
                     }
                 }
 
-
+                // 3) Jika tidak ada perubahan dan memang bergantung pada stok terbatas → habis
                 if ($affected === 0 && (
-                    ($lockedPromo && !is_null($lockedPromo->stock)) ||
+                    ($lockedPromo && !is_null($lockedPromo->stock) && (int) $lockedPromo->stock > 0) ||
                     ($lockedAd && !$lockedAd->unlimited_grab)
                 )) {
                     return [
@@ -489,6 +490,7 @@ class PromoItemController extends Controller
                             'promo_id' => $lockedPromo?->id,
                             'promo_code' => $lockedPromo?->code,
                             'promo_stock' => $lockedPromo?->stock,
+                            'promo_always_available' => $lockedPromo?->always_available,
                             'ad_id' => $lockedAd?->id,
                             'ad_code' => $lockedAd?->code,
                             'ad_max_grab' => $lockedAd?->max_grab,

@@ -108,7 +108,7 @@ Route::prefix('email-verification')->group(function () {
  */
 Route::prefix('qr-entry')->group(function () {
     Route::post('/register', [QrEntryController::class, 'qrRegisterAndVerify']);
-    Route::post('/verify-email', [QrEntryController::class, 'qrVerifyEmail']);
+    Route::post('/verify-email', [QrEntryController::class, 'qrVerifyEmail']); // ✅ Ubah ke /verify
     Route::get('/status', [QrEntryController::class, 'qrEntryStatus']);
 });
 

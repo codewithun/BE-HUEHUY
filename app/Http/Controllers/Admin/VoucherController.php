@@ -474,6 +474,79 @@ class VoucherController extends Controller
         return response(['message' => 'Success', 'data' => $model])->header('Cache-Control', 'no-store');
     }
 
+    /**
+     * Get detailed stock information for voucher (especially for daily grab vouchers)
+     * GET /api/admin/vouchers/{id}/stock
+     */
+    public function getStockInfo(string $id)
+    {
+        $voucher = Voucher::find($id);
+
+        if (!$voucher) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Voucher tidak ditemukan'
+            ], 404);
+        }
+
+        $today = now()->toDateString();
+
+        if ($voucher->is_daily_grab) {
+            // Hitung grab hari ini
+            $totalGrabToday = DB::table('voucher_grabs')
+                ->where('voucher_id', $voucher->id)
+                ->where('date', $today)
+                ->sum('total_grab');
+
+            $remainingToday = $voucher->unlimited_grab
+                ? null
+                : max(0, (int)$voucher->stock - (int)$totalGrabToday);
+
+            // Get list users yang sudah grab hari ini
+            $usersGrabbedToday = DB::table('voucher_grabs')
+                ->join('users', 'users.id', '=', 'voucher_grabs.user_id')
+                ->where('voucher_grabs.voucher_id', $voucher->id)
+                ->where('voucher_grabs.date', $today)
+                ->select('users.id', 'users.name', 'users.email', 'voucher_grabs.created_at')
+                ->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'voucher_id' => $voucher->id,
+                    'name' => $voucher->name,
+                    'is_daily_grab' => true,
+                    'unlimited_grab' => $voucher->unlimited_grab,
+                    'stock_per_day' => $voucher->stock, // Stok per hari (asli)
+                    'total_grabbed_today' => (int)$totalGrabToday,
+                    'remaining_today' => $remainingToday,
+                    'date' => $today,
+                    'start_validate' => $voucher->start_validate,
+                    'finish_validate' => $voucher->finish_validate,
+                    'is_active' => $voucher->start_validate && $voucher->finish_validate
+                        ? now()->between($voucher->start_validate, $voucher->finish_validate->endOfDay())
+                        : true,
+                    'users_grabbed_today' => $usersGrabbedToday,
+                ]
+            ]);
+        } else {
+            // Voucher normal
+            $totalItems = VoucherItem::where('voucher_id', $voucher->id)->count();
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'voucher_id' => $voucher->id,
+                    'name' => $voucher->name,
+                    'is_daily_grab' => false,
+                    'unlimited_grab' => $voucher->unlimited_grab,
+                    'total_stock' => $voucher->stock, // Stok total (berkurang permanen)
+                    'total_claimed' => $totalItems,
+                    'remaining' => $voucher->unlimited_grab ? null : max(0, (int)$voucher->stock),
+                ]
+            ]);
+        }
+    }
 
     public function showPublic(string $id)
     {
@@ -600,6 +673,12 @@ class VoucherController extends Controller
             'community_id'    => 'nullable|required_if:target_type,community|exists:communities,id',
             'owner_name'      => 'nullable|string|max:255',
             'owner_phone'     => 'nullable|string|max:32',
+
+            // ✨ Voucher Harian fields
+            'is_daily_grab'   => 'nullable|boolean',
+            'unlimited_grab'  => 'nullable|boolean',
+            'start_validate'  => 'nullable|date',
+            'finish_validate' => 'nullable|date|after_or_equal:start_validate',
         ], [], [
             'target_user_id'  => 'user',
             'target_user_ids' => 'daftar user',
@@ -858,6 +937,12 @@ class VoucherController extends Controller
             'community_id'    => 'nullable|required_if:target_type,community|exists:communities,id',
             'owner_name'      => 'nullable|string|max:255',
             'owner_phone'     => 'nullable|string|max:32',
+
+            // ✨ Voucher Harian fields
+            'is_daily_grab'   => 'nullable|boolean',
+            'unlimited_grab'  => 'nullable|boolean',
+            'start_validate'  => 'nullable|date',
+            'finish_validate' => 'nullable|date|after_or_equal:start_validate',
         ];
 
         if ($request->hasFile('image')) {
@@ -1980,17 +2065,31 @@ class VoucherController extends Controller
                 return response()->json(['success' => false, 'message' => 'Voucher tidak ditemukan'], 404);
             }
 
+            // Check tanggal validasi untuk voucher dengan start/finish validate
+            if ($voucher->start_validate && now()->lt($voucher->start_validate)) {
+                if ($nid = $request->input('notification_id')) {
+                    Notification::where('id', $nid)->where('user_id', $user->id)->update(['read_at' => now()]);
+                }
+                return response()->json(['success' => false, 'message' => 'Voucher belum aktif'], 410);
+            }
 
+            if ($voucher->finish_validate && now()->gt($voucher->finish_validate->endOfDay())) {
+                if ($nid = $request->input('notification_id')) {
+                    Notification::where('id', $nid)->where('user_id', $user->id)->update(['read_at' => now()]);
+                }
+                return response()->json(['success' => false, 'message' => 'Voucher sudah berakhir'], 410);
+            }
+
+            // Check valid_until (backward compatibility)
             $validUntil = $voucher->valid_until ? Carbon::parse($voucher->valid_until) : null;
             if ($validUntil && now()->greaterThan($validUntil)) {
-
                 if ($nid = $request->input('notification_id')) {
                     Notification::where('id', $nid)->where('user_id', $user->id)->update(['read_at' => now()]);
                 }
                 return response()->json(['success' => false, 'message' => 'Voucher sudah kadaluwarsa'], 410);
             }
 
-
+            // Check targeting
             if ($voucher->target_type === 'user') {
                 if ($voucher->target_user_id && (int)$voucher->target_user_id !== (int)$user->id) {
                     return response()->json(['success' => false, 'message' => 'Voucher ini tidak ditujukan untuk Anda'], 403);
@@ -2006,57 +2105,167 @@ class VoucherController extends Controller
                 }
             }
 
+            // ✨ VOUCHER HARIAN: Check grab history untuk hari ini
+            if ($voucher->is_daily_grab) {
+                $today = now()->toDateString(); // Format: Y-m-d
 
-            if (VoucherItem::where('voucher_id', $voucher->id)->where('user_id', $user->id)->exists()) {
-                if ($nid = $request->input('notification_id')) {
-                    Notification::where('id', $nid)->where('user_id', $user->id)->update(['read_at' => now()]);
+                // Check apakah user sudah claim hari ini
+                $alreadyClaimedToday = DB::table('voucher_grabs')
+                    ->where('voucher_id', $voucher->id)
+                    ->where('user_id', $user->id)
+                    ->where('date', $today)
+                    ->exists();
+
+                if ($alreadyClaimedToday) {
+                    if ($nid = $request->input('notification_id')) {
+                        Notification::where('id', $nid)->where('user_id', $user->id)->update(['read_at' => now()]);
+                    }
+                    return response()->json(['success' => false, 'message' => 'Anda sudah klaim voucher ini hari ini'], 409);
                 }
-                return response()->json(['success' => true, 'message' => 'Voucher sudah pernah diklaim'], 200);
-            }
 
+                // ✅ PERBAIKAN: Check stok hari ini dari summary_grabs (untuk voucher terhubung ke ads)
+                // atau dari voucher_grabs (untuk voucher standalone)
+                $totalGrabToday = 0;
+                $maxGrabPerDay = 0;
 
-            if (!is_null($voucher->stock) && (int)$voucher->stock <= 0) {
-                if ($nid = $request->input('notification_id')) {
-                    Notification::where('id', $nid)->where('user_id', $user->id)->update(['read_at' => now()]);
+                if ($voucher->ad_id) {
+                    // Voucher terhubung ke ads → gunakan summary_grabs dan ads.max_grab
+                    $summary = DB::table('summary_grabs')
+                        ->where('ad_id', $voucher->ad_id)
+                        ->where('date', $today)
+                        ->first();
+
+                    $totalGrabToday = $summary ? $summary->total_grab : 0;
+                    $maxGrabPerDay = $voucher->ad ? $voucher->ad->max_grab : 0;
+                } else {
+                    // Voucher standalone → gunakan voucher_grabs dan voucher.stock
+                    $totalGrabToday = DB::table('voucher_grabs')
+                        ->where('voucher_id', $voucher->id)
+                        ->where('date', $today)
+                        ->sum('total_grab');
+
+                    $maxGrabPerDay = $voucher->stock;
                 }
-                return response()->json(['success' => false, 'message' => 'Voucher habis (out of stock)'], 410);
+
+                $remaining = $voucher->unlimited_grab ? null : ((int)$maxGrabPerDay - (int)$totalGrabToday);
+
+                Log::info('📊 Voucher harian stock check', [
+                    'voucher_id' => $voucher->id,
+                    'ad_id' => $voucher->ad_id,
+                    'max_grab_per_day' => $maxGrabPerDay,
+                    'total_grab_today' => $totalGrabToday,
+                    'remaining' => $remaining,
+                    'unlimited' => $voucher->unlimited_grab,
+                    'date' => $today,
+                ]);
+
+                if (!$voucher->unlimited_grab && $remaining <= 0) {
+                    if ($nid = $request->input('notification_id')) {
+                        Notification::where('id', $nid)->where('user_id', $user->id)->update(['read_at' => now()]);
+                    }
+                    return response()->json(['success' => false, 'message' => 'Voucher hari ini sudah habis'], 410);
+                }
+
+                // Create voucher item
+                $item = VoucherItem::create([
+                    'voucher_id' => $voucher->id,
+                    'user_id'    => $user->id,
+                    'code'       => 'VI-' . strtoupper(\Illuminate\Support\Str::random(10)),
+                ]);
+
+                // Insert ke voucher_grabs untuk tracking harian
+                DB::table('voucher_grabs')->insert([
+                    'voucher_id' => $voucher->id,
+                    'user_id'    => $user->id,
+                    'date'       => $today,
+                    'total_grab' => 1,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+
+                Log::info('✅ Voucher harian claimed', [
+                    'voucher_id' => $voucher->id,
+                    'user_id' => $user->id,
+                    'date' => now()->toDateString(),
+                    'remaining_today' => $remaining - 1,
+                ]);
+            } else {
+                // ✨ VOUCHER NORMAL: Check double claim (backward compatibility)
+                if (VoucherItem::where('voucher_id', $voucher->id)->where('user_id', $user->id)->exists()) {
+                    if ($nid = $request->input('notification_id')) {
+                        Notification::where('id', $nid)->where('user_id', $user->id)->update(['read_at' => now()]);
+                    }
+                    return response()->json(['success' => true, 'message' => 'Voucher sudah pernah diklaim'], 200);
+                }
+
+                // Check stock
+                if (!$voucher->unlimited_grab && !is_null($voucher->stock) && (int)$voucher->stock <= 0) {
+                    if ($nid = $request->input('notification_id')) {
+                        Notification::where('id', $nid)->where('user_id', $user->id)->update(['read_at' => now()]);
+                    }
+                    return response()->json(['success' => false, 'message' => 'Voucher habis (out of stock)'], 410);
+                }
+
+                // Create voucher item
+                $item = VoucherItem::create([
+                    'voucher_id' => $voucher->id,
+                    'user_id'    => $user->id,
+                    'code'       => 'VI-' . strtoupper(\Illuminate\Support\Str::random(10)),
+                ]);
+
+                // Decrement stock untuk voucher normal
+                if (!$voucher->unlimited_grab && !is_null($voucher->stock)) {
+                    $voucher->decrement('stock');
+                }
+
+                Log::info('VOUCHER_DEC_AFTER', [
+                    'id' => $voucher->id,
+                    'stock_db' => DB::table('vouchers')->where('id', $voucher->id)->value('stock'),
+                ]);
             }
-
-
-            $item = VoucherItem::create([
-                'voucher_id' => $voucher->id,
-                'user_id'    => $user->id,
-                'code'       => 'VI-' . strtoupper(\Illuminate\Support\Str::random(10)),
-            ]);
-            if (!is_null($voucher->stock)) {
-                $voucher->decrement('stock');
-            }
-
-            Log::info('VOUCHER_DEC_AFTER', [
-                'id' => $voucher->id,
-                'stock_db' => DB::table('vouchers')->where('id', $voucher->id)->value('stock'),
-            ]);
 
             // --- Sync ke ads.max_grab (jika voucher terhubung ke ads) ---
             if (!is_null($voucher->ad_id)) {
-                // Kurangi 1 hanya jika max_grab ada & > 0
-                $affected = DB::table('ads')
-                    ->where('id', $voucher->ad_id)
-                    ->whereNotNull('max_grab')
-                    ->where('max_grab', '>', 0)
-                    ->decrement('max_grab', 1);
+                $ad = \App\Models\Ad::find($voucher->ad_id);
 
-                if ($affected === 0) {
-                    Log::warning('Skip decrement max_grab: tidak memenuhi syarat', [
-                        'ad_id' => $voucher->ad_id,
+                // Hanya sync jika ads juga daily grab
+                if ($ad && $ad->is_daily_grab) {
+                    // ✅ PERBAIKAN: Gunakan updateOrCreate untuk increment daily grab
+                    $summary = \App\Models\SummaryGrab::firstOrNew([
+                        'ad_id' => $ad->id,
+                        'date'  => now()->toDateString(),
+                    ]);
+
+                    if ($summary->exists) {
+                        // Jika sudah ada, increment
+                        $summary->increment('total_grab', 1);
+                    } else {
+                        // Jika baru, set ke 1
+                        $summary->total_grab = 1;
+                        $summary->save();
+                    }
+
+                    Log::info('INC summary_grabs for voucher daily grab', [
+                        'ad_id' => $ad->id,
+                        'date' => now()->toDateString(),
+                        'total_grab_now' => $summary->fresh()->total_grab,
                     ]);
                 } else {
-                    // sentuh updated_at
-                    DB::table('ads')->where('id', $voucher->ad_id)->update(['updated_at' => now()]);
-                    Log::info('DEC ads.max_grab after claim', [
-                        'ad_id' => $voucher->ad_id,
-                        'max_grab_now' => DB::table('ads')->where('id', $voucher->ad_id)->value('max_grab'),
-                    ]);
+                    // Kurangi max_grab untuk ads normal (TIDAK boleh untuk daily grab!)
+                    $affected = DB::table('ads')
+                        ->where('id', $voucher->ad_id)
+                        ->whereNotNull('max_grab')
+                        ->where('max_grab', '>', 0)
+                        ->where('is_daily_grab', 0) // ← PENTING: Hanya untuk non-daily
+                        ->decrement('max_grab', 1);
+
+                    if ($affected > 0) {
+                        DB::table('ads')->where('id', $voucher->ad_id)->update(['updated_at' => now()]);
+                        Log::info('DEC ads.max_grab after claim', [
+                            'ad_id' => $voucher->ad_id,
+                            'max_grab_now' => DB::table('ads')->where('id', $voucher->ad_id)->value('max_grab'),
+                        ]);
+                    }
                 }
             }
 

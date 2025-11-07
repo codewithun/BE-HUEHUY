@@ -611,15 +611,20 @@ class CubeController extends Controller
             'opening_hours',
             'tags',
             'ads' => function ($query) {
+                // NOTE: Untuk promo harian (is_daily_grab = 1):
+                // - Stok di-reset otomatis setiap hari (filter WHERE date = DATE(NOW()))
+                // - Admin set max_grab = jumlah stok per hari
+                // - Sistem hanya hitung grab untuk hari ini, besok akan reset otomatis
+                // - Sampai finish_validate tercapai, setiap hari akan ada max_grab stok baru
                 return $query->select([
                     'ads.*',
                     DB::raw('CAST(IF(ads.is_daily_grab = 1,
-                            (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
-                            SUM(total_grab)
+                            COALESCE((SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id), 0),
+                            COALESCE(SUM(total_grab), 0)
                         ) AS SIGNED) AS total_grab'),
                     DB::raw('CAST(IF(ads.is_daily_grab = 1,
-                            ads.max_grab - (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
-                            ads.max_grab - SUM(total_grab)
+                            ads.max_grab - COALESCE((SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id), 0),
+                            ads.max_grab - COALESCE(SUM(total_grab), 0)
                         ) AS SIGNED) AS total_remaining'),
                 ])
                     ->leftJoin('summary_grabs', 'summary_grabs.ad_id', 'ads.id')

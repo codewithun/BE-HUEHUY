@@ -28,9 +28,9 @@ class Ad extends Model
         'image_2',
         'image_3',
         'image_updated_at',
-        'max_grab',
-        'unlimited_grab',
-        'is_daily_grab',
+        'max_grab',           // Total stok untuk promo normal, ATAU stok per hari untuk promo harian
+        'unlimited_grab',     // Jika true, stok unlimited (tidak terbatas)
+        'is_daily_grab',      // Jika true, maka max_grab adalah stok PER HARI yang auto-reset setiap hari
         'type',
         'status',
         'promo_type',
@@ -45,8 +45,8 @@ class Ad extends Model
         'sell_per_day',
         'level_umkm',
         'pre_order',
-        'start_validate',
-        'finish_validate',
+        'start_validate',     // Tanggal mulai promo
+        'finish_validate',    // Tanggal berakhir promo - untuk promo harian, stok auto-reset sampai tanggal ini
         'validation_time_limit',
         'jam_mulai',
         'jam_berakhir',
@@ -204,7 +204,40 @@ class Ad extends Model
             return null; // artinya tak terbatas
         }
 
+        // Handle promo harian (is_daily_grab)
+        if ($this->is_daily_grab) {
+            return $this->getDailyRemainingStock();
+        }
+
         return max(0, (int) ($this->max_grab ?? 0));
+    }
+
+    /**
+     * Hitung sisa stok untuk promo harian dengan auto-reset setiap hari
+     * Reset otomatis terjadi berdasarkan tanggal, tidak perlu cron job
+     */
+    public function getDailyRemainingStock()
+    {
+        // Jika belum melewati tanggal validasi, return 0
+        if ($this->start_validate && now()->lt($this->start_validate)) {
+            return 0;
+        }
+
+        // Jika sudah melewati tanggal berakhir, return 0
+        if ($this->finish_validate && now()->gt($this->finish_validate->endOfDay())) {
+            return 0;
+        }
+
+        // Hitung total grab untuk HARI INI saja
+        $totalGrabToday = \Illuminate\Support\Facades\DB::table('summary_grabs')
+            ->where('ad_id', $this->id)
+            ->whereDate('date', now()->toDateString())
+            ->sum('total_grab');
+
+        // Sisa stok = max_grab per hari - yang sudah di-grab hari ini
+        $remaining = max(0, (int)($this->max_grab ?? 0) - (int)$totalGrabToday);
+
+        return $remaining;
     }
 
     /**

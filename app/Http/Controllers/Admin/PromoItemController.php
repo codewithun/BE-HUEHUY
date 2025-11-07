@@ -24,7 +24,7 @@ class PromoItemController extends Controller
     private function canUserAccessPromo($promoId, $userId)
     {
         $promo = Promo::find($promoId);
-        
+
         if (!$promo) {
             return false;
         }
@@ -385,7 +385,70 @@ class PromoItemController extends Controller
             if ($needsStock) {
                 $affected = 0;
 
-                if ($lockedPromo && !is_null($lockedPromo->stock)) {
+                // ✅ PRIORITAS: Cek dulu apakah ini promo harian (is_daily_grab)
+                // Jika iya, gunakan summary_grabs, bukan decrement stock
+
+                // Get ad untuk cek is_daily_grab
+                $checkAd = $lockedAd;
+                if (!$checkAd && $lockedPromo) {
+                    $checkAd = \App\Models\Ad::where('code', $lockedPromo->code)->first();
+                }
+
+                // Jika promo harian, gunakan summary_grabs
+                if ($checkAd && $checkAd->is_daily_grab && !$checkAd->unlimited_grab) {
+                    // ✅ PROMO HARIAN: Gunakan summary_grabs
+                    $summaryToday = \App\Models\SummaryGrab::where('ad_id', $checkAd->id)
+                        ->whereDate('date', Carbon::now())
+                        ->lockForUpdate()
+                        ->first();
+
+                    if (!$summaryToday) {
+                        // Belum ada grab hari ini, buat baru
+                        try {
+                            $summary = new \App\Models\SummaryGrab();
+                            $summary->ad_id = $checkAd->id;
+                            $summary->total_grab = 1;
+                            $summary->date = Carbon::now();
+                            $summary->save();
+                            $affected = 1;
+                        } catch (\Throwable $th) {
+                            return [
+                                'ok' => false,
+                                'reason' => 'Gagal membuat summary grab hari ini'
+                            ];
+                        }
+                    } else {
+                        // Sudah ada grab hari ini, cek limit
+                        if ($summaryToday->total_grab >= $checkAd->max_grab) {
+                            return [
+                                'ok' => false,
+                                'reason' => 'Stok promo harian habis untuk hari ini',
+                                'debug' => [
+                                    'source' => 'summary_grabs',
+                                    'ad_id' => $checkAd->id,
+                                    'ad_code' => $checkAd->code,
+                                    'ad_max_grab' => $checkAd->max_grab,
+                                    'total_grab_today' => $summaryToday->total_grab,
+                                    'is_daily_grab' => true,
+                                ]
+                            ];
+                        }
+
+                        // Masih bisa grab, increment summary
+                        try {
+                            $summaryToday->total_grab += 1;
+                            $summaryToday->save();
+                            $affected = 1;
+                        } catch (\Throwable $th) {
+                            return [
+                                'ok' => false,
+                                'reason' => 'Gagal update summary grab hari ini'
+                            ];
+                        }
+                    }
+                }
+                // Jika bukan promo harian, gunakan logic normal (decrement stock)
+                elseif ($lockedPromo && !is_null($lockedPromo->stock)) {
 
                     $affected = \App\Models\Promo::where('id', $lockedPromo->id)
                         ->where('stock', '>', 0)
@@ -405,6 +468,7 @@ class PromoItemController extends Controller
                     }
 
                     if ($lockedAd && !$lockedAd->unlimited_grab) {
+                        // ✅ PROMO NORMAL: Decrement max_grab langsung
                         $affected = \App\Models\Ad::where('id', $lockedAd->id)
                             ->where('max_grab', '>', 0)
                             ->decrement('max_grab');

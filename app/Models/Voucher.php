@@ -24,7 +24,7 @@ class Voucher extends Model
         'type',
         'valid_until',
         'tenant_location',
-        'stock',
+        'stock',              // Total stok untuk voucher normal, ATAU stok per hari untuk voucher harian
         'code',
         'community_id',
 
@@ -42,6 +42,12 @@ class Voucher extends Model
         'owner_name',
         'owner_phone',
         // 'owner_email', // aktifkan kalau kamu sudah bikin kolom ini di migration
+
+        // Voucher Harian (auto-reset)
+        'is_daily_grab',     // Jika true, maka stock adalah stok PER HARI yang auto-reset
+        'unlimited_grab',    // Jika true, voucher tidak terbatas (unlimited stock)
+        'start_validate',    // Tanggal mulai voucher aktif
+        'finish_validate',   // Tanggal berakhir voucher - untuk daily grab, auto-reset sampai tanggal ini
     ];
 
     protected $casts = [
@@ -51,9 +57,16 @@ class Voucher extends Model
         'target_user_id'   => 'integer',
         'validation_type'  => 'string',
         'image_updated_at' => 'datetime',
+        'is_daily_grab'    => 'boolean',
+        'unlimited_grab'   => 'boolean',
+        'start_validate'   => 'datetime',
+        'finish_validate'  => 'datetime',
     ];
 
     // agar ikut di JSON
+    // NOTE: remaining_stock dihapus dari appends untuk menghindari konfusi di admin
+    // Admin akan melihat field 'stock' asli (stok per hari untuk daily grab)
+    // Frontend bisa request 'remaining_stock' secara eksplisit jika perlu
     protected $appends = ['image_url', 'image_url_versioned'];
 
     // ================= Relations =================
@@ -78,6 +91,11 @@ class Voucher extends Model
         return $this->hasMany(VoucherItem::class, 'voucher_id', 'id');
     }
 
+    public function voucher_grabs(): HasMany
+    {
+        return $this->hasMany(VoucherGrab::class, 'voucher_id', 'id');
+    }
+
     public function community(): BelongsTo
     {
         return $this->belongsTo(Community::class, 'community_id', 'id');
@@ -99,6 +117,70 @@ class Voucher extends Model
     }
 
     // ================= Accessors =================
+
+    /**
+     * Get remaining stock - untuk voucher harian, hitung berdasarkan grab hari ini
+     * NOTE: Accessor ini TIDAK ada di $appends, jadi tidak otomatis muncul di JSON
+     * Frontend harus request eksplisit dengan append atau panggil method getDailyRemainingStock()
+     */
+    public function getRemainingStockAttribute()
+    {
+        // Jika unlimited, return null (infinite)
+        if ($this->unlimited_grab) {
+            return null;
+        }
+
+        // Handle voucher harian (is_daily_grab)
+        if ($this->is_daily_grab) {
+            return $this->getDailyRemainingStock();
+        }
+
+        // Voucher normal: return stock langsung
+        return max(0, (int) ($this->stock ?? 0));
+    }
+
+    /**
+     * Get sisa stok hari ini untuk voucher harian
+     * Method helper yang bisa dipanggil langsung
+     */
+    public function getTodayRemainingAttribute()
+    {
+        if (!$this->is_daily_grab) {
+            return $this->stock; // Untuk voucher normal, return stock asli
+        }
+
+        return $this->getDailyRemainingStock();
+    }
+
+    /**
+     * Hitung sisa stok untuk voucher harian dengan auto-reset setiap hari
+     * Reset otomatis terjadi berdasarkan tanggal, tidak perlu cron job
+     */
+    public function getDailyRemainingStock()
+    {
+        // Jika belum melewati tanggal validasi, return 0
+        if ($this->start_validate && now()->lt($this->start_validate)) {
+            return 0;
+        }
+
+        // Jika sudah melewati tanggal berakhir, return 0
+        if ($this->finish_validate && now()->gt($this->finish_validate->endOfDay())) {
+            return 0;
+        }
+
+        $today = now()->toDateString(); // Format: Y-m-d
+
+        // Hitung total grab untuk HARI INI saja
+        $totalGrabToday = \Illuminate\Support\Facades\DB::table('voucher_grabs')
+            ->where('voucher_id', $this->id)
+            ->where('date', $today) // Gunakan WHERE = bukan whereDate untuk performa
+            ->sum('total_grab');
+
+        // Sisa stok = stock per hari - yang sudah di-grab hari ini
+        $remaining = max(0, (int)($this->stock ?? 0) - (int)$totalGrabToday);
+
+        return $remaining;
+    }
 
     public function getStatusAttribute(): string
     {

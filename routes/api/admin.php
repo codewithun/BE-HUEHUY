@@ -84,6 +84,7 @@ Route::prefix('admin')->name('admin.')->group(function () {
     Route::apiResource('/huehuy-ads', HuehuyAdController::class);
 
     Route::apiResource('/vouchers', VoucherController::class);
+    Route::get('/vouchers/{id}/stock', [VoucherController::class, 'getStockInfo'])->whereNumber('id');
     Route::post('/vouchers/{id}/send-to-user', [VoucherController::class, 'sendToUser']);
     Route::get('/vouchers/voucher-items', [VoucherController::class, 'voucherItems']);
 
@@ -145,5 +146,4 @@ Route::prefix('admin')->name('admin.')->group(function () {
     Route::apiResource('/events', EventController::class);
     Route::post('/events/{id}/register', [EventController::class, 'register']);
     Route::get('/events/{id}/registrations', [EventController::class, 'registrations']);
-
 });

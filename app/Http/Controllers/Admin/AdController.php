@@ -245,6 +245,11 @@ class AdController extends Controller
         }
 
         // ? Sort & executing with pagination
+        // NOTE: Untuk promo harian (is_daily_grab = 1):
+        // - Stok di-reset otomatis setiap hari (filter WHERE date = DATE(NOW()))
+        // - Admin set max_grab = jumlah stok per hari
+        // - Sistem hanya hitung grab untuk hari ini, besok akan reset otomatis
+        // - Sampai finish_validate tercapai, setiap hari akan ada max_grab stok baru
         $query = $query->leftJoin('summary_grabs', 'summary_grabs.ad_id', 'ads.id')
             ->groupBy('ads.id')
             ->orderBy($this->remark_column($sortby, $columnAliases), $sortDirection)

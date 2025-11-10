@@ -1564,8 +1564,53 @@ class PromoController extends Controller
                 ->first();
 
             if (!$item) {
+                // ✅ PERBAIKAN: Cek dan kurangi stok dengan logic yang sama seperti PromoItemController
+                $affected = 0;
 
-                if (!is_null($promo->stock)) {
+                // Ambil ad yang terkait dengan promo ini
+                $ad = \App\Models\Ad::where('code', $promo->code)->lockForUpdate()->first();
+
+                // ✅ Jika promo harian, gunakan summary_grabs
+                if ($ad && $ad->is_daily_grab && !$ad->unlimited_grab) {
+                    $summaryToday = \App\Models\SummaryGrab::where('ad_id', $ad->id)
+                        ->whereDate('date', Carbon::now())
+                        ->lockForUpdate()
+                        ->first();
+
+                    if (!$summaryToday) {
+                        // Belum ada grab hari ini, buat baru
+                        try {
+                            $summary = new \App\Models\SummaryGrab();
+                            $summary->ad_id = $ad->id;
+                            $summary->total_grab = 1;
+                            $summary->date = Carbon::now();
+                            $summary->save();
+                            $affected = 1;
+                        } catch (\Throwable $th) {
+                            DB::rollBack();
+                            return response()->json(['success' => false, 'message' => 'Gagal membuat summary grab hari ini'], 500);
+                        }
+                    } else {
+                        // Sudah ada grab hari ini, cek limit
+                        if ($summaryToday->total_grab >= $ad->max_grab) {
+                            DB::rollBack();
+                            return response()->json(['success' => false, 'message' => 'Stok promo harian habis untuk hari ini'], 409);
+                        }
+
+                        // Masih bisa grab, increment summary
+                        try {
+                            $summaryToday->total_grab += 1;
+                            $summaryToday->save();
+                            $affected = 1;
+                        } catch (\Throwable $th) {
+                            DB::rollBack();
+                            return response()->json(['success' => false, 'message' => 'Gagal update summary grab hari ini'], 500);
+                        }
+                    }
+                }
+                // ✅ Jika promo normal (bukan harian), cek stock di promo atau max_grab di ad
+                elseif (!is_null($promo->stock)) {
+                    // Gunakan stock dari promo
                     $affected = \App\Models\Promo::where('id', $promo->id)
                         ->where('stock', '>', 0)
                         ->decrement('stock');
@@ -1573,9 +1618,16 @@ class PromoController extends Controller
                         DB::rollBack();
                         return response()->json(['success' => false, 'message' => 'Stok promo habis'], 409);
                     }
+                } elseif ($ad && !$ad->unlimited_grab) {
+                    // ✅ PERBAIKAN UTAMA: Fallback ke max_grab di ad untuk promo normal
+                    $affected = \App\Models\Ad::where('id', $ad->id)
+                        ->where('max_grab', '>', 0)
+                        ->decrement('max_grab');
+                    if ($affected === 0) {
+                        DB::rollBack();
+                        return response()->json(['success' => false, 'message' => 'Stok promo habis'], 409);
+                    }
                 }
-
-
 
                 $masterCode = $promo->code ?? $enteredCode;
 

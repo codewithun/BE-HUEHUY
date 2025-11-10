@@ -618,16 +618,27 @@ class CubeController extends Controller
                 // - Sampai finish_validate tercapai, setiap hari akan ada max_grab stok baru
                 return $query->select([
                     'ads.*',
+                    // ✅ PERBAIKAN: Hitung total_grab yang lebih akurat
                     DB::raw('CAST(IF(ads.is_daily_grab = 1,
-                            COALESCE((SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id), 0),
-                            COALESCE(SUM(total_grab), 0)
+                            COALESCE((SELECT total_grab FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id LIMIT 1), 0),
+                            COALESCE((SELECT COUNT(*) FROM promo_items pi 
+                                      JOIN promos p ON p.id = pi.promo_id 
+                                      WHERE p.code = ads.code 
+                                      AND pi.status IN ("reserved", "redeemed")), 0)
                         ) AS SIGNED) AS total_grab'),
-                    DB::raw('CAST(IF(ads.is_daily_grab = 1,
-                            ads.max_grab - COALESCE((SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id), 0),
-                            ads.max_grab - COALESCE(SUM(total_grab), 0)
-                        ) AS SIGNED) AS total_remaining'),
+                    // ✅ PERBAIKAN: Hitung total_remaining dengan prioritas promo.stock, pastikan tidak negatif
+                    DB::raw('CAST(GREATEST(0, IF(ads.unlimited_grab = 1,
+                            9999999,
+                            IF(ads.is_daily_grab = 1,
+                                ads.max_grab - COALESCE((SELECT total_grab FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id LIMIT 1), 0),
+                                COALESCE((SELECT stock FROM promos WHERE code = ads.code LIMIT 1), ads.max_grab) - 
+                                COALESCE((SELECT COUNT(*) FROM promo_items pi 
+                                          JOIN promos p ON p.id = pi.promo_id 
+                                          WHERE p.code = ads.code 
+                                          AND pi.status IN ("reserved", "redeemed")), 0)
+                            )
+                        )) AS SIGNED) AS total_remaining'),
                 ])
-                    ->leftJoin('summary_grabs', 'summary_grabs.ad_id', 'ads.id')
                     ->groupBy('ads.id')
                     ->get();
             },

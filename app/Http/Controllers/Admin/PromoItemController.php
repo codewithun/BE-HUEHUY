@@ -449,6 +449,19 @@ class PromoItemController extends Controller
                 }
                 // Jika bukan promo harian, gunakan logic normal (decrement stock)
                 elseif ($lockedPromo && !is_null($lockedPromo->stock)) {
+                    // ✅ CEK DULU sebelum decrement
+                    if ((int)$lockedPromo->stock <= 0) {
+                        return [
+                            'ok' => false,
+                            'reason' => 'Stok promo habis',
+                            'debug' => [
+                                'source' => 'promo.stock',
+                                'promo_id' => $lockedPromo->id,
+                                'promo_code' => $lockedPromo->code,
+                                'promo_stock' => $lockedPromo->stock,
+                            ]
+                        ];
+                    }
 
                     $affected = \App\Models\Promo::where('id', $lockedPromo->id)
                         ->where('stock', '>', 0)
@@ -466,6 +479,20 @@ class PromoItemController extends Controller
                     }
 
                     if ($lockedAd && !$lockedAd->unlimited_grab) {
+                        // ✅ CEK DULU sebelum decrement
+                        if ((int)$lockedAd->max_grab <= 0) {
+                            return [
+                                'ok' => false,
+                                'reason' => 'Stok promo habis',
+                                'debug' => [
+                                    'source' => 'ad.max_grab',
+                                    'ad_id' => $lockedAd->id,
+                                    'ad_code' => $lockedAd->code,
+                                    'ad_max_grab' => $lockedAd->max_grab,
+                                ]
+                            ];
+                        }
+
                         // ✅ PROMO NORMAL: Decrement max_grab langsung
                         $affected = \App\Models\Ad::where('id', $lockedAd->id)
                             ->where('max_grab', '>', 0)

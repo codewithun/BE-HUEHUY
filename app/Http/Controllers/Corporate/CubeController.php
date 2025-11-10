@@ -51,20 +51,31 @@ class CubeController extends Controller
         // ? Begin
         $model = new Cube();
         $query = Cube::with([
-            'cube_type', 'user', 'corporate', 'world', 'opening_hours', 'tags',
+            'cube_type',
+            'user',
+            'corporate',
+            'world',
+            'opening_hours',
+            'tags',
             'ads' => function ($query) {
                 return $query->select([
-                        'ads.*', 
-                        // DB::raw('SUM(summary_grabs.total_grab) AS total_grab'),
-                        DB::raw('CAST(IF(ads.is_daily_grab = 1,
-                            (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
-                            SUM(total_grab)
+                    'ads.*',
+                    // DB::raw('SUM(summary_grabs.total_grab) AS total_grab'),
+                    DB::raw('CAST(IF(ads.is_daily_grab = 1,
+                            COALESCE((SELECT total_grab FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id LIMIT 1), 0),
+                            COALESCE((SELECT COUNT(*) FROM promo_items pi 
+                                      JOIN promos p ON p.id = pi.promo_id 
+                                      WHERE p.code = ads.code 
+                                      AND pi.status IN ("reserved", "redeemed")), 0)
                         ) AS SIGNED) AS total_grab'),
-                        DB::raw('CAST(IF(ads.is_daily_grab = 1,
-                            ads.max_grab - (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
-                            ads.max_grab - SUM(total_grab)
-                        ) AS SIGNED) AS total_remaining'),
-                    ])
+                    DB::raw('CAST(GREATEST(0, IF(ads.unlimited_grab = 1,
+                            9999999,
+                            IF(ads.is_daily_grab = 1,
+                                ads.max_grab - COALESCE((SELECT total_grab FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id LIMIT 1), 0),
+                                COALESCE((SELECT stock FROM promos WHERE code = ads.code LIMIT 1), ads.max_grab)
+                            )
+                        )) AS SIGNED) AS total_remaining'),
+                ])
                     ->leftJoin('summary_grabs', 'summary_grabs.ad_id', 'ads.id')
                     ->groupBy('ads.id')
                     ->get();
@@ -105,7 +116,7 @@ class CubeController extends Controller
 
         // ? Sort & executing with pagination
         $query = $query->leftJoin('world_affiliates', 'world_affiliates.id', 'cubes.world_affiliate_id')
-            ->leftJoin('user_worlds', 'user_worlds.world_id', 'cubes.world_id')    
+            ->leftJoin('user_worlds', 'user_worlds.world_id', 'cubes.world_id')
             ->where(function ($q) use ($credentialUserCorporate) {
                 return $q->where('cubes.corporate_id', $credentialUserCorporate->corporate_id)
                     ->orWhere('world_affiliates.corporate_id', $credentialUserCorporate->corporate_id)
@@ -271,7 +282,7 @@ class CubeController extends Controller
         $preparedCubeTagsData = [];
         if ($request->cube_tags && count($request->cube_tags) > 0) {
 
-            foreach($request->cube_tags as $tag) {
+            foreach ($request->cube_tags as $tag) {
                 array_push($preparedCubeTagsData, [
                     'cube_id' => $model->id,
                     'address' => $tag['address'] ?? null,
@@ -282,7 +293,7 @@ class CubeController extends Controller
                     'updated_at' => Carbon::now(),
                 ]);
             }
-    
+
             try {
                 CubeTag::insert($preparedCubeTagsData);
             } catch (\Throwable $th) {
@@ -357,7 +368,7 @@ class CubeController extends Controller
         $preparedOpeningHourData = [];
         if ($request->opening_hours && count($request->opening_hours) > 0) {
 
-            foreach($request->opening_hours as $data) {
+            foreach ($request->opening_hours as $data) {
                 array_push($preparedOpeningHourData, [
                     'cube_id' => $model->id,
                     'day' => $data['day'],
@@ -479,7 +490,7 @@ class CubeController extends Controller
                 ], 500);
             }
 
-            foreach($request->cube_tags as $tag) {
+            foreach ($request->cube_tags as $tag) {
                 array_push($preparedCubeTagsData, [
                     'cube_id' => $model->id,
                     'address' => $tag['address'] ?? null,
@@ -490,7 +501,7 @@ class CubeController extends Controller
                     'updated_at' => Carbon::now(),
                 ]);
             }
-    
+
             try {
                 CubeTag::insert($preparedCubeTagsData);
             } catch (\Throwable $th) {
@@ -630,19 +641,19 @@ class CubeController extends Controller
         $cubeCreated = [];
         if ($request->total && $request->total > 0) {
 
-            for ($i=0; $i<$request->total; $i++) {
+            for ($i = 0; $i < $request->total; $i++) {
 
                 $model = new Cube();
 
                 // ? Dump data
                 $model = $this->dump_field($request->all(), $model);
-        
+
                 $model->code = $model->generateCubeCode($request->cube_type_id);
                 $model->status = 'active';
                 if ($model->status != 'active') {
-        
+
                     $config = AppConfigHelper::getConfig('MAX_CUBE_ACTIVATION_EXPIRY');
-        
+
                     $model->expired_activate_date = Carbon::now()->addDays($config->value->configval);
                 }
 
@@ -665,11 +676,10 @@ class CubeController extends Controller
                     }
 
                     $model->user_id = $request->user_id;
-
                 } else if (!$request->world_id) {
                     $model->corporate_id = $credentialUserCorporate->corporate_id;
                 }
-        
+
                 if ($request->inactive_at) {
                     $model->inactive_at = Carbon::create($request->inactive_at)->format('Y-m-d H:i:s');
                 }
@@ -685,17 +695,17 @@ class CubeController extends Controller
                         $model->world_affiliate_id = $worldAffiliate->id;
                     }
                 }
-        
+
                 // * If color not filled
                 if (!$request->color) {
                     $model->color = $cubeType->color;
                 }
-        
+
                 // * Check if has upload file
                 if ($request->hasFile('image')) {
                     $model->picture_source = $this->upload_file($request->file('image'), 'cube');
                 }
-        
+
                 // ? Executing
                 try {
                     $model->save();
@@ -707,12 +717,12 @@ class CubeController extends Controller
                 }
 
                 array_push($cubeCreated, $model);
-        
+
                 // ? Process Cube Tags
                 $preparedCubeTagsData = [];
                 if ($request->cube_tags && count($request->cube_tags) > 0) {
-        
-                    foreach($request->cube_tags as $tag) {
+
+                    foreach ($request->cube_tags as $tag) {
                         array_push($preparedCubeTagsData, [
                             'cube_id' => $model->id,
                             'address' => $tag['address'],
@@ -722,7 +732,7 @@ class CubeController extends Controller
                             'updated_at' => Carbon::now(),
                         ]);
                     }
-            
+
                     try {
                         CubeTag::insert($preparedCubeTagsData);
                     } catch (\Throwable $th) {
@@ -732,10 +742,10 @@ class CubeController extends Controller
                         ], 500);
                     }
                 }
-        
+
                 // ? Process Ads
                 if ($request->ads) {
-        
+
                     $ad = new Ad();
                     $ad->cube_id = $model->id;
                     $ad->ad_category_id = $request->ads['ad_category_id'];
@@ -756,12 +766,12 @@ class CubeController extends Controller
                     if ($request->ads['finish_validate']) {
                         $ad->finish_validate = Carbon::create($request->ads['finish_validate'])->format('Y-m-d');
                     }
-        
+
                     // * Check if has upload file
                     if ($request->hasFile('ads.image')) {
                         $ad->picture_source = $this->upload_file($request->file('ads.image'), 'ads');
                     }
-        
+
                     try {
                         $ad->save();
                     } catch (\Throwable $th) {
@@ -782,4 +792,3 @@ class CubeController extends Controller
         ], 201);
     }
 }
-        

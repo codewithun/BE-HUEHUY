@@ -626,16 +626,13 @@ class CubeController extends Controller
                                       WHERE p.code = ads.code 
                                       AND pi.status IN ("reserved", "redeemed")), 0)
                         ) AS SIGNED) AS total_grab'),
-                    // ✅ PERBAIKAN: Hitung total_remaining dengan prioritas promo.stock, pastikan tidak negatif
+                    // ✅ PERBAIKAN FINAL: Hitung total_remaining dari sumber tunggal (promo.stock atau ad.max_grab)
+                    // Tidak perlu dikurangi COUNT(promo_items) karena stock sudah di-decrement saat claim
                     DB::raw('CAST(GREATEST(0, IF(ads.unlimited_grab = 1,
                             9999999,
                             IF(ads.is_daily_grab = 1,
                                 ads.max_grab - COALESCE((SELECT total_grab FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id LIMIT 1), 0),
-                                COALESCE((SELECT stock FROM promos WHERE code = ads.code LIMIT 1), ads.max_grab) - 
-                                COALESCE((SELECT COUNT(*) FROM promo_items pi 
-                                          JOIN promos p ON p.id = pi.promo_id 
-                                          WHERE p.code = ads.code 
-                                          AND pi.status IN ("reserved", "redeemed")), 0)
+                                COALESCE((SELECT stock FROM promos WHERE code = ads.code LIMIT 1), ads.max_grab)
                             )
                         )) AS SIGNED) AS total_remaining'),
                 ])

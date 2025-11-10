@@ -41,25 +41,36 @@ class CubeController extends Controller
         // ? Begin
         $model = new Cube();
         $query = Cube::with([
-            'cube_type', 'corporate', 'world', 'opening_hours', 'tags',
+            'cube_type',
+            'corporate',
+            'world',
+            'opening_hours',
+            'tags',
             'ads' => function ($query) {
                 return $query->select([
-                        'ads.*', 
-                        // DB::raw('SUM(summary_grabs.total_grab) AS total_grab'),
-                        DB::raw('CAST(IF(ads.is_daily_grab = 1,
-                            (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
-                            SUM(total_grab)
+                    'ads.*',
+                    // DB::raw('SUM(summary_grabs.total_grab) AS total_grab'),
+                    DB::raw('CAST(IF(ads.is_daily_grab = 1,
+                            COALESCE((SELECT total_grab FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id LIMIT 1), 0),
+                            COALESCE((SELECT COUNT(*) FROM promo_items pi 
+                                      JOIN promos p ON p.id = pi.promo_id 
+                                      WHERE p.code = ads.code 
+                                      AND pi.status IN ("reserved", "redeemed")), 0)
                         ) AS SIGNED) AS total_grab'),
-                        DB::raw('CAST(IF(ads.is_daily_grab = 1,
-                            ads.max_grab - (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
-                            ads.max_grab - SUM(total_grab)
-                        ) AS SIGNED) AS total_remaining'),
-                    ])
+                    DB::raw('CAST(GREATEST(0, IF(ads.unlimited_grab = 1,
+                            9999999,
+                            IF(ads.is_daily_grab = 1,
+                                ads.max_grab - COALESCE((SELECT total_grab FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id LIMIT 1), 0),
+                                COALESCE((SELECT stock FROM promos WHERE code = ads.code LIMIT 1), ads.max_grab)
+                            )
+                        )) AS SIGNED) AS total_remaining'),
+                ])
                     ->leftJoin('summary_grabs', 'summary_grabs.ad_id', 'ads.id')
                     ->groupBy('ads.id')
                     ->get();
             },
-            'ads.ad_category', 'ads.voucher'
+            'ads.ad_category',
+            'ads.voucher'
         ]);
 
         // ? When search
@@ -235,7 +246,7 @@ class CubeController extends Controller
         $preparedCubeTagsData = [];
         if ($request->cube_tags && count($request->cube_tags) > 0) {
 
-            foreach($request->cube_tags as $tag) {
+            foreach ($request->cube_tags as $tag) {
                 array_push($preparedCubeTagsData, [
                     'cube_id' => $model->id,
                     'address' => $tag['address'] ?? null,
@@ -246,7 +257,7 @@ class CubeController extends Controller
                     'updated_at' => Carbon::now(),
                 ]);
             }
-    
+
             try {
                 CubeTag::insert($preparedCubeTagsData);
             } catch (\Throwable $th) {
@@ -321,7 +332,7 @@ class CubeController extends Controller
         $preparedOpeningHourData = [];
         if ($request->opening_hours && count($request->opening_hours) > 0) {
 
-            foreach($request->opening_hours as $data) {
+            foreach ($request->opening_hours as $data) {
                 array_push($preparedOpeningHourData, [
                     'cube_id' => $model->id,
                     'day' => $data['day'],
@@ -430,7 +441,7 @@ class CubeController extends Controller
                 ], 500);
             }
 
-            foreach($request->cube_tags as $tag) {
+            foreach ($request->cube_tags as $tag) {
                 array_push($preparedCubeTagsData, [
                     'cube_id' => $model->id,
                     'address' => $tag['address'] ?? null,
@@ -441,7 +452,7 @@ class CubeController extends Controller
                     'updated_at' => Carbon::now(),
                 ]);
             }
-    
+
             try {
                 CubeTag::insert($preparedCubeTagsData);
             } catch (\Throwable $th) {
@@ -528,14 +539,14 @@ class CubeController extends Controller
 
                 //     $voucher = Voucher::where('ad_id', $model->id)
                 //         ->first();
-    
+
                 //     if (!$voucher) {
                 //         try {
                 //             $voucher = new Voucher();
                 //             $voucher->ad_id = $model->id;
                 //             $voucher->name = $model->title;
                 //             $voucher->code = $voucher->generateVoucherCode();
-        
+
                 //             $voucher->save();
                 //         } catch (\Throwable $th) {
                 //             DB::rollBack();
@@ -580,4 +591,3 @@ class CubeController extends Controller
         ]);
     }
 }
-        

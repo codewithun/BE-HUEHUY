@@ -67,7 +67,7 @@ class Voucher extends Model
     // NOTE: remaining_stock dihapus dari appends untuk menghindari konfusi di admin
     // Admin akan melihat field 'stock' asli (stok per hari untuk daily grab)
     // Frontend bisa request 'remaining_stock' secara eksplisit jika perlu
-    protected $appends = ['image_url', 'image_url_versioned'];
+    protected $appends = ['image_url', 'image_url_versioned', 'total_remaining'];
 
     // ================= Relations =================
 
@@ -180,6 +180,26 @@ class Voucher extends Model
         $remaining = max(0, (int)($this->stock ?? 0) - (int)$totalGrabToday);
 
         return $remaining;
+    }
+
+    /**
+     * Get total remaining (gabungan logika daily dan global)
+     * Dipakai di admin/frontend untuk menampilkan "sisa stok" real-time.
+     */
+    public function getTotalRemainingAttribute()
+    {
+        // 🔹 Jika unlimited → tampilkan simbol tak terbatas
+        if ($this->unlimited_grab) {
+            return '∞';
+        }
+
+        // 🔹 Jika voucher harian → hitung sisa stok hari ini
+        if ($this->is_daily_grab) {
+            return $this->getDailyRemainingStock();
+        }
+
+        // 🔹 Default (voucher normal)
+        return max(0, (int) ($this->stock ?? 0));
     }
 
     public function getStatusAttribute(): string

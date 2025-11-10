@@ -23,7 +23,6 @@ class DatabaseSeeder extends Seeder
             CubeTypeSeeder::class,
             ArticleSeeder::class,
             FaqSeeder::class,
-            AdCategorySeeder::class,
             BannerSeeder::class,
             CubeSeeder::class,
             DynamicContentSeeder::class,

@@ -1405,12 +1405,13 @@ class AdController extends Controller
                     return response()->json(['success' => false, 'message' => 'Voucher terkait tidak ditemukan'], 422);
                 }
 
-                if ($voucher->stock <= 0) {
+                // 🔹 Untuk voucher normal (non-daily): cek stok global
+                if (!$lockedAd->is_daily_grab && $voucher->stock <= 0) {
                     DB::rollBack();
                     return response()->json(['success' => false, 'message' => 'Voucher sudah habis'], 422);
                 }
 
-                // Create voucher item
+                // Buat voucher item (selama belum double-claim & dalam batas harian)
                 $voucherItem = new VoucherItem();
                 $voucherItem->user_id = $user->id;
                 $voucherItem->voucher_id = $voucher->id;
@@ -1418,22 +1419,27 @@ class AdController extends Controller
                 $voucherItem->used_at = null;
                 $voucherItem->save();
 
-                // Decrement voucher stock safely
-                $voucher->decrement('stock', 1);
+                if (!$lockedAd->is_daily_grab) {
+                    // 🔹 Non-daily: kurangi stok global voucher & ads.max_grab global
+                    $voucher->decrement('stock', 1);
 
+                    if (!is_null($lockedAd->max_grab)) {
+                        $affected = DB::table('ads')
+                            ->where('id', $lockedAd->id)
+                            ->whereNotNull('max_grab')
+                            ->where('max_grab', '>', 0)
+                            ->decrement('max_grab', 1);
 
-                // Decrement ads.max_grab if applicable (not null and > 0)
-                if (!is_null($lockedAd->max_grab)) {
-                    $affected = DB::table('ads')
-                        ->where('id', $lockedAd->id)
-                        ->whereNotNull('max_grab')
-                        ->where('max_grab', '>', 0)
-                        ->decrement('max_grab', 1);
-
-                    if ($affected) {
-                        DB::table('ads')->where('id', $lockedAd->id)->update(['updated_at' => now()]);
-                    } else {
+                        if ($affected) {
+                            DB::table('ads')->where('id', $lockedAd->id)->update(['updated_at' => now()]);
+                        }
                     }
+                } else {
+                    // 🔹 Daily grab: stok global tidak berubah, catatan harian sudah dibuat di summary_grabs
+                    Log::info('✅ Daily voucher claimed tanpa mengurangi stock global', [
+                        'ad_id' => $lockedAd->id,
+                        'user_id' => $user->id,
+                    ]);
                 }
             } else {
                 // Promo flow (unchanged) - create promo item via controller

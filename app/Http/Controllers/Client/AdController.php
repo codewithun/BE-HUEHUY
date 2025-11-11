@@ -34,14 +34,22 @@ class AdController extends Controller
         $model = Ad::with('cube', 'cube.cube_type', 'cube.opening_hours', 'cube.world')
             ->select([
                 'ads.*',
+                // Total grab: harian -> sum hari ini, non-harian -> total keseluruhan; default 0 jika null
                 DB::raw('CAST(IF(ads.is_daily_grab = 1,
-                    (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
-                    SUM(total_grab)
+                    COALESCE((SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id), 0),
+                    COALESCE(SUM(total_grab), 0)
                 ) AS SIGNED) AS total_grab'),
-                DB::raw('CAST(IF(ads.is_daily_grab = 1,
-                    ads.max_grab - (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
-                    ads.max_grab - SUM(total_grab)
-                ) AS SIGNED) AS total_remaining'),
+                // Sisa stok: 
+                // - unlimited -> angka besar
+                // - harian -> max_grab - total_grab hari ini
+                // - non-harian -> ambil dari promos.stock jika ada, else ads.max_grab (tanpa minus lagi karena stok dikurangi saat claim)
+                DB::raw('CAST(GREATEST(0, IF(ads.unlimited_grab = 1,
+                    9999999,
+                    IF(ads.is_daily_grab = 1,
+                        ads.max_grab - COALESCE((SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id), 0),
+                        COALESCE((SELECT stock FROM promos WHERE code = ads.code LIMIT 1), ads.max_grab)
+                    )
+                )) AS SIGNED) AS total_remaining'),
             ])
             ->leftJoin('summary_grabs', 'summary_grabs.ad_id', 'ads.id')
             ->leftJoin('cubes', 'cubes.id', 'ads.cube_id')
@@ -102,7 +110,7 @@ class AdController extends Controller
                                 *
                                 sin((map_lat * pi() / 180)) + cos(($lat * pi() / 180))
                                 *
-                                cos((map_lat * pi() / 180)) * cos(((". $long . " - map_lng) * pi()/180))
+                                cos((map_lat * pi() / 180)) * cos(((" . $long . " - map_lng) * pi()/180))
                             )
                         ) * 180/pi()
                     ) * 60 * 1.1515 * 1.609344
@@ -176,18 +184,18 @@ class AdController extends Controller
 
         $model = new Ad();
         $query = Ad::with('cube', 'cube.cube_type');
-        
+
         if ($request->get("search") != "") {
             $query = $this->search($request->get("search"), $model, $query, ['ad_category.name']);
         } else {
             $query = $query;
         }
 
-        if($world_id) {
+        if ($world_id) {
             $query = $query->where('cubes.world_id', $world_id);
         } else {
             $user = Auth::user();
-            
+
             // Handle case when user is not authenticated (public endpoint)
             if ($user && $user->worlds) {
                 $worldRegisteredId = $user->worlds->map(function ($item) {
@@ -205,8 +213,8 @@ class AdController extends Controller
         }
 
         $query =  $query->select([
-                'ads.*',
-                DB::raw("
+            'ads.*',
+            DB::raw("
                 (
                     (
                         (
@@ -215,13 +223,13 @@ class AdController extends Controller
                                 *
                                 sin((map_lat * pi() / 180)) + cos(($lat * pi() / 180))
                                 *
-                                cos((map_lat * pi() / 180)) * cos(((". $long . " - map_lng) * pi()/180))
+                                cos((map_lat * pi() / 180)) * cos(((" . $long . " - map_lng) * pi()/180))
                             )
                         ) * 180/pi()
                     ) * 60 * 1.1515 * 1.609344
                 ) as distance
                 ")
-            ])
+        ])
             ->join('cubes', 'cubes.id', 'ads.cube_id')
             ->where('cubes.status', 'active')
             ->where('is_information', 0)
@@ -253,8 +261,8 @@ class AdController extends Controller
         $query = Cube::with('ads', 'tags', 'ads.ad_category', 'cube_type', 'user', 'corporate', 'world');
 
         $query =  $query->select([
-                'cubes.*',
-            ])
+            'cubes.*',
+        ])
             ->where('code', $code)
             ->where(function ($query) use ($worlds) {
                 $query->whereNull('cubes.world_id')
@@ -265,7 +273,7 @@ class AdController extends Controller
                     ->orWhere('cubes.user_id', $user->id);
             })
             ->first();
-        
+
         if ($query->user_id == $user->id) {
             $query->is_my_cube = true;
         }
@@ -300,14 +308,14 @@ class AdController extends Controller
     public function getCubeByCodeGeneral(Request $request, $code)
     {
         $query = Cube::with([
-            'ads' => function($query) {
+            'ads' => function ($query) {
                 $query->where('status', 'active');
             },
             'ads.ad_category',
-            'tags', 
-            'cube_type', 
-            'user', 
-            'corporate', 
+            'tags',
+            'cube_type',
+            'user',
+            'corporate',
             'opening_hours'
         ])
             ->select(['cubes.*'])
@@ -318,10 +326,10 @@ class AdController extends Controller
         // Jika tidak ditemukan, coba cari berdasarkan code di ads
         if (!$query) {
             $adQuery = \App\Models\Ad::with([
-                'cube' => function($query) {
+                'cube' => function ($query) {
                     $query->where('status', 'active');
                 },
-                'cube.ads' => function($query) {
+                'cube.ads' => function ($query) {
                     $query->where('status', 'active');
                 },
                 'cube.ads.ad_category',
@@ -334,7 +342,7 @@ class AdController extends Controller
                 ->where('code', $code)
                 ->where('status', 'active')
                 ->first();
-            
+
             if ($adQuery && $adQuery->cube) {
                 $query = $adQuery->cube;
             }
@@ -349,7 +357,7 @@ class AdController extends Controller
     public function getMenuCubes($id)
     {
         $menu_cubes = DynamicContentCube::where('dynamic_content_id', $id)->get();
-        
+
         $id_cubes = [];
         foreach ($menu_cubes as $cube) {
             array_push($id_cubes, $cube->cube_id);
@@ -408,9 +416,9 @@ class AdController extends Controller
 
         // Jika ada community_id, ambil ads di komunitas tsb ATAU ads global (community_id = null)
         if ($communityId) {
-            $query = $query->where(function($q) use ($communityId) {
+            $query = $query->where(function ($q) use ($communityId) {
                 $q->where('ads.community_id', $communityId)
-                  ->orWhereNull('ads.community_id');
+                    ->orWhereNull('ads.community_id');
             });
         } else {
             // Jika tidak ada community_id, gunakan filter world seperti semula
@@ -426,7 +434,7 @@ class AdController extends Controller
 
                     $query = $query->where(function ($q) use ($worldRegisteredId) {
                         $q->whereNull('cubes.world_id')
-                          ->orWhereIn('cubes.world_id', $worldRegisteredId);
+                            ->orWhereIn('cubes.world_id', $worldRegisteredId);
                     });
                 } else {
                     $query = $query->whereNull('cubes.world_id');
@@ -481,22 +489,22 @@ class AdController extends Controller
             $query = Ad::with(['cube', 'cube.cube_type', 'ad_category'])
                 ->where('ads.status', 'active')
                 ->where('ads.ad_category_id', $adCategoryId)
-                ->whereHas('cube', function($q) {
+                ->whereHas('cube', function ($q) {
                     $q->where('status', 'active');
                 });
 
             // Filter by community if provided
             if ($communityId) {
-                $query = $query->where(function($q) use ($communityId) {
+                $query = $query->where(function ($q) use ($communityId) {
                     $q->where('ads.community_id', $communityId)
-                      ->orWhereNull('ads.community_id');
+                        ->orWhereNull('ads.community_id');
                 });
-                
+
                 // Also filter cubes by community
-                $query = $query->whereHas('cube', function($q) use ($communityId) {
-                    $q->where(function($subQ) use ($communityId) {
+                $query = $query->whereHas('cube', function ($q) use ($communityId) {
+                    $q->where(function ($subQ) use ($communityId) {
                         $subQ->where('community_id', $communityId)
-                             ->orWhereNull('community_id');
+                            ->orWhereNull('community_id');
                     });
                 });
             } else {
@@ -505,14 +513,14 @@ class AdController extends Controller
                 if ($user && $user->worlds) {
                     $worldRegisteredId = $user->worlds->pluck('world_id')->toArray();
 
-                    $query = $query->whereHas('cube', function($q) use ($worldRegisteredId) {
-                        $q->where(function($subQ) use ($worldRegisteredId) {
+                    $query = $query->whereHas('cube', function ($q) use ($worldRegisteredId) {
+                        $q->where(function ($subQ) use ($worldRegisteredId) {
                             $subQ->whereNull('world_id')
-                                 ->orWhereIn('world_id', $worldRegisteredId);
+                                ->orWhereIn('world_id', $worldRegisteredId);
                         });
                     });
                 } else {
-                    $query = $query->whereHas('cube', function($q) {
+                    $query = $query->whereHas('cube', function ($q) {
                         $q->whereNull('world_id');
                     });
                 }
@@ -547,7 +555,6 @@ class AdController extends Controller
                 'message' => 'success',
                 'data' => $transformedData
             ]);
-
         } catch (\Exception $e) {
             Log::error('Error in getCubesByCategory: ' . $e->getMessage(), [
                 'trace' => $e->getTraceAsString()

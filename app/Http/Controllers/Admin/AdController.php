@@ -1458,6 +1458,23 @@ class AdController extends Controller
                     DB::rollBack();
                     return response()->json($promoData, 422);
                 }
+
+                // Sinkronkan stok promo dan max_grab setelah berhasil membuat promo item
+                if ($lockedAd->code) {
+                    $promo = \App\Models\Promo::where('code', $lockedAd->code)->lockForUpdate()->first();
+
+                    if ($promo && !$lockedAd->unlimited_grab) {
+                        // Pastikan stok gak minus
+                        if ($promo->stock > 0) {
+                            $promo->decrement('stock', 1);
+                        }
+
+                        // Optional: kalau mau ads.max_grab juga sinkron
+                        if ($lockedAd->max_grab !== null && $lockedAd->max_grab > 0) {
+                            DB::table('ads')->where('id', $lockedAd->id)->decrement('max_grab', 1);
+                        }
+                    }
+                }
             }
 
             // Mark notification as read if provided

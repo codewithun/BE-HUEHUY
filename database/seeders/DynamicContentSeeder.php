@@ -46,17 +46,6 @@ class DynamicContentSeeder extends Seeder
                 'created_at' => Carbon::now(),
                 'updated_at' => Carbon::now(),
             ],
-            [
-                'name' => 'Kategori Iklan',
-                'description' => 'Kategori iklan yang tersedia',
-                'type' => 'home',
-                'content_type' => 'ad_category',
-                'is_active' => true,
-                'level' => 4,
-                'created_at' => Carbon::now(),
-                'updated_at' => Carbon::now(),
-            ],
-
             // === HUNTING (Beranda Promo) ===
             [
                 'name' => 'Kotak Kategori Promo',

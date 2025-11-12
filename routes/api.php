@@ -128,6 +128,13 @@ Route::get('/promos/{id}/public', [PromoController::class, 'showPublic'])->where
 Route::get('/vouchers/{id}/public', [VoucherController::class, 'showPublic'])->whereNumber('id');
 Route::get('/users/{identifier}/public', [AdminUserController::class, 'showPublicProfile']);
 
+// Public endpoints for Huehuy Ads (no auth required)
+Route::prefix('huehuy-ads-public')->group(function () {
+    Route::get('/', [HuehuyAdController::class, 'index']);
+    Route::get('/cube-ads', [HuehuyAdController::class, 'cube_ad']);
+    Route::get('/{id}', [HuehuyAdController::class, 'show'])->whereNumber('id');
+});
+
 /**
  * =======================
  * ADMIN & CONFIG (Public GETs)
@@ -314,7 +321,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/admin/promo-items', [PromoItemController::class, 'claimDirect']);
     Route::get('/admin/promo-items/{id}', [PromoItemController::class, 'show'])->whereNumber('id');
     Route::post('/admin/promos/{id}/items', [PromoItemController::class, 'claim'])->whereNumber('id');
-    
+
     // ✅ TAMBAHAN: Route untuk fetch promo by ID (untuk QR scan)
     Route::get('/admin/promos/{id}', [PromoController::class, 'show'])->whereNumber('id');
     Route::delete('/admin/promo-items/{id}', [PromoItemController::class, 'destroy'])->whereNumber('id');

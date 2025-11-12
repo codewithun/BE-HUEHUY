@@ -14,7 +14,7 @@ class HuehuyAdController extends Controller
     // ## Display a listing of the resource.
     // ========================================>
     public function index(Request $request)
-    {   
+    {
         // ? Initial params
         $sortDirection = $request->get("sortDirection", "DESC");
         $sortby = $request->get("sortBy", "created_at");
@@ -73,7 +73,8 @@ class HuehuyAdController extends Controller
             'title' => 'required|string|max:255',
             'description' => 'required|string',
             'image' => 'nullable',
-            'type' => ['required', Rule::in(['screen', 'cube'])],
+            // type no longer required from admin form; default handled below
+            'type' => ['nullable', Rule::in(['screen', 'cube'])],
             'limit' => 'nullable|numeric',
         ]);
 
@@ -86,6 +87,10 @@ class HuehuyAdController extends Controller
         // ? Dump data
         $model = $this->dump_field($request->all(), $model);
         $model->limit = $request->limit ? $request->limit : 0;
+        // default type when not provided by admin form
+        if (empty($model->type)) {
+            $model->type = 'cube';
+        }
 
         // * Check if has upload file
         if ($request->hasFile('image')) {
@@ -113,10 +118,25 @@ class HuehuyAdController extends Controller
     // ============================================>
     // ## Update the specified resource in storage.
     // ============================================>
-    public function update(Request $request, string $id)
+    public function update(Request $request, ?string $id = null)
     {
         // ? Initial
         DB::beginTransaction();
+        // ensure $request is available if method is invoked in a non-standard way
+        if (!isset($request) || !($request instanceof Request)) {
+            $request = request();
+        }
+        // ensure $id is available (support cases where the method was invoked without the $id parameter)
+        if (empty($id)) {
+            $id = $request->route('id') ?? request()->route('id') ?? null;
+        }
+        if (empty($id)) {
+            DB::rollBack();
+            return response([
+                "message" => "Missing resource id",
+            ], 400);
+        }
+
         $model = HuehuyAd::findOrFail($id);
         $oldPicture = $model->picture_source;
 
@@ -125,7 +145,8 @@ class HuehuyAdController extends Controller
             'title' => 'nullable|string|max:255',
             'description' => 'nullable|string',
             'image' => 'nullable',
-            'type' => ['required', Rule::in(['screen', 'cube'])],
+            // type optional on update as well
+            'type' => ['nullable', Rule::in(['screen', 'cube'])],
             'limit' => 'nullable|numeric',
         ]);
 
@@ -133,6 +154,9 @@ class HuehuyAdController extends Controller
 
         // ? Dump data
         $model = $this->dump_field($request->all(), $model);
+        if (empty($model->type)) {
+            $model->type = 'cube';
+        }
 
         // * Check if has upload file
         if ($request->hasFile('image')) {
@@ -164,8 +188,18 @@ class HuehuyAdController extends Controller
     // ===============================================>
     // ## Remove the specified resource from storage.
     // ===============================================>
-    public function destroy(string $id)
+    public function destroy(?string $id = null)
     {
+        // ensure $id is available (support cases where the method was invoked without the $id parameter)
+        if (empty($id)) {
+            $id = request()->route('id') ?? null;
+        }
+        if (empty($id)) {
+            return response([
+                "message" => "Missing resource id",
+            ], 400);
+        }
+
         // ? Initial
         $model = HuehuyAd::findOrFail($id);
 
@@ -189,4 +223,3 @@ class HuehuyAdController extends Controller
         ]);
     }
 }
-        

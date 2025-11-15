@@ -566,4 +566,55 @@ class AdController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * Get public ad data for Open Graph meta tags (SSR)
+     * Endpoint ini tidak memerlukan autentikasi
+     */
+    public function showPublic($id)
+    {
+        try {
+            $ad = Ad::with(['cube'])
+                ->where('id', $id)
+                ->first();
+
+            if (!$ad) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Iklan tidak ditemukan'
+                ], 404);
+            }
+
+            // Kumpulkan semua gambar yang tersedia dan konversi ke full URL
+            $images = [];
+            if ($ad->picture_source) $images[] = asset('storage/' . $ad->picture_source);
+            if ($ad->image_1) $images[] = asset('storage/' . $ad->image_1);
+            if ($ad->image_2) $images[] = asset('storage/' . $ad->image_2);
+            if ($ad->image_3) $images[] = asset('storage/' . $ad->image_3);
+
+            // Get merchant name - just use 'HueHuy' as default
+            $merchant = 'HueHuy';
+
+            // Return data minimal untuk Open Graph
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'id' => $ad->id,
+                    'title' => $ad->title,
+                    'description' => $ad->description ?? $ad->detail ?? '',
+                    'merchant' => $merchant,
+                    'images' => $images,
+                    'image' => $images[0] ?? null,
+                    'picture_source' => $ad->picture_source ? asset('storage/' . $ad->picture_source) : null,
+                    'community_id' => $ad->community_id,
+                ]
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error fetching public ad: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Error fetching ad'
+            ], 500);
+        }
+    }
 }

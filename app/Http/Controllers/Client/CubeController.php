@@ -17,6 +17,7 @@ use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 
 class CubeController extends Controller
@@ -589,5 +590,56 @@ class CubeController extends Controller
             "message" => "Success",
             "data" => $model
         ]);
+    }
+
+    /**
+     * Get public cube data for Open Graph meta tags (SSR)
+     * Endpoint ini tidak memerlukan autentikasi
+     */
+    public function showPublic($id)
+    {
+        try {
+            $cube = Cube::with(['tags', 'opening_hours', 'cube_type'])
+                ->where('id', $id)
+                ->first();
+
+            if (!$cube) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Kubus tidak ditemukan'
+                ], 404);
+            }
+
+            // Kumpulkan semua gambar yang tersedia dan konversi ke full URL
+            $images = [];
+            if ($cube->image) $images[] = asset('storage/' . $cube->image);
+            if ($cube->image_url) $images[] = $cube->image_url;
+            if ($cube->picture_source) $images[] = asset('storage/' . $cube->picture_source);
+
+            // Get merchant name - just use 'HueHuy' as default
+            $merchant = 'HueHuy';
+
+            // Return data minimal untuk Open Graph
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'id' => $cube->id,
+                    'title' => $cube->title ?? $cube->name ?? '',
+                    'description' => $cube->description ?? $cube->detail ?? '',
+                    'merchant' => $merchant,
+                    'images' => $images,
+                    'image' => $images[0] ?? null,
+                    'image_url' => $cube->image_url,
+                    'picture_source' => $cube->picture_source ? asset('storage/' . $cube->picture_source) : null,
+                    'link_information' => $cube->link_information,
+                ]
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error fetching public cube: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Error fetching cube'
+            ], 500);
+        }
     }
 }

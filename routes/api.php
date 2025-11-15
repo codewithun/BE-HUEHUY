@@ -126,6 +126,8 @@ Route::prefix('ads')->group(function () {
 Route::get('/cubes-by-category-public', [AdController::class, 'getCubesByCategory']);
 Route::get('/promos/{id}/public', [PromoController::class, 'showPublic'])->whereNumber('id');
 Route::get('/vouchers/{id}/public', [VoucherController::class, 'showPublic'])->whereNumber('id');
+Route::get('/ads/{id}/public', [AdController::class, 'showPublic'])->whereNumber('id');
+Route::get('/cubes/{id}/public', [CubeController::class, 'showPublic'])->whereNumber('id');
 Route::get('/users/{identifier}/public', [AdminUserController::class, 'showPublicProfile']);
 
 // Public endpoints for Huehuy Ads (no auth required)

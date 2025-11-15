@@ -574,9 +574,7 @@ class AdController extends Controller
     public function showPublic($id)
     {
         try {
-            $ad = Ad::with(['cube'])
-                ->where('id', $id)
-                ->first();
+            $ad = Ad::find($id);
 
             if (!$ad) {
                 return response()->json([
@@ -585,27 +583,41 @@ class AdController extends Controller
                 ], 404);
             }
 
-            // Kumpulkan semua gambar yang tersedia dan konversi ke full URL
+            // Kumpulin gambar asli TANPA memanipulasi dengan asset()
             $images = [];
-            if ($ad->picture_source) $images[] = asset('storage/' . $ad->picture_source);
-            if ($ad->image_1) $images[] = asset('storage/' . $ad->image_1);
-            if ($ad->image_2) $images[] = asset('storage/' . $ad->image_2);
-            if ($ad->image_3) $images[] = asset('storage/' . $ad->image_3);
 
-            // Get merchant name - just use 'HueHuy' as default
-            $merchant = 'HueHuy';
+            $pushImage = function ($img) use (&$images) {
+                if (!$img) return;
 
-            // Return data minimal untuk Open Graph
+                // Jika sudah URL absolut → pakai langsung
+                if (filter_var($img, FILTER_VALIDATE_URL)) {
+                    $images[] = $img;
+                }
+                // Jika path storage → ubah ke URL storage yang benar
+                else {
+                    $images[] = url('storage/' . ltrim($img, '/'));
+                }
+            };
+
+            $pushImage($ad->picture_source);
+            $pushImage($ad->image_1);
+            $pushImage($ad->image_2);
+            $pushImage($ad->image_3);
+
+            // Fallback default jika tidak ada gambar
+            if (empty($images)) {
+                $images[] = url('/default-avatar.png');
+            }
+
             return response()->json([
                 'success' => true,
                 'data' => [
                     'id' => $ad->id,
                     'title' => $ad->title,
-                    'description' => $ad->description ?? $ad->detail ?? '',
-                    'merchant' => $merchant,
+                    'description' => $ad->description ?? '',
+                    'merchant' => $ad->cube->name ?? 'HueHuy',
                     'images' => $images,
-                    'image' => $images[0] ?? null,
-                    'picture_source' => $ad->picture_source ? asset('storage/' . $ad->picture_source) : null,
+                    'image' => $images[0],
                     'community_id' => $ad->community_id,
                 ]
             ]);

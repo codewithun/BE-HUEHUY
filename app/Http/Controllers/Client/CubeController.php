@@ -610,27 +610,42 @@ class CubeController extends Controller
                 ], 404);
             }
 
-            // Kumpulkan semua gambar yang tersedia dan konversi ke full URL
+            // Kumpulin gambar dengan benar
             $images = [];
-            if ($cube->image) $images[] = asset('storage/' . $cube->image);
-            if ($cube->image_url) $images[] = $cube->image_url;
-            if ($cube->picture_source) $images[] = asset('storage/' . $cube->picture_source);
 
-            // Get merchant name - just use 'HueHuy' as default
-            $merchant = 'HueHuy';
+            $pushImage = function ($img) use (&$images) {
+                if (!$img) return;
 
-            // Return data minimal untuk Open Graph
+                // Jika sudah URL absolut → gunakan langsung
+                if (filter_var($img, FILTER_VALIDATE_URL)) {
+                    $images[] = $img;
+                } else {
+                    // Pastikan hanya jadi satu kali "storage/"
+                    $img = ltrim($img, '/');
+                    $img = preg_replace('/^storage\//', '', $img);
+
+                    $images[] = url('storage/' . $img);
+                }
+            };
+
+            $pushImage($cube->image);
+            $pushImage($cube->image_url);
+            $pushImage($cube->picture_source);
+
+            if (empty($images)) {
+                $images[] = url('/default-avatar.png');
+            }
+
             return response()->json([
                 'success' => true,
                 'data' => [
                     'id' => $cube->id,
                     'title' => $cube->title ?? $cube->name ?? '',
-                    'description' => $cube->description ?? $cube->detail ?? '',
-                    'merchant' => $merchant,
+                    'description' => $cube->description ?? '',
+                    'merchant' => 'HueHuy',
                     'images' => $images,
-                    'image' => $images[0] ?? null,
-                    'image_url' => $cube->image_url,
-                    'picture_source' => $cube->picture_source ? asset('storage/' . $cube->picture_source) : null,
+                    'image' => $images[0],
+                    'picture_source' => $images[0], // aman buat OG
                     'link_information' => $cube->link_information,
                 ]
             ]);

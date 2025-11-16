@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\DB;
 class ReportContentTicket extends Model
 {
     use HasFactory;
-    
+
     // =========================>
     // ## Fillable
     // =========================>
@@ -27,6 +27,8 @@ class ReportContentTicket extends Model
     // =========================>
     public $searchable = [
         'report_content_tickets.ticket_number',
+        'report_content_tickets.message',
+        'report_content_tickets.status',
     ];
 
     // =========================>
@@ -39,12 +41,14 @@ class ReportContentTicket extends Model
         'report_content_tickets.ad_id',
         'report_content_tickets.message',
         'report_content_tickets.status',
+        'report_content_tickets.created_at',
+        'report_content_tickets.updated_at',
     ];
 
     /**
      * * Relation to `User` model
      */
-    public function user_reporter() : BelongsTo
+    public function user_reporter(): BelongsTo
     {
         return $this->belongsTo(User::class, 'user_reporter_id', 'id');
     }
@@ -52,7 +56,7 @@ class ReportContentTicket extends Model
     /**
      * * Relation to `Ad` model
      */
-    public function ad() : BelongsTo
+    public function ad(): BelongsTo
     {
         return $this->belongsTo(Ad::class, 'ad_id', 'id');
     }

@@ -8,6 +8,7 @@ use App\Models\AdCategory;
 use App\Models\AppConfig;
 use App\Models\Cube;
 use App\Models\DynamicContentCube;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -178,6 +179,29 @@ class AdController extends Controller
 
     public function getAds(Request $request, $lat, $long)
     {
+        // * Update status kubus yang kadaluarsa menjadi inactive
+        // Cek berdasarkan inactive_at
+        DB::table('cubes')
+            ->whereNotNull('inactive_at')
+            ->whereDate('inactive_at', '<=', Carbon::now())
+            ->where('status', 'active')
+            ->update(['status' => 'inactive']);
+
+        // Cek berdasarkan ads finish_validate yang sudah lewat
+        $expiredCubeIds = DB::table('ads')
+            ->join('cubes', 'cubes.id', '=', 'ads.cube_id')
+            ->whereNotNull('ads.finish_validate')
+            ->whereDate('ads.finish_validate', '<', Carbon::now())
+            ->where('cubes.status', 'active')
+            ->pluck('cubes.id')
+            ->toArray();
+
+        if (!empty($expiredCubeIds)) {
+            DB::table('cubes')
+                ->whereIn('id', $expiredCubeIds)
+                ->update(['status' => 'inactive']);
+        }
+
         $world_id = $request->get("world_id", null);
         $sortBy = $request->get("sortBy", "created_at");
         $sortDirection = $request->get("sortDirection", "DESC");
@@ -258,6 +282,29 @@ class AdController extends Controller
 
         DB::beginTransaction();
 
+        // * Update status kubus yang kadaluarsa menjadi inactive
+        // Cek berdasarkan inactive_at
+        DB::table('cubes')
+            ->whereNotNull('inactive_at')
+            ->whereDate('inactive_at', '<=', Carbon::now())
+            ->where('status', 'active')
+            ->update(['status' => 'inactive']);
+
+        // Cek berdasarkan ads finish_validate yang sudah lewat
+        $expiredCubeIds = DB::table('ads')
+            ->join('cubes', 'cubes.id', '=', 'ads.cube_id')
+            ->whereNotNull('ads.finish_validate')
+            ->whereDate('ads.finish_validate', '<', Carbon::now())
+            ->where('cubes.status', 'active')
+            ->pluck('cubes.id')
+            ->toArray();
+
+        if (!empty($expiredCubeIds)) {
+            DB::table('cubes')
+                ->whereIn('id', $expiredCubeIds)
+                ->update(['status' => 'inactive']);
+        }
+
         $query = Cube::with('ads', 'tags', 'ads.ad_category', 'cube_type', 'user', 'corporate', 'world');
 
         $query =  $query->select([
@@ -307,6 +354,29 @@ class AdController extends Controller
 
     public function getCubeByCodeGeneral(Request $request, $code)
     {
+        // * Update status kubus yang kadaluarsa menjadi inactive
+        // Cek berdasarkan inactive_at
+        DB::table('cubes')
+            ->whereNotNull('inactive_at')
+            ->whereDate('inactive_at', '<=', Carbon::now())
+            ->where('status', 'active')
+            ->update(['status' => 'inactive']);
+
+        // Cek berdasarkan ads finish_validate yang sudah lewat
+        $expiredCubeIds = DB::table('ads')
+            ->join('cubes', 'cubes.id', '=', 'ads.cube_id')
+            ->whereNotNull('ads.finish_validate')
+            ->whereDate('ads.finish_validate', '<', Carbon::now())
+            ->where('cubes.status', 'active')
+            ->pluck('cubes.id')
+            ->toArray();
+
+        if (!empty($expiredCubeIds)) {
+            DB::table('cubes')
+                ->whereIn('id', $expiredCubeIds)
+                ->update(['status' => 'inactive']);
+        }
+
         $query = Cube::with([
             'ads' => function ($query) {
                 $query->where('status', 'active');
@@ -467,6 +537,29 @@ class AdController extends Controller
     public function getCubesByCategory(Request $request)
     {
         try {
+            // * Update status kubus yang kadaluarsa menjadi inactive
+            // Cek berdasarkan inactive_at
+            DB::table('cubes')
+                ->whereNotNull('inactive_at')
+                ->whereDate('inactive_at', '<=', Carbon::now())
+                ->where('status', 'active')
+                ->update(['status' => 'inactive']);
+
+            // Cek berdasarkan ads finish_validate yang sudah lewat
+            $expiredCubeIds = DB::table('ads')
+                ->join('cubes', 'cubes.id', '=', 'ads.cube_id')
+                ->whereNotNull('ads.finish_validate')
+                ->whereDate('ads.finish_validate', '<', Carbon::now())
+                ->where('cubes.status', 'active')
+                ->pluck('cubes.id')
+                ->toArray();
+
+            if (!empty($expiredCubeIds)) {
+                DB::table('cubes')
+                    ->whereIn('id', $expiredCubeIds)
+                    ->update(['status' => 'inactive']);
+            }
+
             $adCategoryId = $request->get('ad_category_id');
             $communityId = $request->get('community_id');
             $limit = $request->get('limit', 50);

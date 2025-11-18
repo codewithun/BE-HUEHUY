@@ -39,6 +39,29 @@ class CubeController extends Controller
             'status' => 'cubes.status'
         ];
 
+        // * Update status kubus yang kadaluarsa menjadi inactive
+        // Cek berdasarkan inactive_at
+        DB::table('cubes')
+            ->whereNotNull('inactive_at')
+            ->whereDate('inactive_at', '<=', Carbon::now())
+            ->where('status', 'active')
+            ->update(['status' => 'inactive']);
+
+        // Cek berdasarkan ads finish_validate yang sudah lewat
+        $expiredCubeIds = DB::table('ads')
+            ->join('cubes', 'cubes.id', '=', 'ads.cube_id')
+            ->whereNotNull('ads.finish_validate')
+            ->whereDate('ads.finish_validate', '<', Carbon::now())
+            ->where('cubes.status', 'active')
+            ->pluck('cubes.id')
+            ->toArray();
+
+        if (!empty($expiredCubeIds)) {
+            DB::table('cubes')
+                ->whereIn('id', $expiredCubeIds)
+                ->update(['status' => 'inactive']);
+        }
+
         // ? Begin
         $model = new Cube();
         $query = Cube::with([
@@ -95,6 +118,7 @@ class CubeController extends Controller
             // ->join('ads', 'ads.cube_id', 'cubes.id')
             ->orderBy($this->remark_column($sortby, $columnAliases), $sortDirection)
             ->where('cubes.user_id', Auth::id())
+            ->where('cubes.status', 'active')
             ->paginate($paginate);
 
         // ? When empty

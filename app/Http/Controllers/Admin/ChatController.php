@@ -5,9 +5,11 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Chat;
 use App\Models\ChatMessage;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class ChatController extends Controller
 {
@@ -57,17 +59,15 @@ class ChatController extends Controller
     public function send(Request $request)
     {
         $request->validate([
-            'message'       => 'required|string|max:1000',
-            'receiver_id'   => 'nullable|integer|exists:users,id',
-            'chat_id'       => 'nullable|integer|exists:chats,id',
-            'community_id'  => 'nullable|integer',
-            'corporate_id'  => 'nullable|integer',
-            'receiver_type' => 'nullable|in:user,admin',
+            'message'         => 'required|string|max:1000',
+            'receiver_id'     => 'required_without_all:chat_id,receiver_phone,receiver_name|nullable|integer|exists:users,id',
+            'receiver_phone'  => 'required_without_all:chat_id,receiver_id,receiver_name|nullable|string',
+            'receiver_name'   => 'required_without_all:chat_id,receiver_id,receiver_phone|nullable|string',
+            'chat_id'         => 'required_without_all:receiver_id,receiver_phone,receiver_name|nullable|integer|exists:chats,id',
+            'community_id'    => 'nullable|integer',
+            'corporate_id'    => 'nullable|integer',
+            'receiver_type'   => 'nullable|in:user,admin',
         ]);
-
-        if (!$request->receiver_id && !$request->chat_id) {
-            return response()->json(['success' => false, 'error' => 'receiver_id atau chat_id wajib diisi'], 422);
-        }
 
         $sender = Auth::user();
 
@@ -87,7 +87,11 @@ class ChatController extends Controller
                     return response()->json(['success' => false, 'error' => 'Forbidden'], 403);
                 }
             } else {
-                $partnerId   = (int) $request->receiver_id;
+                // Resolve partner id from id/phone/name
+                $partnerId = $this->resolvePartnerId($request);
+                if (!$partnerId) {
+                    return response()->json(['success' => false, 'error' => 'Penerima tidak ditemukan'], 422);
+                }
 
                 // cari chat dua arah dalam scope community/corporate
                 $chat = Chat::where(function ($q) use ($sender, $partnerId) {
@@ -111,9 +115,13 @@ class ChatController extends Controller
                 }
             }
 
+            // Normalize sender_type to allowed values to avoid enum/length issues
+            $rawRole = strtolower(trim(optional($sender->role)->name ?? 'user'));
+            $senderType = in_array($rawRole, ['admin', 'user'], true) ? $rawRole : 'user';
+
             $msg = $chat->messages()->create([
                 'sender_id'   => $sender->id,
-                'sender_type' => strtolower(optional($sender->role)->name ?? 'user'),
+                'sender_type' => $senderType,
                 'message'     => $request->message,
                 'is_read'     => false,
             ]);
@@ -156,14 +164,22 @@ class ChatController extends Controller
     public function resolve(Request $request)
     {
         $request->validate([
-            'receiver_id'   => 'required|integer|exists:users,id',
-            'receiver_type' => 'nullable|in:user,admin',
-            'community_id'  => 'nullable|integer',
-            'corporate_id'  => 'nullable|integer',
+            'receiver_id'     => 'required_without_all:receiver_phone,receiver_name|nullable|integer|exists:users,id',
+            'receiver_phone'  => 'required_without_all:receiver_id,receiver_name|nullable|string',
+            'receiver_name'   => 'required_without_all:receiver_id,receiver_phone|nullable|string',
+            'receiver_type'   => 'nullable|in:user,admin',
+            'community_id'    => 'nullable|integer',
+            'corporate_id'    => 'nullable|integer',
         ]);
 
         $me = $request->user();
-        $partnerId = (int) $request->receiver_id;
+        $partnerId = $this->resolvePartnerId($request);
+        if (!$partnerId) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Penerima tidak ditemukan untuk parameter yang diberikan',
+            ], 422);
+        }
         $communityId = $request->community_id;
         $corporateId = $request->corporate_id;
 
@@ -196,6 +212,67 @@ class ChatController extends Controller
         }
 
         return response()->json(['success' => true, 'chat' => $chat]);
+    }
+
+    /**
+     * Helper: resolve partner user id from receiver_id OR receiver_phone OR receiver_name.
+     */
+    protected function resolvePartnerId(Request $request): ?int
+    {
+        if (!empty($request->receiver_id)) {
+            return (int) $request->receiver_id;
+        }
+
+        // Try phone based lookup
+        $phone = $request->receiver_phone;
+        if (!empty($phone)) {
+            $digits = preg_replace('/\D+/', '', $phone);
+            $variants = [$digits];
+            if (str_starts_with($digits, '0')) {
+                $variants[] = '62' . substr($digits, 1);
+            } elseif (str_starts_with($digits, '62')) {
+                $variants[] = '0' . substr($digits, 2);
+            }
+            $columns = [];
+            try {
+                $columns = Schema::getColumnListing((new User)->getTable());
+            } catch (\Throwable $e) {
+                $columns = [];
+            }
+            $phoneColumns = array_values(array_intersect($columns, [
+                'phone',
+                'phone_number',
+                'phone_no',
+                'handphone',
+                'mobile',
+                'telp',
+                'telpon'
+            ]));
+
+            $user = User::query()
+                ->when(!empty($phoneColumns), function ($query) use ($variants, $phoneColumns) {
+                    $query->where(function ($q) use ($variants, $phoneColumns) {
+                        foreach ($variants as $v) {
+                            foreach ($phoneColumns as $col) {
+                                $q->orWhere($col, $v);
+                            }
+                        }
+                    });
+                })
+                ->first();
+            if ($user) return (int) $user->id;
+        }
+
+        // Try name lookup (fallback, not guaranteed unique)
+        $name = $request->receiver_name;
+        if (!empty($name)) {
+            $user = User::where('name', 'LIKE', $name)->orWhere('name', 'LIKE', "%$name%")
+                ->orderBy('id', 'asc')
+                ->first();
+            if ($user) return (int) $user->id;
+        }
+
+        return null;
     }
 
 

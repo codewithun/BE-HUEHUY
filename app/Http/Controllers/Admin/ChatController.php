@@ -9,6 +9,7 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 
 class ChatController extends Controller
@@ -71,6 +72,12 @@ class ChatController extends Controller
 
         $sender = Auth::user();
 
+        // Debug logging
+        Log::info('💬 Chat send request', [
+            'sender_id' => $sender->id,
+            'payload' => $request->all()
+        ]);
+
         if ($request->receiver_id && $request->receiver_id == $sender->id) {
             return response()->json([
                 'success' => false,
@@ -126,6 +133,9 @@ class ChatController extends Controller
                 'is_read'     => false,
             ]);
 
+            // Add chat_id to message for frontend reference
+            $msg->chat_id = $chat->id;
+
             $chat->update([
                 'last_message' => $request->message,
                 'updated_at'   => now(),
@@ -133,9 +143,15 @@ class ChatController extends Controller
 
             DB::commit();
 
+            Log::info('✅ Chat message sent successfully', [
+                'chat_id' => $chat->id,
+                'message_id' => $msg->id,
+                'sender_id' => $sender->id
+            ]);
+
             return response()->json([
                 'success' => true,
-                'chat'    => $chat,
+                'chat'    => $chat->fresh(['sender', 'receiver']), // reload with relationships
                 'message' => $msg,
             ]);
         } catch (\Throwable $e) {
@@ -341,6 +357,16 @@ class ChatController extends Controller
                     return null;
                 }
 
+                // Derive context type for FE classification (community / corporate / direct)
+                $contextType = null;
+                if (!empty($chat->community_id)) {
+                    $contextType = 'community';
+                } elseif (!empty($chat->corporate_id)) {
+                    $contextType = 'corporate';
+                } else {
+                    $contextType = 'direct';
+                }
+
                 return [
                     'id' => $chat->id,
                     'partner' => [
@@ -351,6 +377,10 @@ class ChatController extends Controller
                     'last_message' => $last?->message ?? '(belum ada pesan)',
                     'created_at' => $last?->created_at,
                     'unread_count' => (int) ($chat->unread_count ?? 0),
+                    // expose context identifiers
+                    'community_id' => $chat->community_id,
+                    'corporate_id' => $chat->corporate_id,
+                    'context_type' => $contextType,
                 ];
             })
             ->filter();

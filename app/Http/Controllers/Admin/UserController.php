@@ -65,8 +65,17 @@ class UserController extends Controller
         // Pastikan kolom yang dipakai di payload & sorting tersedia di select list
         // tanpa membuka kolom sensitif (password, remember_token)
         $requiredColumns = [
-            'id', 'role_id', 'name', 'email', 'phone', 'picture_source',
-            'last_active_at', 'verified_at', 'point', 'created_at', 'updated_at'
+            'id',
+            'role_id',
+            'name',
+            'email',
+            'phone',
+            'picture_source',
+            'last_active_at',
+            'verified_at',
+            'point',
+            'created_at',
+            'updated_at'
         ];
         if ($selectable !== ['*']) {
             $selectable = array_values(array_unique(array_merge($selectable, $requiredColumns)));
@@ -281,7 +290,6 @@ class UserController extends Controller
                     'corporate_id' => $request->corporate_id,
                     'corporate_role_id' => $request->corporate_role_id
                 ]);
-
             } catch (\Throwable $th) {
                 DB::rollBack();
                 Log::error('CorporateUser creation failed', [
@@ -391,14 +399,13 @@ class UserController extends Controller
         // ? Executing
         try {
             $model->save();
-            
+
             Log::info('Admin updated user role', [
                 'user_id' => $model->id,
                 'old_role_id' => $oldRoleId,
                 'new_role_id' => $request->role_id,
                 'admin_id' => auth()->id()
             ]);
-            
         } catch (\Throwable $th) {
             DB::rollBack();
             return response([
@@ -460,7 +467,6 @@ class UserController extends Controller
                 'corporate_role_id' => $request->corporate_role_id,
                 'admin_id' => auth()->id()
             ]);
-            
         } catch (\Throwable $th) {
             DB::rollBack();
             Log::error('Failed to assign user to corporate', [
@@ -519,7 +525,6 @@ class UserController extends Controller
                 'corporate_id' => $request->corporate_id,
                 'admin_id' => auth()->id()
             ]);
-            
         } catch (\Throwable $th) {
             DB::rollBack();
             Log::error('Failed to remove user from corporate', [
@@ -545,7 +550,7 @@ class UserController extends Controller
     public function fixCorruptRoles(Request $request)
     {
         DB::beginTransaction();
-        
+
         try {
             // ✅ STEP 1: Setup correct roles data structure
             $correctRoles = [
@@ -553,7 +558,7 @@ class UserController extends Controller
                 ['name' => 'Admin', 'is_corporate' => 0, 'slug' => 'admin'],
                 ['name' => 'User', 'is_corporate' => 0, 'slug' => 'user'],
                 ['name' => 'Manager Tenant', 'is_corporate' => 0, 'slug' => 'manager_tenant'],
-                
+
                 // Role Corporate (is_corporate = 1)  
                 ['name' => 'Kepala Mitra', 'is_corporate' => 1, 'slug' => 'kepala_mitra'],
                 ['name' => 'Manager Mitra', 'is_corporate' => 1, 'slug' => 'manager_mitra'],
@@ -595,7 +600,7 @@ class UserController extends Controller
                 $defaultGlobalRole = Role::where('is_corporate', 0)
                     ->where('name', 'User')
                     ->first();
-                
+
                 if (!$defaultGlobalRole) {
                     // Fallback ke role global pertama
                     $defaultGlobalRole = Role::where('is_corporate', 0)->first();
@@ -605,7 +610,7 @@ class UserController extends Controller
                     User::where('id', $user->id)->update([
                         'role_id' => $defaultGlobalRole->id
                     ]);
-                    
+
                     $fixedCount++;
                     $results[] = [
                         'user_id' => $user->id,
@@ -615,7 +620,7 @@ class UserController extends Controller
                         'new_role_id' => $defaultGlobalRole->id,
                         'new_role_name' => $defaultGlobalRole->name
                     ];
-                    
+
                     Log::info('Fixed user role', [
                         'user_id' => $user->id,
                         'email' => $user->email,
@@ -639,14 +644,13 @@ class UserController extends Controller
                     ]
                 ]
             ]);
-
         } catch (\Throwable $th) {
             DB::rollBack();
             Log::error('Failed to fix role system', [
                 'error' => $th->getMessage(),
                 'trace' => $th->getTraceAsString()
             ]);
-            
+
             return response([
                 "message" => "Error: Failed to fix role system!",
                 "error" => $th->getMessage()
@@ -687,7 +691,6 @@ class UserController extends Controller
                     ]
                 ]
             ]);
-
         } catch (\Throwable $th) {
             return response([
                 "message" => "Error checking roles structure",
@@ -801,7 +804,6 @@ class UserController extends Controller
                 "message" => "success",
                 "data"    => $userData
             ]);
-
         } catch (\Throwable $th) {
             return response([
                 "message" => "User not found",
@@ -829,10 +831,12 @@ class UserController extends Controller
             // Generate the user code dynamically (same as in AuthController)
             $userCode = 'HUEHUY-' . str_pad($user->id, 6, '0', STR_PAD_LEFT);
 
-            // Return only public-safe user data (no email, phone, or sensitive info)
+            // Return public user data (now includes email and phone per request)
             $publicData = [
                 'id'             => $user->id,
                 'name'           => $user->name,
+                'email'          => $user->email,
+                'phone'          => $user->phone,
                 'code'           => $userCode,
                 'picture_source' => $user->picture_source,
                 'verified_at'    => $user->verified_at ? true : false, // Only show if verified, not the actual date
@@ -856,7 +860,6 @@ class UserController extends Controller
                 "message" => "success",
                 "data"    => $publicData
             ]);
-
         } catch (\Throwable $th) {
             Log::error('Public QR Profile access error', [
                 'identifier' => $identifier,

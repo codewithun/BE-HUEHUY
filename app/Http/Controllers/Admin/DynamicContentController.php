@@ -26,6 +26,7 @@ class DynamicContentController extends Controller
         $paginate = $request->get("paginate", 10);
         $filter = $request->get("filter", null);
         $community_id = $request->get("community_id", null);
+        $corporate_id = $request->get("corporate_id", null);
 
         // ? Preparation
         $columnAliases = [];
@@ -33,10 +34,10 @@ class DynamicContentController extends Controller
         // ? Begin
         $model = new DynamicContent();
         $query = DynamicContent::with([
-            'dynamic_content_cubes', 
-            'dynamic_content_cubes.cube', 
-            'dynamic_content_cubes.cube.cube_type', 
-            'dynamic_content_cubes.cube.ads' => function($query) {
+            'dynamic_content_cubes',
+            'dynamic_content_cubes.cube',
+            'dynamic_content_cubes.cube.cube_type',
+            'dynamic_content_cubes.cube.ads' => function ($query) {
                 $query->where('status', 'active');
             },
             'dynamic_content_cubes.cube.ads.ad_category',
@@ -59,6 +60,8 @@ class DynamicContentController extends Controller
         if ($filter) {
             $filters = json_decode($filter);
             foreach ($filters as $column => $value) {
+                // Skip unsupported top-level column; handled explicitly below
+                if ($column === 'corporate_id') continue;
                 $query = $this->filter($this->remark_column($column, $columnAliases), $value, $model, $query);
             }
         }
@@ -74,6 +77,13 @@ class DynamicContentController extends Controller
             $query->where('community_id', $community_id);
         }
         // HAPUS bagian else - sehingga kalau tidak ada filter, tampilkan SEMUA widget (global + komunitas)
+
+        // NEW: Batasi ke corporate tertentu via relasi community
+        if ($corporate_id && $corporate_id !== '' && $corporate_id !== 'null') {
+            $query->whereHas('community', function ($q) use ($corporate_id) {
+                $q->where('corporate_id', $corporate_id);
+            });
+        }
 
         // ? Sort & executing with pagination
         if ($paginate === 'all') {

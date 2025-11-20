@@ -1196,7 +1196,26 @@ class CubeController extends Controller
                 // Target fields for voucher
                 $ad->target_type             = $adsPayload['target_type'] ?? 'all';
                 $ad->target_user_id          = $adsPayload['target_user_id'] ?? null;
-                $ad->community_id            = $adsPayload['community_id'] ?? null;
+
+                // Set community_id based on corporate_id if not explicitly set
+                $communityId = $adsPayload['community_id'] ?? null;
+                if ((empty($communityId) || $communityId == 0) && !empty($data['corporate_id'])) {
+                    // Auto-assign community based on corporate_id
+                    $community = \App\Models\Community::where('corporate_id', $data['corporate_id'])->first();
+                    if ($community) {
+                        $communityId = $community->id;
+                        Log::info('CubeController@store auto-assigned community_id based on corporate_id', [
+                            'corporate_id' => $data['corporate_id'],
+                            'community_id' => $communityId,
+                            'original_community_id' => $adsPayload['community_id'] ?? 'null'
+                        ]);
+                    } else {
+                        Log::warning('CubeController@store no community found for corporate_id', [
+                            'corporate_id' => $data['corporate_id']
+                        ]);
+                    }
+                }
+                $ad->community_id = $communityId;
 
                 // Date validation fields
                 if (!empty($adsPayload['start_validate'])) {
@@ -1357,6 +1376,35 @@ class CubeController extends Controller
                 }
 
                 $ad->save();
+
+                // Fallback assignment: jika community_id masih null dan cube punya corporate_id
+                if (!$ad->community_id) {
+                    try {
+                        $fallbackCorporateId = $model->corporate_id ?? null; // $model adalah cube
+                        if ($fallbackCorporateId) {
+                            $fallbackCommunity = \App\Models\Community::where('corporate_id', $fallbackCorporateId)->first();
+                            if ($fallbackCommunity) {
+                                $ad->community_id = $fallbackCommunity->id;
+                                $ad->save();
+                                Log::info('CubeController@store fallback community assignment applied', [
+                                    'ad_id' => $ad->id,
+                                    'community_id' => $ad->community_id,
+                                    'corporate_id' => $fallbackCorporateId
+                                ]);
+                            } else {
+                                Log::warning('CubeController@store fallback community not found', [
+                                    'corporate_id' => $fallbackCorporateId,
+                                    'ad_id' => $ad->id
+                                ]);
+                            }
+                        }
+                    } catch (\Throwable $e) {
+                        Log::error('CubeController@store fallback community assignment failed', [
+                            'error' => $e->getMessage(),
+                            'ad_id' => $ad->id
+                        ]);
+                    }
+                }
 
                 // =====================================
                 // 🔍 DEBUG: Log ad creation details for voucher tracking

@@ -20,55 +20,13 @@ use App\Models\CommunityMembership;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Support\Facades\Storage;
 
-/**
- * Local no-op Log class to neutralize logging calls inside this controller.
- *
- * Instead of removing each Log::... call (many occurrences), we define a small
- * class in this namespace with the same static methods used in the file.
- * This keeps the code unchanged except logs become no-ops.
- */
-class Log
-{
-    public static function info(...$args)
-    {
-        // intentionally empty (no-op)
-    }
-
-    public static function error(...$args)
-    {
-        // intentionally empty (no-op)
-    }
-
-    public static function warning(...$args)
-    {
-        // intentionally empty (no-op)
-    }
-
-    public static function debug(...$args)
-    {
-        // intentionally empty (no-op)
-    }
-
-    public static function critical(...$args)
-    {
-        // intentionally empty (no-op)
-    }
-
-    public static function alert(...$args)
-    {
-        // intentionally empty (no-op)
-    }
-
-    public static function notice(...$args)
-    {
-        // intentionally empty (no-op)
-    }
-}
+// Enable actual Laravel logging by removing the no-op Log class override
 
 class CubeController extends Controller
 {
@@ -1920,7 +1878,7 @@ class CubeController extends Controller
             'ads.ad_category:id,name',
             'tags:id,cube_id,address,map_lat,map_lng,link',
             'user:id,name,phone,picture_source',
-            'corporate:id,name,phone,picture_source',
+            'corporate:id,name,phone',
         ]);
 
         return response([

@@ -81,9 +81,9 @@ class AuthController extends Controller
             case 'corporate':
                 // * PERBAIKAN: Cari user berdasarkan corporate_user dan role corporate
                 $user = User::where('email', $request->email)
-                    ->whereHas('corporate_user', function($query) {
+                    ->whereHas('corporate_user', function ($query) {
                         $query->whereNotNull('corporate_id')
-                              ->whereNotNull('role_id');
+                            ->whereNotNull('role_id');
                     })
                     ->with(['corporate_user', 'corporate_user.role', 'corporate_user.corporate'])
                     ->first();
@@ -107,7 +107,7 @@ class AuthController extends Controller
 
         if (!$user) {
             Log::warning('User not found for login:', [
-                'email' => $request->email, 
+                'email' => $request->email,
                 'scope' => $scope
             ]);
             return response([
@@ -148,6 +148,16 @@ class AuthController extends Controller
                     'email' => ['User tidak terdaftar sebagai member corporate']
                 ]
             ], 422);
+        }
+
+        // Update auth_providers - tambahkan 'local' jika belum ada dan user login dengan password
+        if (Schema::hasColumn('users', 'auth_providers')) {
+            $providers = $user->auth_providers ?? [];
+            if (!in_array('local', $providers)) {
+                $providers[] = 'local';
+                $user->auth_providers = $providers;
+                $user->save();
+            }
         }
 
         // =========================>
@@ -253,6 +263,11 @@ class AuthController extends Controller
             $user->email = $request->email;
             $user->phone = $request->phone;
             $user->password = Hash::make($request->password);
+
+            // Set provider 'local' untuk registrasi manual
+            if (Schema::hasColumn('users', 'auth_providers')) {
+                $user->auth_providers = ['local'];
+            }
 
             // Upload foto jika ada - GUNAKAN picture_source SESUAI DATABASE
             if ($request->hasFile('image')) {
@@ -908,7 +923,7 @@ class AuthController extends Controller
             }
 
             Log::info('Account endpoint called for user:', [
-                'user_id' => $user->id, 
+                'user_id' => $user->id,
                 'email' => $user->email,
                 'role_id' => $user->role_id,
                 'has_corporate_user' => $user->corporate_user ? 'yes' : 'no',
@@ -947,6 +962,7 @@ class AuthController extends Controller
                 'verified_at' => $user->verified_at ?? null,
                 'role_id' => (int) ($user->role_id ?? 2),
                 'code' => 'HUEHUY-' . str_pad($user->id, 6, '0', STR_PAD_LEFT), // Generate code untuk QR
+                'auth_providers' => $user->auth_providers ?? [], // Tampilkan providers (local, google, dll)
                 'role' => $user->role ? [
                     'id' => $user->role->id,
                     'name' => $user->role->name,
@@ -1035,9 +1051,9 @@ class AuthController extends Controller
 
             // FALLBACK: Jika ada auth user - load dengan relasi
             $user = User::with([
-                'role', 
-                'corporate_user', 
-                'corporate_user.corporate', 
+                'role',
+                'corporate_user',
+                'corporate_user.corporate',
                 'corporate_user.role'
             ])->find(Auth::id());
 
@@ -1198,7 +1214,7 @@ class AuthController extends Controller
                 'gac_env' => $gacEnv,
                 'gac_exists' => $gacExists,
             ]);
-            
+
             // In development, provide helpful error message
             if (app()->environment(['local', 'development'])) {
                 return response()->json([
@@ -1208,7 +1224,7 @@ class AuthController extends Controller
                     'expected_path' => './firebase/huehuy-63c16.json',
                 ], 500);
             }
-            
+
             return response()->json([
                 'message' => 'Authentication service unavailable',
                 'code' => 'AUTH_SERVICE_ERROR',
@@ -1254,47 +1270,46 @@ class AuthController extends Controller
             // Decode the JWT token manually (without verification for development)
             $idToken = $request->idToken;
             $tokenParts = explode('.', $idToken);
-            
+
             if (count($tokenParts) !== 3) {
                 throw new \Exception('Invalid token format');
             }
-            
+
             // Decode the payload (second part of JWT)
             $payload = base64_decode(str_replace(['-', '_'], ['+', '/'], $tokenParts[1]));
             $claims = json_decode($payload, true);
-            
+
             if (!$claims) {
                 throw new \Exception('Invalid token payload');
             }
-            
+
             Log::info('Decoded Firebase token claims:', $claims);
-            
+
             // Extract user information from the token
             $uid = $claims['sub'] ?? $claims['user_id'] ?? ('dev_' . time());
             $email = $claims['email'] ?? 'unknown@dev.local';
             $name = $claims['name'] ?? $claims['display_name'] ?? 'Development User';
             $picture = $claims['picture'] ?? null;
-            
+
             Log::info('Extracted user info from token:', [
                 'uid' => $uid,
                 'email' => $email,
                 'name' => $name,
                 'picture' => $picture
             ]);
-            
+
             return $this->createOrFindFirebaseUser($uid, $email, $name, $picture);
-            
         } catch (\Exception $e) {
             Log::warning('Failed to decode Firebase token in development mode:', [
                 'error' => $e->getMessage(),
                 'token_preview' => substr($request->idToken, 0, 50) . '...'
             ]);
-            
+
             // Fallback to mock user if token decoding fails
             $devEmail = 'dev@huehuy.com';
             $devName = 'Development User';
             $devUid = 'dev_' . time();
-            
+
             return $this->createOrFindFirebaseUser($devUid, $devEmail, $devName);
         }
     }
@@ -1304,54 +1319,79 @@ class AuthController extends Controller
      */
     private function createOrFindFirebaseUser($uid, $email, $name, $picture = null)
     {
-        // Prefer firebase_uid if the column exists. Otherwise, fall back to email.
+        // Cek apakah user sudah ada berdasarkan email (bisa jadi daftar manual)
+        $existingUser = User::where('email', $email)->first();
+
+        if ($existingUser) {
+            // User sudah ada (daftar manual), link dengan Google
+            $updated = false;
+
+            // Update firebase_uid jika belum ada
+            if (Schema::hasColumn('users', 'firebase_uid') && empty($existingUser->firebase_uid)) {
+                $existingUser->firebase_uid = $uid;
+                $updated = true;
+            }
+
+            // Update auth_providers - tambahkan 'google' jika belum ada
+            if (Schema::hasColumn('users', 'auth_providers')) {
+                $providers = $existingUser->auth_providers ?? [];
+                if (!in_array('google', $providers)) {
+                    $providers[] = 'google';
+                    $existingUser->auth_providers = $providers;
+                    $updated = true;
+                }
+            }
+
+            // Only update name if it's empty (jangan overwrite nama manual user)
+            if (empty($existingUser->name)) {
+                $existingUser->name = $name;
+                $updated = true;
+            }
+
+            // JANGAN update picture untuk existing user - biar tetap pakai foto mereka
+            // (baik foto default sistem atau foto yang di-upload manual)
+            // Foto dari Google hanya dipakai untuk user baru saja
+
+            // Ensure verified flag is set
+            if (empty($existingUser->verified_at)) {
+                $existingUser->verified_at = now();
+                $updated = true;
+            }
+
+            if ($updated) {
+                $existingUser->save();
+            }
+
+            $token = $existingUser->createToken('firebase_login')->plainTextToken;
+
+            return response()->json([
+                'success' => true,
+                'token' => $token,
+                'user' => $existingUser,
+            ]);
+        }
+
+        // User baru - buat akun baru dengan provider 'google'
         if (Schema::hasColumn('users', 'firebase_uid')) {
-            $user = User::firstOrCreate(
-                ['firebase_uid' => $uid],
-                [
-                    'email' => $email,
-                    'name' => $name,
-                    'verified_at' => now(),
-                    'role_id' => 2,
-                    'picture_source' => $picture,
-                ]
-            );
+            $user = User::create([
+                'firebase_uid' => $uid,
+                'email' => $email,
+                'name' => $name,
+                'verified_at' => now(),
+                'role_id' => 2,
+                'picture_source' => $picture,
+                'auth_providers' => ['google'],
+            ]);
         } else {
             // Fallback to email-only schema (no firebase_uid column)
-            $user = User::firstOrCreate(
-                ['email' => $email],
-                [
-                    'name' => $name,
-                    'verified_at' => now(),
-                    'role_id' => 2,
-                    'picture_source' => $picture,
-                ]
-            );
-        }
-
-        // Update existing user's information if needed
-        if ($user->wasRecentlyCreated === false) {
-            $updated = false;
-            
-            if ($user->name !== $name) {
-                $user->name = $name;
-                $updated = true;
-            }
-            
-            if ($picture && $user->picture_source !== $picture) {
-                $user->picture_source = $picture;
-                $updated = true;
-            }
-            
-            if ($updated) {
-                $user->save();
-            }
-        }
-
-        // Ensure verified flag is set
-        if (empty($user->verified_at)) {
-            $user->verified_at = now();
-            $user->save();
+            $user = User::create([
+                'email' => $email,
+                'name' => $name,
+                'verified_at' => now(),
+                'role_id' => 2,
+                'picture_source' => $picture,
+                'auth_providers' => ['google'],
+            ]);
         }
 
         $token = $user->createToken('firebase_login')->plainTextToken;
@@ -1436,9 +1476,9 @@ class AuthController extends Controller
     public function profile()
     {
         $user = User::with([
-            'role', 
-            'corporate_user', 
-            'corporate_user.corporate', 
+            'role',
+            'corporate_user',
+            'corporate_user.corporate',
             'corporate_user.role'
         ])->find(Auth::id());
 
@@ -1458,7 +1498,7 @@ class AuthController extends Controller
             'corporate_user_data' => $user->corporate_user ? $user->corporate_user->toArray() : null,
             'corporate_id' => $user->corporate_user ? $user->corporate_user->corporate_id : null
         ]);
-        
+
         return response([
             'message' => 'success',
             'data' => $user
@@ -1472,9 +1512,9 @@ class AuthController extends Controller
     {
         try {
             $user = User::with([
-                'role', 
-                'corporate_user', 
-                'corporate_user.corporate', 
+                'role',
+                'corporate_user',
+                'corporate_user.corporate',
                 'corporate_user.role'
             ])->find(Auth::id());
 

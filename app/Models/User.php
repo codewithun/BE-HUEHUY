@@ -27,6 +27,8 @@ class User extends Authenticatable
         'picture_source',
         'phone',
         'verified_at',
+        'firebase_uid',
+        'auth_providers',
     ];
 
     // =========================>
@@ -43,6 +45,7 @@ class User extends Authenticatable
     // =========================>
     protected $casts = [
         'verified_at' => 'datetime',
+        'auth_providers' => 'array',
     ];
 
     // =========================>
@@ -71,7 +74,7 @@ class User extends Authenticatable
     /**
      * * Relasi ke Role
      */
-    public function role() : BelongsTo
+    public function role(): BelongsTo
     {
         return $this->belongsTo(Role::class, 'role_id', 'id');
     }
@@ -79,7 +82,7 @@ class User extends Authenticatable
     /**
      * * PENTING: Relasi ke CorporateUser
      */
-    public function corporate_user() : HasOne
+    public function corporate_user(): HasOne
     {
         return $this->hasOne(CorporateUser::class, 'user_id', 'id');
     }
@@ -87,7 +90,7 @@ class User extends Authenticatable
     /**
      * * Relation to `Cube` model
      */
-    public function cubes() : HasMany
+    public function cubes(): HasMany
     {
         return $this->hasMany(Cube::class, 'user_id', 'id');
     }
@@ -95,7 +98,7 @@ class User extends Authenticatable
     /**
      * * Relation to `Cube` model
      */
-    public function worlds() : HasMany
+    public function worlds(): HasMany
     {
         return $this->hasMany(UserWorld::class, 'user_id', 'id');
     }
@@ -114,9 +117,9 @@ class User extends Authenticatable
     public function communities()
     {
         return $this->belongsToMany(Community::class, 'community_memberships')
-                    ->wherePivot('status', 'active')
-                    ->withPivot('status', 'joined_at')
-                    ->withTimestamps();
+            ->wherePivot('status', 'active')
+            ->withPivot('status', 'joined_at')
+            ->withTimestamps();
     }
 
     public function toArray()

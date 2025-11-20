@@ -28,7 +28,7 @@ Route::prefix('corporate')->name('corporate.')->group(function () {
     });
 
     Route::get('/dashboard/counter-data', [DashboardController::class, 'counterData']);
-    
+
     // Corporate-specific account endpoint with full relations
     Route::get('/account', [App\Http\Controllers\AuthController::class, 'corporateAccount']);
     Route::get('/profile', [App\Http\Controllers\AuthController::class, 'corporateAccount']); // Alias untuk frontend
@@ -60,4 +60,16 @@ Route::prefix('corporate')->name('corporate.')->group(function () {
     Route::post('/chats', [ChatController::class, 'createMessage']);
 
     Route::get('/notification', [NotificationController::class, 'index']);
+
+    // Corporate Community Management
+    Route::apiResource('/communities', \App\Http\Controllers\Corporate\CommunityController::class);
+    Route::get('/communities/{id}/members', [\App\Http\Controllers\Corporate\CommunityController::class, 'getMembers'])->whereNumber('id');
+    Route::post('/communities/{id}/members', [\App\Http\Controllers\Corporate\CommunityController::class, 'addMember'])->whereNumber('id');
+    Route::get('/communities/{id}/member-requests', [\App\Http\Controllers\Corporate\CommunityController::class, 'getMemberRequests'])->whereNumber('id');
+    Route::post('/member-requests/{id}/approve', [\App\Http\Controllers\Corporate\CommunityController::class, 'approveMemberRequest'])->whereNumber('id');
+    Route::post('/member-requests/{id}/reject', [\App\Http\Controllers\Corporate\CommunityController::class, 'rejectMemberRequest'])->whereNumber('id');
+    Route::get('/communities/{id}/member-history', [\App\Http\Controllers\Corporate\CommunityController::class, 'getMemberHistory'])->whereNumber('id');
+    Route::delete('/communities/{communityId}/members/{userId}', [\App\Http\Controllers\Corporate\CommunityController::class, 'removeMember'])
+        ->whereNumber('communityId')
+        ->whereNumber('userId');
 });

@@ -12,6 +12,7 @@ class MemberHistory extends Model
     protected $fillable = [
         'community_id',
         'user_id',
+        'user_name',
         'action',
     ];
 

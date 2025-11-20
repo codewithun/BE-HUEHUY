@@ -73,10 +73,10 @@ class DynamicContentController extends Controller
 
         // PERBAIKAN: Filter komunitas yang lebih fleksibel
         if ($community_id && $community_id !== '' && $community_id !== 'null') {
-            // Jika ada filter komunitas yang dipilih, tampilkan hanya widget komunitas tersebut
             $query->where('community_id', $community_id);
+        } else {
+            $query->whereNull('community_id');
         }
-        // HAPUS bagian else - sehingga kalau tidak ada filter, tampilkan SEMUA widget (global + komunitas)
 
         // NEW: Batasi ke corporate tertentu via relasi community
         if ($corporate_id && $corporate_id !== '' && $corporate_id !== 'null') {

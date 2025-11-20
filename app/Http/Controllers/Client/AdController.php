@@ -20,6 +20,8 @@ class AdController extends Controller
     public function getPromoRecommendation(Request $request)
     {
         $worldIdFilter = $request->get('world_id', null);
+        // Tambah optional community scoping
+        $communityId = $request->get('community_id', null);
 
         $user = Auth::user();
 
@@ -72,6 +74,15 @@ class AdController extends Controller
                     }
                 });
             })
+            // Community scoping: jika ada community_id tampilkan ads komunitas + global; jika tidak hanya global
+            ->when($communityId, function ($q) use ($communityId) {
+                $q->where(function ($sub) use ($communityId) {
+                    $sub->where('ads.community_id', $communityId)
+                        ->orWhereNull('ads.community_id');
+                });
+            }, function ($q) {
+                $q->whereNull('ads.community_id');
+            })
             ->groupBy('ads.id')
             ->orderBy('cubes.is_recommendation', 'desc')
             ->inRandomOrder()
@@ -87,6 +98,8 @@ class AdController extends Controller
     public function getPromoNearest(Request $request, $lat, $long)
     {
         $worldIdFilter = $request->get('world_id', null);
+        // Tambah optional community scoping
+        $communityId = $request->get('community_id', null);
 
         $user = Auth::user();
 
@@ -137,6 +150,15 @@ class AdController extends Controller
             ->where('is_information', 0)
             ->where('cubes.status', 'active')
             ->where('cubes.is_information', '<>', '1')
+            // Community scoping: jika ada community_id tampilkan ads komunitas + global; jika tidak hanya global
+            ->when($communityId, function ($q) use ($communityId) {
+                $q->where(function ($sub) use ($communityId) {
+                    $sub->where('ads.community_id', $communityId)
+                        ->orWhereNull('ads.community_id');
+                });
+            }, function ($q) {
+                $q->whereNull('ads.community_id');
+            })
             ->orderBy('distance', 'ASC')
             ->limit(6)
             ->get();

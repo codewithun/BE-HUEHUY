@@ -18,7 +18,7 @@ use Illuminate\Support\Facades\DB;
 
 class HomeController extends Controller
 {
-    public function banner() 
+    public function banner()
     {
         $model = Banner::get();
 
@@ -28,7 +28,7 @@ class HomeController extends Controller
         ]);
     }
 
-    public function faq() 
+    public function faq()
     {
         $model = Faq::get();
 
@@ -57,7 +57,7 @@ class HomeController extends Controller
         ]);
     }
 
-    public function article() 
+    public function article()
     {
         $model = Article::get();
 
@@ -107,7 +107,8 @@ class HomeController extends Controller
         foreach ($homeCategory as $key => $category) {
 
             $ads = Ad::with('ad_category', 'cube.cube_type')
-                ->select('ads.*', 
+                ->select(
+                    'ads.*',
                     DB::raw('CAST(IF(ads.is_daily_grab = 1,
                         (SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id),
                         SUM(total_grab)
@@ -122,11 +123,11 @@ class HomeController extends Controller
                 ->leftJoin('ad_categories as parent_category', 'parent_category.id', 'ad_categories.parent_id')
                 ->leftJoin('ad_categories as grand_category', 'grand_category.id', 'parent_category.parent_id')
                 ->rightJoin('cubes', 'cubes.id', 'ads.cube_id')
-                ->where(function ($query) use ($category) { 
+                ->where(function ($query) use ($category) {
                     $query->orWhere('ads.ad_category_id', $category->id)
-                    ->orWhere('ad_categories.parent_id', $category->id)
-                    ->orWhere('parent_category.parent_id', $category->id)
-                    ->orWhere('grand_category.parent_id', $category->id);
+                        ->orWhere('ad_categories.parent_id', $category->id)
+                        ->orWhere('parent_category.parent_id', $category->id)
+                        ->orWhere('grand_category.parent_id', $category->id);
                 })
                 ->where('cubes.status', 'active')
                 ->when($worldIdFilter, function ($query) use ($worldIdFilter) {
@@ -174,7 +175,7 @@ class HomeController extends Controller
         ]);
     }
 
-    public function cubeType() 
+    public function cubeType()
     {
         $model = CubeType::get();
 
@@ -184,7 +185,8 @@ class HomeController extends Controller
         ]);
     }
 
-    function worlds() {
+    function worlds()
+    {
         $user = Auth::user();
 
         $user_worlds = [];
@@ -197,7 +199,7 @@ class HomeController extends Controller
         foreach ($user_has_worlds as $key => $world) {
             $user_has_worlds[$key]['active'] = true;
         }
-        
+
         $worlds = World::whereNotIn('id', $user_worlds)->get()->toArray();
 
         $worlds = array_merge($user_has_worlds, $worlds);
@@ -211,15 +213,37 @@ class HomeController extends Controller
     public function getDynamicContentConfig(Request $request)
     {
         $filterType = $request->get('type', '');
-
-        // Load relasi yang diperlukan untuk FE
+        $communityId = $request->get('community_id', null);
+        // Load relasi yang diperlukan untuk FE dengan filter ads berdasarkan scope komunitas/global
         $query = DynamicContent::with([
-            'dynamic_content_cubes' => function($query) {
-                $query->with('cube');
+            'dynamic_content_cubes' => function ($q) use ($communityId) {
+                $q->with(['cube' => function ($cubeQ) use ($communityId) {
+                    // Eager load ads dan batasi hanya ads aktif sesuai scope
+                    $cubeQ->with(['ads' => function ($adsQ) use ($communityId) {
+                        $adsQ->where('status', 'active')
+                            ->when($communityId, function ($scoped) use ($communityId) {
+                                // Widget komunitas: tampilkan ads komunitas + global
+                                $scoped->where(function ($nested) use ($communityId) {
+                                    $nested->whereNull('community_id')
+                                        ->orWhere('community_id', $communityId);
+                                });
+                            }, function ($global) {
+                                // Widget global: hanya ads global (tanpa community_id)
+                                $global->whereNull('community_id');
+                            });
+                    }, 'cube_type', 'opening_hours']);
+                }]);
             },
             'ad_category',
             'community'
         ]);
+
+        // Filter berdasarkan community_id untuk daftar widget
+        if ($communityId && $communityId !== '' && $communityId !== 'null') {
+            $query->where('community_id', $communityId);
+        } else {
+            $query->whereNull('community_id');
+        }
 
         if ($filterType != '') {
             $model = $query->where('type', $filterType)
@@ -227,6 +251,20 @@ class HomeController extends Controller
                 ->get();
         } else {
             $model = $query->orderBy('level', 'asc')->get();
+        }
+
+        // Safety pass: pastikan ads di widget global bersih dari ads komunitas (fallback kalau ada relasi lain yg inject)
+        if (!$communityId) {
+            $model->each(function ($widget) {
+                if ($widget->community_id === null && $widget->relationLoaded('dynamic_content_cubes')) {
+                    $widget->dynamic_content_cubes->each(function ($dcc) {
+                        if ($dcc->relationLoaded('cube') && $dcc->cube && $dcc->cube->relationLoaded('ads')) {
+                            $filtered = $dcc->cube->ads->filter(fn($ad) => $ad->community_id === null);
+                            $dcc->cube->setRelation('ads', $filtered->values());
+                        }
+                    });
+                }
+            });
         }
 
         return response([

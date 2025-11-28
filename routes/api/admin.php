@@ -137,9 +137,22 @@ Route::prefix('admin')->name('admin.')->group(function () {
         ->name('promo-items.redeem') // final name: admin.promo-items.redeem
         ->whereNumber('id');
 
-    Route::apiResource('/communities', CommunityController::class);
-    // Tambah ini: daftar anggota komunitas (admin)
+    Route::apiResource('/communities', CommunityController::class)->parameters(['communities' => 'id']);
+    // Additional community routes  
     Route::get('/communities/{id}/members', [CommunityController::class, 'adminMembers'])
+        ->whereNumber('id');
+    Route::post('/communities/{id}/members', [CommunityController::class, 'adminAddMember'])
+        ->whereNumber('id');
+    Route::delete('/communities/{community}/members/{user}', [CommunityController::class, 'adminRemoveMember']);
+    Route::get('/communities/{id}/member-history', [CommunityController::class, 'adminMemberHistory'])
+        ->whereNumber('id');
+    Route::get('/communities/{id}/member-requests', [CommunityController::class, 'adminMemberRequests'])
+        ->whereNumber('id');
+    Route::post('/member-requests/{id}/approve', [CommunityController::class, 'approveMemberRequest'])
+        ->whereNumber('id');
+    Route::post('/member-requests/{id}/reject', [CommunityController::class, 'rejectMemberRequest'])
+        ->whereNumber('id');
+    Route::get('/communities/{id}/cubes', [CommunityController::class, 'cubes'])
         ->whereNumber('id');
 
     // Event routes

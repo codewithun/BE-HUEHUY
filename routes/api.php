@@ -46,6 +46,11 @@ Route::get('/unauthorized', fn() => response()->json([
  */
 Route::get('/healthz', fn() => ['ok' => true]);
 
+// Handle CORS preflight OPTIONS requests for all API routes to prevent 405
+Route::options('/{any}', function () {
+    return response('', 204);
+})->where('any', '.*');
+
 /**
  * Script / Cron hooks
  */
@@ -199,6 +204,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/account', [AuthController::class, 'account']);
     Route::get('/account-authenticated', [AuthController::class, 'account']);
 
+
+    /**
+     * =======================
+     * ADMIN: Communities management (defined in admin.php)
+     * =======================
+     */
     // 👇 route privat, pakai auth supaya bisa baca Bearer token
     Route::get('/communities/{id}', [CommunityController::class, 'show'])->whereNumber('id');
 
@@ -350,30 +361,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // atau    /api/admin/users?roles[]=admin&roles[]=manager_tenant&paginate=all
         Route::get('/users', [AdminUserController::class, 'index']);
 
-        // === COMMUNITIES CRUD (Admin) ===
-        Route::get('/communities', [CommunityController::class, 'index']);
-        Route::post('/communities', [CommunityController::class, 'store']);
-        Route::put('/communities/{id}', [CommunityController::class, 'update'])->whereNumber('id');
-        Route::delete('/communities/{id}', [CommunityController::class, 'destroy'])->whereNumber('id');
-        Route::get('/communities/{id}/cubes', [CommunityController::class, 'cubes']);
-
-
-        // +++ NEW: ADMIN members +++
-        Route::get('/communities/{id}/members', [CommunityController::class, 'adminMembers'])->whereNumber('id');
-        // +++ NEW: ADMIN remove specific member from community +++
-        Route::delete('/communities/{community}/members/{user}', [CommunityController::class, 'adminRemoveMember'])
-            ->whereNumber(['community', 'user']);
-        Route::post('/communities/{community}/members', [CommunityController::class, 'adminAddMember']);
-
-
-
-        // +++ NEW: ADMIN member requests management +++
-        Route::get('/communities/{id}/member-requests', [CommunityController::class, 'adminMemberRequests'])->whereNumber('id');
-        Route::post('/member-requests/{id}/approve', [CommunityController::class, 'approveMemberRequest'])->whereNumber('id');
-        Route::post('/member-requests/{id}/reject', [CommunityController::class, 'rejectMemberRequest'])->whereNumber('id');
-
-        // +++ NEW: ADMIN member history +++
-        Route::get('/communities/{id}/member-history', [CommunityController::class, 'adminMemberHistory'])->whereNumber('id');
+        // Communities routes are defined in admin.php
 
         // === AD CATEGORIES CRUD (Admin) ===
         Route::get('/ad-categories', [AdCategoryController::class, 'index']);

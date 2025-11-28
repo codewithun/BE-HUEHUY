@@ -61,7 +61,6 @@ class CommunityController extends Controller
                 ->count('ads.id');
         } catch (\Throwable $e) {
             Log::error('Failed to count active promos per community', [
-                'community_id' => $communityId,
                 'error' => $e->getMessage(),
             ]);
             return 0;

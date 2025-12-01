@@ -380,7 +380,8 @@ Route::middleware('auth:sanctum')->group(function () {
         // === CUBE TYPES CRUD (Admin) ===
         Route::apiResource('cube-types', CubeTypeController::class);
 
-        Route::get('/communities/{communityId}/cubes', [CubeController::class, 'cubesByCommunity']);
+        // Removed conflicting route - cubes by community is handled in admin.php
+        // Route::get('/communities/{communityId}/cubes', [CubeController::class, 'cubesByCommunity']);
 
         // Stream file QR (with CORS via api middleware)
         Route::get('/qrcodes/{id}/file', [\App\Http\Controllers\Admin\QrcodeController::class, 'file'])

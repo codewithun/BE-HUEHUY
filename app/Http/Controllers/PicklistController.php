@@ -34,6 +34,7 @@ class PicklistController extends Controller
     public function cube(Request $request)
     {
         $corporate = $request->get('corporate_id', '');
+        $communityId = $request->get('community_id', '');
         $search = $request->get('search', '');
 
         $query = Cube::leftJoin('cube_types', 'cube_types.id', 'cubes.cube_type_id')
@@ -43,19 +44,32 @@ class PicklistController extends Controller
                 'cubes.picture_source'
             ]);
 
+        // Filter berdasarkan corporate_id
         if ($corporate && $corporate != '') {
             $query->where('cubes.corporate_id', $corporate);
         }
 
-        if ($search && $search != '') {
-            $query->where(function($q) use ($search) {
-                $q->where('cubes.code', 'LIKE', "%{$search}%")
-                  ->orWhere('cube_types.name', 'LIKE', "%{$search}%")
-                  ->orWhere('cube_types.code', 'LIKE', "%{$search}%");
+        // Filter berdasarkan community_id (untuk widget komunitas)
+        // Hanya ambil cube yang ada di dynamic_content komunitas tersebut
+        if ($communityId && $communityId != '') {
+            $query->whereExists(function ($q) use ($communityId) {
+                $q->select(DB::raw(1))
+                    ->from('dynamic_content_cubes')
+                    ->join('dynamic_contents', 'dynamic_contents.id', '=', 'dynamic_content_cubes.dynamic_content_id')
+                    ->whereColumn('dynamic_content_cubes.cube_id', 'cubes.id')
+                    ->where('dynamic_contents.community_id', $communityId);
             });
         }
 
-        return $query->orderBy('cubes.code')->get();
+        if ($search && $search != '') {
+            $query->where(function ($q) use ($search) {
+                $q->where('cubes.code', 'LIKE', "%{$search}%")
+                    ->orWhere('cube_types.name', 'LIKE', "%{$search}%")
+                    ->orWhere('cube_types.code', 'LIKE', "%{$search}%");
+            });
+        }
+
+        return $query->distinct()->orderBy('cubes.code')->get();
     }
 
     public function adCategory()
@@ -73,7 +87,7 @@ class PicklistController extends Controller
         $corporate = $request->get('corporate_id', '');
 
         if ($corporate && $corporate != '') {
-            
+
             return World::where('corporate_id', $corporate)
                 ->get(['id as value', 'name as label']);
         }

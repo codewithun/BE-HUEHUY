@@ -69,6 +69,7 @@ Route::prefix('corporate')->name('corporate.')->group(function () {
     Route::post('/member-requests/{id}/approve', [\App\Http\Controllers\Corporate\CommunityController::class, 'approveMemberRequest'])->whereNumber('id');
     Route::post('/member-requests/{id}/reject', [\App\Http\Controllers\Corporate\CommunityController::class, 'rejectMemberRequest'])->whereNumber('id');
     Route::get('/communities/{id}/member-history', [\App\Http\Controllers\Corporate\CommunityController::class, 'getMemberHistory'])->whereNumber('id');
+    Route::get('/communities/{id}/cubes', [\App\Http\Controllers\Corporate\CommunityController::class, 'cubes'])->whereNumber('id');
     Route::delete('/communities/{communityId}/members/{userId}', [\App\Http\Controllers\Corporate\CommunityController::class, 'removeMember'])
         ->whereNumber('communityId')
         ->whereNumber('userId');

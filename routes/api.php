@@ -31,6 +31,7 @@ use App\Http\Controllers\Admin\ChatController;
 use App\Http\Controllers\Admin\CubeTypeController;
 
 use App\Http\Controllers\Corporate\CommunityController as CorporateCommunityController;
+use App\Http\Controllers\Api\ViewTrackerController;
 use App\Models\Corporate;
 
 /**
@@ -140,6 +141,23 @@ Route::prefix('huehuy-ads-public')->group(function () {
     Route::get('/', [HuehuyAdController::class, 'index']);
     Route::get('/cube-ads', [HuehuyAdController::class, 'cube_ad']);
     Route::get('/{id}', [HuehuyAdController::class, 'show'])->whereNumber('id');
+});
+
+/**
+ * =======================
+ * VIEW TRACKING (Public & Authenticated)
+ * =======================
+ */
+Route::prefix('track')->group(function () {
+    Route::post('/cube/{cubeId}', [ViewTrackerController::class, 'trackCube']);
+    Route::post('/ad/{adId}', [ViewTrackerController::class, 'trackAd']);
+});
+
+Route::prefix('views')->group(function () {
+    Route::get('/cube/{cubeId}', [ViewTrackerController::class, 'getCubeViews']);
+    Route::get('/ad/{adId}', [ViewTrackerController::class, 'getAdViews']);
+    Route::post('/cubes/batch', [ViewTrackerController::class, 'getBatchCubeViews']);
+    Route::post('/ads/batch', [ViewTrackerController::class, 'getBatchAdViews']);
 });
 
 /**

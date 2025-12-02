@@ -2,7 +2,7 @@
 
 return [
 
-    /*
+  /*
     |--------------------------------------------------------------------------
     | Cross-Origin Resource Sharing (CORS) Configuration
     |--------------------------------------------------------------------------
@@ -15,23 +15,25 @@ return [
     |
     */
 
-    'paths' => ['api/*','sanctum/csrf-cookie','login','logout'],
+  'paths' => ['api/*', 'sanctum/csrf-cookie', 'login', 'logout'],
 
-    'allowed_methods' => ['*'],
+  'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['https://fe-huehuy-ig6k.vercel.app',
-  'https://app-159-223-48-146.nip.io',
-  'http://localhost:3000',
-  'http://localhost:5173',],
+  'allowed_origins' => [
+    'https://fe-huehuy-ig6k.vercel.app',
+    'https://app-159-223-48-146.nip.io',
+    'http://localhost:3000',
+    'http://localhost:5173',
+  ],
 
-    'allowed_origins_patterns' => [],
+  'allowed_origins_patterns' => [],
 
-    'allowed_headers' => ['Content-Type','X-Requested-With','X-XSRF-TOKEN','Authorization','Accept','Origin'],
+  'allowed_headers' => ['Content-Type', 'X-Requested-With', 'X-XSRF-TOKEN', 'Authorization', 'Accept', 'Origin', 'X-Session-ID'],
 
-    'exposed_headers' => [],
+  'exposed_headers' => [],
 
-    'max_age' => 0,
+  'max_age' => 0,
 
-    'supports_credentials' => true,
+  'supports_credentials' => true,
 
 ];

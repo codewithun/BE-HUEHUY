@@ -7,6 +7,7 @@ use App\Services\ViewTrackerService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Laravel\Sanctum\PersonalAccessToken;
+use Illuminate\Support\Facades\Log;
 
 class ViewTrackerController extends Controller
 {
@@ -24,17 +25,42 @@ class ViewTrackerController extends Controller
     {
         $token = $request->bearerToken();
 
+        Log::info('ViewTracker Auth Debug', [
+            'has_bearer_token' => $token ? 'yes' : 'no',
+            'token_preview' => $token ? substr($token, 0, 20) . '...' : null,
+            'auth_header' => $request->header('Authorization'),
+        ]);
+
         if (!$token) {
             return null;
         }
 
         try {
             $accessToken = PersonalAccessToken::findToken($token);
-            if ($accessToken && !$accessToken->tokenable->trashed()) {
-                return $accessToken->tokenable->id;
+
+            Log::info('Token Lookup', [
+                'found' => $accessToken ? 'yes' : 'no',
+                'user_id' => $accessToken ? $accessToken->tokenable_id : null,
+                'tokenable_type' => $accessToken ? $accessToken->tokenable_type : null,
+            ]);
+
+            if ($accessToken) {
+                $user = $accessToken->tokenable;
+
+                Log::info('User Check', [
+                    'user_exists' => $user ? 'yes' : 'no',
+                    'user_id' => $user ? $user->id : null,
+                ]);
+
+                if ($user) {
+                    return $user->id;
+                }
             }
         } catch (\Exception $e) {
-            // Token invalid, continue as guest
+            Log::error('ViewTracker Auth Error', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
         }
 
         return null;

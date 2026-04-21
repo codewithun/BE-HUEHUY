@@ -18,6 +18,50 @@ use Illuminate\Validation\Rule;
 class AdController extends Controller
 {
     /**
+     * Normalize media path from request/model so invalid placeholders are not persisted.
+     */
+    private function normalizeMediaPath($value): ?string
+    {
+        if ($value === null) return null;
+
+        if (is_numeric($value) && (int) $value === 0) {
+            return null;
+        }
+
+        $raw = is_string($value) ? trim($value) : (string) $value;
+        if ($raw === '' || $raw === '0' || strtolower($raw) === 'null') {
+            return null;
+        }
+
+        // Never persist fallback avatar marker into DB media columns.
+        if (preg_match('/(^|\/)default-avatar\.png(\?.*)?$/i', $raw)) {
+            return null;
+        }
+
+        // If FE sends absolute storage URL, convert back to relative storage path.
+        if (preg_match('/^https?:\/\//i', $raw)) {
+            $path = parse_url($raw, PHP_URL_PATH) ?: '';
+            if (strpos($path, '/storage/') !== false) {
+                $raw = ltrim(str_replace('/storage/', '', $path), '/');
+            }
+        }
+
+        // Prevent duplicated storage prefix when serialized back via model toArray().
+        if (strpos($raw, 'storage/') === 0) {
+            $raw = substr($raw, 8);
+        }
+
+        return $raw === '' ? null : $raw;
+    }
+
+    private function sanitizeAdMediaFields(Ad $model): void
+    {
+        foreach (['picture_source', 'image_1', 'image_2', 'image_3'] as $field) {
+            $model->{$field} = $this->normalizeMediaPath($model->{$field});
+        }
+    }
+
+    /**
      * Normalize various date string formats to 'Y-m-d'.
      * Supports:
      * - d-m-Y (e.g., 17-10-2025)
@@ -466,6 +510,9 @@ class AdController extends Controller
         ) {
             $model->image_updated_at = now();
         }
+
+        // Final guard against invalid values (e.g. 0) in production payloads.
+        $this->sanitizeAdMediaFields($model);
 
         // * If start or finish validate filled
         if ($request->start_validate) {
@@ -947,6 +994,9 @@ class AdController extends Controller
         ) {
             $model->image_updated_at = now();
         }
+
+        // Final guard against invalid values (e.g. 0) in production payloads.
+        $this->sanitizeAdMediaFields($model);
 
         // ? Executing
         try {

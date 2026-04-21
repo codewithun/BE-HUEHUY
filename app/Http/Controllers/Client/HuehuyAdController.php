@@ -8,13 +8,14 @@ use Illuminate\Http\Request;
 
 class HuehuyAdController extends Controller
 {
-    public function index(Request $request) {
+    public function index(Request $request)
+    {
         $sortBy = $request->get("sortBy", "created_at");
         $sortDirection = $request->get("sortDirection", "DESC");
 
         $model = new HuehuyAd();
         $query = HuehuyAd::query();
-        
+
         if ($request->get("search") != "") {
             $query = $this->search($request->get("search"), $model, $query);
         } else {
@@ -34,10 +35,11 @@ class HuehuyAdController extends Controller
         ]);
     }
 
-    public function cube_ad(Request $request) {
+    public function cube_ad(Request $request)
+    {
         $model = new HuehuyAd();
         $query = HuehuyAd::query();
-        
+
         if ($request->get("search") != "") {
             $query = $this->search($request->get("search"), $model, $query);
         } else {
@@ -50,8 +52,8 @@ class HuehuyAdController extends Controller
             ->inRandomOrder()
             ->first();
 
-        if($query->limit) {
-            $query->limit -= 1; 
+        if ($query && $query->limit) {
+            $query->limit -= 1;
             $query->save();
         }
 
@@ -62,7 +64,8 @@ class HuehuyAdController extends Controller
         ]);
     }
 
-    public function show($id) {
+    public function show($id)
+    {
         $query = HuehuyAd::findOrFail($id);
 
 

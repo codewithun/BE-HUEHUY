@@ -2502,7 +2502,7 @@ class CubeController extends Controller
     {
         try {
             $cube = \App\Models\Cube::with([
-                'user:id,name,phone',
+                'user:id,name,phone,picture_source',
                 'corporate:id,name,phone',
                 'tags:id,cube_id,address,map_lat,map_lng,link',
                 'ads' => function ($q) {

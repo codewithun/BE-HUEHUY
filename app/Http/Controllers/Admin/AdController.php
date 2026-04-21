@@ -898,13 +898,9 @@ class AdController extends Controller
                 $request->input('ads[image_1]');
 
             if ($existingImage1 && is_string($existingImage1)) {
-                // Convert URL back to storage path
-                if (strpos($existingImage1, '/storage/') !== false) {
-                    $model->image_1 = str_replace('/storage/', '', parse_url($existingImage1, PHP_URL_PATH));
-                } elseif (strpos($existingImage1, 'storage/') === 0) {
-                    $model->image_1 = substr($existingImage1, 8); // Remove 'storage/' prefix
-                } else {
-                    $model->image_1 = $existingImage1;
+                $normalizedImage1 = $this->normalizeMediaPath($existingImage1);
+                if ($normalizedImage1 !== null) {
+                    $model->image_1 = $normalizedImage1;
                 }
             }
         }
@@ -936,13 +932,9 @@ class AdController extends Controller
                 $request->input('ads[image_2]');
 
             if ($existingImage2 && is_string($existingImage2)) {
-                // Convert URL back to storage path
-                if (strpos($existingImage2, '/storage/') !== false) {
-                    $model->image_2 = str_replace('/storage/', '', parse_url($existingImage2, PHP_URL_PATH));
-                } elseif (strpos($existingImage2, 'storage/') === 0) {
-                    $model->image_2 = substr($existingImage2, 8); // Remove 'storage/' prefix
-                } else {
-                    $model->image_2 = $existingImage2;
+                $normalizedImage2 = $this->normalizeMediaPath($existingImage2);
+                if ($normalizedImage2 !== null) {
+                    $model->image_2 = $normalizedImage2;
                 }
             }
         }
@@ -974,13 +966,9 @@ class AdController extends Controller
                 $request->input('ads[image_3]');
 
             if ($existingImage3 && is_string($existingImage3)) {
-                // Convert URL back to storage path
-                if (strpos($existingImage3, '/storage/') !== false) {
-                    $model->image_3 = str_replace('/storage/', '', parse_url($existingImage3, PHP_URL_PATH));
-                } elseif (strpos($existingImage3, 'storage/') === 0) {
-                    $model->image_3 = substr($existingImage3, 8); // Remove 'storage/' prefix
-                } else {
-                    $model->image_3 = $existingImage3;
+                $normalizedImage3 = $this->normalizeMediaPath($existingImage3);
+                if ($normalizedImage3 !== null) {
+                    $model->image_3 = $normalizedImage3;
                 }
             }
         }

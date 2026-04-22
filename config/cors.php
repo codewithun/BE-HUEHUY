@@ -24,6 +24,8 @@ return [
     'https://app-159-223-48-146.nip.io',
     'http://localhost:3000',
     'http://localhost:5173',
+    'http://192.168.56.1:3000',
+    'http://192.168.56.1:9000',
   ],
 
   'allowed_origins_patterns' => [],

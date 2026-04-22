@@ -20,6 +20,7 @@ return [
   'allowed_methods' => ['*'],
 
   'allowed_origins' => [
+    'https://v2.huehuy.com',
     'https://fe-huehuy-ig6k.vercel.app',
     'https://app-159-223-48-146.nip.io',
     'http://localhost:3000',

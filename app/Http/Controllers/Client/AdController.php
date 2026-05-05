@@ -653,7 +653,13 @@ class AdController extends Controller
                     'id' => $ad->id,
                     'title' => $ad->title,
                     'description' => $ad->description,
-                    'image' => $ad->image_1 ?: $ad->picture_source,
+                    'image' => $ad->image_1
+                    ? url('storage/' . ltrim($ad->image_1, '/'))
+                    : (
+                    $ad->picture_source
+                    ? url('storage/' . ltrim($ad->picture_source, '/'))
+                    : null
+                ),
                     'merchant' => $ad->cube->name ?? 'Merchant',
                     'ad' => $ad,
                     'cube' => $ad->cube,

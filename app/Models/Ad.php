@@ -174,34 +174,37 @@ class Ad extends Model
         return $this->hasMany(SummaryGrab::class, 'ad_id', 'id');
     }
 
-    public function toArray()
-    {
-        $toArray = parent::toArray();
+ public function toArray()
+{
+    $toArray = parent::toArray();
 
-        $formatImage = function ($path) {
-            if (!$path) return null;
-        
-            // kalau sudah full URL
-            if (filter_var($path, FILTER_VALIDATE_URL)) {
-                return $path;
-            }
-        
-            // hapus storage/ kalau sudah ada
-            $path = ltrim($path, '/');
-        
-            if (str_starts_with($path, 'storage/')) {
-                $path = substr($path, 8);
-            }
-        
-            return asset('storage/' . $path);
-        };
-        
-        $toArray['picture_source'] = $formatImage($this->picture_source);
-        $toArray['image_1'] = $formatImage($this->image_1);
-        $toArray['image_2'] = $formatImage($this->image_2);
-        $toArray['image_3'] = $formatImage($this->image_3);
-        return $toArray;
-    }
+    $formatImage = function ($path) {
+        if (!$path || $path === "0") {
+            return null;
+        }
+
+        // kalau sudah full URL
+        if (filter_var($path, FILTER_VALIDATE_URL)) {
+            return $path;
+        }
+
+        $path = ltrim($path, '/');
+
+        // hilangkan storage/ dobel
+        if (str_starts_with($path, 'storage/')) {
+            $path = substr($path, 8);
+        }
+
+        return asset('storage/' . $path);
+    };
+
+    $toArray['picture_source'] = $formatImage($this->picture_source);
+    $toArray['image_1'] = $formatImage($this->image_1);
+    $toArray['image_2'] = $formatImage($this->image_2);
+    $toArray['image_3'] = $formatImage($this->image_3);
+
+    return $toArray;
+}
 
     public function getRemainingStockAttribute()
     {

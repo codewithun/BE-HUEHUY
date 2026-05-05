@@ -89,8 +89,6 @@ class CubeController extends Controller
                             )
                         )) AS SIGNED) AS total_remaining'),
                 ])
-                    ->leftJoin('summary_grabs', 'summary_grabs.ad_id', 'ads.id')
-                    ->groupBy('ads.id')
                     ->get();
             },
             'ads.ad_category',

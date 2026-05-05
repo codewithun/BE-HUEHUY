@@ -1,0 +1,1260 @@
+[1mdiff --git a/app/Http/Controllers/Admin/CommunityController.php b/app/Http/Controllers/Admin/CommunityController.php[m
+[1mindex 6968017..127e5cb 100644[m
+[1m--- a/app/Http/Controllers/Admin/CommunityController.php[m
+[1m+++ b/app/Http/Controllers/Admin/CommunityController.php[m
+[36m@@ -6,7 +6,7 @@[m
+ use App\Models\Community;[m
+ use App\Models\CommunityMembership;[m
+ use App\Models\User;[m
+[31m-use App\Models\Promo; // TAMBAH: Import model Promo[m
+[32m+[m[32muse App\Models\Promo;[m
+ use Illuminate\Http\Request;[m
+ use Illuminate\Support\Facades\Storage;[m
+ use Illuminate\Support\Facades\Validator;[m
+[36m@@ -18,7 +18,7 @@[m
+ class CommunityController extends Controller[m
+ {[m
+     /**[m
+[31m-     * TAMBAH: Method helper untuk hitung promo aktif per komunitas[m
+[32m+[m[32m     * Helper: Hitung promo aktif per komunitas[m
+      */[m
+     private function getActivePromosCount($communityId)[m
+     {[m
+[36m@@ -33,29 +33,26 @@[m [mprivate function getActivePromosCount($communityId)[m
+                 ->where('ads.status', 'active')[m
+                 ->where(function ($q) {[m
+                     $now = now();[m
+[31m-[m
+[31m-                    // Gunakan kolom start_validate dan finish_validate[m
+                     $q->where(function ($qqq) use ($now) {[m
+                         $qqq->whereNotNull('ads.start_validate')[m
+                             ->whereNotNull('ads.finish_validate')[m
+                             ->where('ads.start_validate', '<=', $now)[m
+                             ->where('ads.finish_validate', '>=', $now);[m
+                     })[m
+[31m-                        ->orWhere(function ($qqq) use ($now) {[m
+[31m-                            $qqq->whereNotNull('ads.start_validate')[m
+[31m-                                ->whereNull('ads.finish_validate')[m
+[31m-                                ->where('ads.start_validate', '<=', $now);[m
+[31m-                        })[m
+[31m-                        ->orWhere(function ($qqq) use ($now) {[m
+[31m-                            $qqq->whereNull('ads.start_validate')[m
+[31m-                                ->whereNotNull('ads.finish_validate')[m
+[31m-                                ->where('ads.finish_validate', '>=', $now);[m
+[31m-                        })[m
+[31m-                        ->orWhere(function ($qqq) {[m
+[31m-                            // Kalau tidak punya batas waktu sama sekali, tetap dianggap aktif[m
+[31m-                            $qqq->whereNull('ads.start_validate')[m
+[31m-                                ->whereNull('ads.finish_validate');[m
+[31m-                        });[m
+[32m+[m[32m                    ->orWhere(function ($qqq) use ($now) {[m
+[32m+[m[32m                        $qqq->whereNotNull('ads.start_validate')[m
+[32m+[m[32m                            ->whereNull('ads.finish_validate')[m
+[32m+[m[32m                            ->where('ads.start_validate', '<=', $now);[m
+[32m+[m[32m                    })[m
+[32m+[m[32m                    ->orWhere(function ($qqq) use ($now) {[m
+[32m+[m[32m                        $qqq->whereNull('ads.start_validate')[m
+[32m+[m[32m                            ->whereNotNull('ads.finish_validate')[m
+[32m+[m[32m                            ->where('ads.finish_validate', '>=', $now);[m
+[32m+[m[32m                    })[m
+[32m+[m[32m                    ->orWhere(function ($qqq) {[m
+[32m+[m[32m                        $qqq->whereNull('ads.start_validate')[m
+[32m+[m[32m                            ->whereNull('ads.finish_validate');[m
+[32m+[m[32m                    });[m
+                 })[m
+                 ->distinct('ads.id')[m
+                 ->count('ads.id');[m
+[36m@@ -67,23 +64,19 @@[m [mprivate function getActivePromosCount($communityId)[m
+         }[m
+     }[m
+ [m
+[31m-[m
+     /**[m
+[31m-     * Helper: bentuk payload untuk FE (prefill + readable)[m
+[32m+[m[32m     * Helper: Shape payload untuk FE[m
+      */[m
+     private function shapeCommunity($community, ?int $viewerUserId = null)[m
+     {[m
+[31m-        // pastikan relasi ke-load[m
+         $community->loadMissing(['adminContacts.role', 'corporate']);[m
+ [m
+[31m-        // hitung members (aktif)[m
+         $members = $community->members_count[m
+             ?? (int) DB::table('community_memberships')[m
+                 ->where('community_id', $community->id)[m
+                 ->where('status', 'active')[m
+                 ->count();[m
+ [m
+[31m-        // isJoined untuk viewer (opsional kalau ada auth)[m
+         $isJoined = false;[m
+         $hasRequested = false;[m
+         if ($viewerUserId) {[m
+[36m@@ -92,8 +85,6 @@[m [mprivate function shapeCommunity($community, ?int $viewerUserId = null)[m
+                 ->where('user_id', $viewerUserId)[m
+                 ->where('status', 'active')[m
+                 ->exists();[m
+[31m-[m
+[31m-            // flag pengajuan pending[m
+             $hasRequested = DB::table('community_memberships')[m
+                 ->where('community_id', $community->id)[m
+                 ->where('user_id', $viewerUserId)[m
+[36m@@ -101,7 +92,6 @@[m [mprivate function shapeCommunity($community, ?int $viewerUserId = null)[m
+                 ->exists();[m
+         }[m
+ [m
+[31m-        // TAMBAH: Hitung activePromos untuk komunitas ini[m
+         $activePromos = $this->getActivePromosCount($community->id);[m
+ [m
+         return [[m
+[36m@@ -109,8 +99,6 @@[m [mprivate function shapeCommunity($community, ?int $viewerUserId = null)[m
+             'name'          => $community->name,[m
+             'description'   => $community->description,[m
+             'logo'          => $community->logo,[m
+[31m-[m
+[31m-            // Tambahan untuk FE[m
+             'corporate_id'  => $community->corporate_id,[m
+             'corporate'     => $community->corporate ? [[m
+                 'id'   => $community->corporate->id,[m
+[36m@@ -120,17 +108,14 @@[m [mprivate function shapeCommunity($community, ?int $viewerUserId = null)[m
+             'bg_color_2'    => $community->bg_color_2,[m
+             'world_type'    => $community->world_type,[m
+             'is_active'     => (bool) $community->is_active,[m
+[31m-[m
+             'category'      => $community->category ?? null,[m
+             'privacy'       => $community->privacy ?? null,[m
+             'is_verified'   => (bool) ($community->is_verified ?? false),[m
+             'isVerified'    => (bool) ($community->is_verified ?? false),[m
+[31m-[m
+             'members'       => $members,[m
+             'isJoined'      => (bool) $isJoined,[m
+             'hasRequested'  => (bool) $hasRequested,[m
+             'activePromos'  => $activePromos,[m
+[31m-[m
+             'admin_contact_ids' => $community->adminContacts->pluck('id')->values(),[m
+             'admin_contacts'    => $community->adminContacts->map(function ($u) {[m
+                 return [[m
+[36m@@ -141,45 +126,36 @@[m [mprivate function shapeCommunity($community, ?int $viewerUserId = null)[m
+                     'role'  => ['name' => optional($u->role)->name],[m
+                 ];[m
+             })->values(),[m
+[31m-[m
+             'created_at'    => $community->created_at,[m
+             'updated_at'    => $community->updated_at,[m
+         ];[m
+     }[m
+ [m
+     /**[m
+[31m-     * List all communities (public/admin)[m
+[32m+[m[32m     * GET /api/admin/communities[m
+      */[m
+     public function index(Request $request)[m
+     {[m
+         $query = Community::query()->with(['adminContacts.role', 'corporate']);[m
+ [m
+[31m-        // Optional: search[m
+         if ($request->filled('search')) {[m
+             $query->where('name', 'like', '%' . $request->search . '%');[m
+         }[m
+ [m
+[31m-        // Optional: sorting[m
+         if ($request->filled('sortBy') && $request->filled('sortDirection')) {[m
+             $query->orderBy($request->sortBy, $request->sortDirection);[m
+         } else {[m
+             $query->latest();[m
+         }[m
+ [m
+[31m-        // Pagination optional[m
+         if ($request->has('paginate')) {[m
+             $paginate = (int) ($request->paginate ?? 10);[m
+             $data = $query->paginate($paginate);[m
+[31m-[m
+             $viewerId = optional($request->user())->id;[m
+             $items = collect($data->items())->map(function ($c) use ($viewerId) {[m
+                 return $this->shapeCommunity($c, $viewerId);[m
+             });[m
+[31m-[m
+[31m-            return response()->json([[m
+[31m-                'data' => $items,[m
+[31m-                'total_row' => $data->total(),[m
+[31m-            ]);[m
+[32m+[m[32m            return response()->json(['data' => $items, 'total_row' => $data->total()]);[m
+         }[m
+ [m
+         $viewerId = optional($request->user())->id;[m
+[36m@@ -187,21 +163,16 @@[m [mpublic function index(Request $request)[m
+             return $this->shapeCommunity($c, $viewerId);[m
+         });[m
+ [m
+[31m-        return response()->json([[m
+[31m-            'data' => $data,[m
+[31m-            'total_row' => $data->count(),[m
+[31m-        ]);[m
+[32m+[m[32m        return response()->json(['data' => $data, 'total_row' => $data->count()]);[m
+     }[m
+ [m
+     /**[m
+[31m-     * GET /api/communities/with-membership (auth required)[m
+[31m-     * Return communities with fields: members (count) & isJoined (bool) & activePromos (count)[m
+[32m+[m[32m     * GET /api/communities/with-membership[m
+      */[m
+     public function withMembership(Request $request)[m
+     {[m
+         try {[m
+             $user = $request->user();[m
+[31m-[m
+             $communities = Community::with('adminContacts.role')[m
+                 ->select([[m
+                     'communities.*',[m
+[36m@@ -216,7 +187,6 @@[m [mpublic function withMembership(Request $request)[m
+                 ->get();[m
+ [m
+             $shaped = $communities->map(function ($c) use ($user) {[m
+[31m-                // agar shapeCommunity pakai members_count yang sudah dipilih[m
+                 $c->members_count = (int) ($c->members_count ?? 0);[m
+                 return $this->shapeCommunity($c, $user->id);[m
+             });[m
+[36m@@ -247,7 +217,6 @@[m [mpublic function join(Request $request, $id)[m
+                 ], 422);[m
+             }[m
+ [m
+[31m-            // Tambahkan ini 👇[m
+             $privacy = strtolower($community->privacy ?? $community->world_type ?? 'public');[m
+             if ($privacy === 'pribadi' || $privacy === 'private') {[m
+                 return response()->json([[m
+[36m@@ -258,7 +227,6 @@[m [mpublic function join(Request $request, $id)[m
+             }[m
+ [m
+             $membership = $community->addMember($user);[m
+[31m-[m
+             \App\Models\MemberHistory::create([[m
+                 'community_id' => $community->id,[m
+                 'user_id' => $user->id,[m
+[36m@@ -285,8 +253,6 @@[m [mpublic function join(Request $request, $id)[m
+ [m
+     /**[m
+      * POST /api/communities/{id}/join-request[m
+[31m-     * Untuk komunitas private: buat membership status 'pending'.[m
+[31m-     * Untuk public (privacy != 'private'): langsung join agar kompatibel dengan FE.[m
+      */[m
+     public function requestJoin(Request $request, $id)[m
+     {[m
+[36m@@ -294,7 +260,6 @@[m [mpublic function requestJoin(Request $request, $id)[m
+             $user = $request->user();[m
+             $community = Community::findOrFail($id);[m
+ [m
+[31m-            // Jika sudah active member[m
+             if ($community->hasMember($user)) {[m
+                 return response()->json([[m
+                     'success' => true,[m
+[36m@@ -307,16 +272,11 @@[m [mpublic function requestJoin(Request $request, $id)[m
+                 ], 200);[m
+             }[m
+ [m
+[31m-            // Determine privacy: prefer explicit privacy, else fall back to world_type/type[m
+             $rawPrivacy   = strtolower((string)($community->privacy ?? ''));[m
+             $rawWorldType = strtolower((string)($community->world_type ?? $community->type ?? ''));[m
+[31m-            // Map FE value 'pribadi' -> backend 'private'[m
+[31m-            if ($rawWorldType === 'pribadi') {[m
+[31m-                $rawWorldType = 'private';[m
+[31m-            }[m
+[32m+[m[32m            if ($rawWorldType === 'pribadi') $rawWorldType = 'private';[m
+             $privacy = $rawPrivacy !== '' ? $rawPrivacy : ($rawWorldType !== '' ? $rawWorldType : 'public');[m
+ [m
+[31m-            // Jika bukan private, langsung join (fallback behavior)[m
+             if ($privacy !== 'private') {[m
+                 $membership = $community->addMember($user);[m
+                 return response()->json([[m
+[36m@@ -331,11 +291,7 @@[m [mpublic function requestJoin(Request $request, $id)[m
+                 ], 200);[m
+             }[m
+ [m
+[31m-            // Komunitas private → buat/pertahankan status pending[m
+[31m-            $membership = $community->memberships()[m
+[31m-                ->where('user_id', $user->id)[m
+[31m-                ->first();[m
+[31m-[m
+[32m+[m[32m            $membership = $community->memberships()->where('user_id', $user->id)->first();[m
+             if ($membership) {[m
+                 if ($membership->status === 'active') {[m
+                     return response()->json([[m
+[36m@@ -349,18 +305,13 @@[m [mpublic function requestJoin(Request $request, $id)[m
+                         ],[m
+                     ], 200);[m
+                 }[m
+[31m-                // set ke pending jika belum[m
+                 if ($membership->status !== 'pending') {[m
+[31m-                    $membership->update([[m
+[31m-                        'status' => 'pending',[m
+[31m-                        // joined_at dibiarkan null ketika pending[m
+[31m-                    ]);[m
+[32m+[m[32m                    $membership->update(['status' => 'pending']);[m
+                 }[m
+             } else {[m
+                 $membership = $community->memberships()->create([[m
+                     'user_id' => $user->id,[m
+                     'status'  => 'pending',[m
+[31m-                    // joined_at: null saat pending[m
+                 ]);[m
+             }[m
+ [m
+[36m@@ -390,51 +341,29 @@[m [mpublic function leave(Request $request, $id)[m
+         try {[m
+             $user = $request->user();[m
+             $community = Community::findOrFail($id);[m
+[31m-[m
+             $membership = CommunityMembership::where('community_id', $community->id)[m
+[31m-                ->where('user_id', $user->id)[m
+[31m-                ->first();[m
+[32m+[m[32m                ->where('user_id', $user->id)->first();[m
+ [m
+             if (!$membership) {[m
+[31m-                return response()->json([[m
+[31m-                    'success' => false,[m
+[31m-                    'message' => 'Anda bukan anggota komunitas ini',[m
+[31m-                ], 422);[m
+[32m+[m[32m                return response()->json(['success' => false, 'message' => 'Anda bukan anggota komunitas ini'], 422);[m
+             }[m
+ [m
+[31m-            // Jika user sebelumnya hanya pending, anggap membatalkan permintaan[m
+             if ($membership->status === 'pending') {[m
+                 $membership->update(['status' => 'removed']);[m
+[31m-                return response()->json([[m
+[31m-                    'success' => true,[m
+[31m-                    'message' => 'Permintaan bergabung dibatalkan',[m
+[31m-                ]);[m
+[32m+[m[32m                return response()->json(['success' => true, 'message' => 'Permintaan bergabung dibatalkan']);[m
+             }[m
+ [m
+             if ($membership->status === 'active') {[m
+[31m-                // Tandai sebagai keluar (biarkan row tetap ada)[m
+[31m-                $membership->update([[m
+[31m-                    'status' => 'left',[m
+[31m-                ]);[m
+[31m-[m
+[31m-                // Tambah history: left (b)[m
+[32m+[m[32m                $membership->update(['status' => 'left']);[m
+                 \App\Models\MemberHistory::create([[m
+                     'community_id' => $community->id,[m
+                     'user_id'      => $user->id,[m
+                     'action'       => 'left',[m
+                 ]);[m
+[31m-[m
+[31m-                return response()->json([[m
+[31m-                    'success' => true,[m
+[31m-                    'message' => 'Berhasil keluar dari komunitas',[m
+[31m-                ]);[m
+[32m+[m[32m                return response()->json(['success' => true, 'message' => 'Berhasil keluar dari komunitas']);[m
+             }[m
+ [m
+[31m-            // Sudah tidak aktif (left/removed), anggap idempotent[m
+[31m-            return response()->json([[m
+[31m-                'success' => true,[m
+[31m-                'message' => 'Status anda sudah bukan anggota aktif',[m
+[31m-            ]);[m
+[32m+[m[32m            return response()->json(['success' => true, 'message' => 'Status anda sudah bukan anggota aktif']);[m
+         } catch (\Exception $e) {[m
+             return response()->json([[m
+                 'success' => false,[m
+[36m@@ -444,14 +373,12 @@[m [mpublic function leave(Request $request, $id)[m
+     }[m
+ [m
+     /**[m
+[31m-     * GET /api/communities/user-communities (auth)[m
+[31m-     * Return only communities joined by user[m
+[32m+[m[32m     * GET /api/communities/user-communities[m
+      */[m
+     public function userCommunities(Request $request)[m
+     {[m
+         try {[m
+             $user = $request->user();[m
+[31m-[m
+             $communities = Community::with('adminContacts.role')[m
+                 ->select([[m
+                     'communities.*',[m
+[36m@@ -472,10 +399,7 @@[m [mpublic function userCommunities(Request $request)[m
+                 return $payload;[m
+             });[m
+ [m
+[31m-            return response()->json([[m
+[31m-                'success' => true,[m
+[31m-                'data' => $shaped,[m
+[31m-            ]);[m
+[32m+[m[32m            return response()->json(['success' => true, 'data' => $shaped]);[m
+         } catch (\Exception $e) {[m
+             return response()->json([[m
+                 'success' => false,[m
+[36m@@ -486,23 +410,18 @@[m [mpublic function userCommunities(Request $request)[m
+ [m
+     /**[m
+      * GET /api/admin/communities/{id}/members[m
+[31m-     * Daftar member untuk admin (auth)[m
+      */[m
+     public function adminMembers(Request $request, $id)[m
+     {[m
+         $community = Community::findOrFail($id);[m
+[32m+[m[32m        $q = CommunityMembership::with(['user.role'])->where('community_id', $community->id);[m
+ [m
+[31m-        $q = CommunityMembership::with(['user.role'])[m
+[31m-            ->where('community_id', $community->id);[m
+[31m-[m
+[31m-        // default aktif; boleh override ?status=active|pending|removed[m
+         if ($request->filled('status')) {[m
+             $q->where('status', $request->status);[m
+         } else {[m
+             $q->where('status', 'active');[m
+         }[m
+ [m
+[31m-        // search by user fields[m
+         if ($request->filled('search')) {[m
+             $s = trim($request->search);[m
+             $q->whereHas('user', function ($u) use ($s) {[m
+[36m@@ -520,175 +439,114 @@[m [mpublic function adminMembers(Request $request, $id)[m
+             $per = (int) ($request->paginate ?: 10);[m
+             $page = $q->paginate($per);[m
+             $items = collect($page->items())->map(fn($m) => [[m
+[31m-                'id'        => $m->user->id,[m
+[31m-                'name'      => $m->user->name,[m
+[31m-                'email'     => $m->user->email,[m
+[31m-                'phone'     => $m->user->phone,[m
+[31m-                'role'      => ['name' => optional($m->user->role)->name],[m
+[31m-                'joined_at' => $m->joined_at,[m
+[31m-                'status'    => $m->status,[m
+[31m-            ]);[m
+[31m-[m
+[31m-            return response()->json([[m
+[31m-                'data'      => $items->values(),[m
+[31m-                'total_row' => $page->total(),[m
+[32m+[m[32m                'id' => $m->user->id, 'name' => $m->user->name, 'email' => $m->user->email,[m
+[32m+[m[32m                'phone' => $m->user->phone, 'role' => ['name' => optional($m->user->role)->name],[m
+[32m+[m[32m                'joined_at' => $m->joined_at, 'status' => $m->status,[m
+             ]);[m
+[32m+[m[32m            return response()->json(['data' => $items->values(), 'total_row' => $page->total()]);[m
+         }[m
+ [m
+         $rows = $q->get()->map(fn($m) => [[m
+[31m-            'id'        => $m->user->id,[m
+[31m-            'name'      => $m->user->name,[m
+[31m-            'email'     => $m->user->email,[m
+[31m-            'phone'     => $m->user->phone,[m
+[31m-            'role'      => ['name' => optional($m->user->role)->name],[m
+[31m-            'joined_at' => $m->joined_at,[m
+[31m-            'status'    => $m->status,[m
+[32m+[m[32m            'id' => $m->user->id, 'name' => $m->user->name, 'email' => $m->user->email,[m
+[32m+[m[32m            'phone' => $m->user->phone, 'role' => ['name' => optional($m->user->role)->name],[m
+[32m+[m[32m            'joined_at' => $m->joined_at, 'status' => $m->status,[m
+         ]);[m
+ [m
+[31m-        return response()->json([[m
+[31m-            'data'      => $rows->values(),[m
+[31m-            'total_row' => $rows->count(),[m
+[31m-        ]);[m
+[32m+[m[32m        return response()->json(['data' => $rows->values(), 'total_row' => $rows->count()]);[m
+     }[m
+ [m
+     /**[m
+      * POST /api/admin/communities/{id}/members[m
+[31m-     * Tambahkan anggota baru ke komunitas oleh admin.[m
+      */[m
+     public function adminAddMember(Request $request, $id)[m
+     {[m
+         $community = Community::findOrFail($id);[m
+[32m+[m[32m        $validated = $request->validate(['user_identifier' => 'required|string']);[m
+ [m
+[31m-        $validated = $request->validate([[m
+[31m-            'user_identifier' => 'required|string',[m
+[31m-        ]);[m
+[31m-[m
+[31m-        // Bisa pakai ID atau Email[m
+         $user = User::where('email', $validated['user_identifier'])[m
+[31m-            ->orWhere('id', $validated['user_identifier'])[m
+[31m-            ->first();[m
+[32m+[m[32m            ->orWhere('id', $validated['user_identifier'])->first();[m
+ [m
+         if (!$user) {[m
+[31m-            return response()->json([[m
+[31m-                'success' => false,[m
+[31m-                'message' => 'User tidak ditemukan',[m
+[31m-            ], 404);[m
+[32m+[m[32m            return response()->json(['success' => false, 'message' => 'User tidak ditemukan'], 404);[m
+         }[m
+ [m
+         $membership = CommunityMembership::updateOrCreate([m
+[31m-            [[m
+[31m-                'community_id' => $community->id,[m
+[31m-                'user_id' => $user->id,[m
+[31m-            ],[m
+[31m-            [[m
+[31m-                'status' => 'active',[m
+[31m-                'joined_at' => now(),[m
+[31m-            ][m
+[32m+[m[32m            ['community_id' => $community->id, 'user_id' => $user->id],[m
+[32m+[m[32m            ['status' => 'active', 'joined_at' => now()][m
+         );[m
+ [m
+[31m-        // Tambah history: joined (admin menambahkan member)[m
+         \App\Models\MemberHistory::create([[m
+[31m-            'community_id' => $community->id,[m
+[31m-            'user_id'      => $user->id,[m
+[31m-            'action'       => 'joined',[m
+[32m+[m[32m            'community_id' => $community->id, 'user_id' => $user->id, 'action' => 'joined',[m
+         ]);[m
+ [m
+         return response()->json([[m
+[31m-            'success' => true,[m
+[31m-            'message' => 'Anggota berhasil ditambahkan',[m
+[31m-            'data' => [[m
+[31m-                'user' => [[m
+[31m-                    'id' => $user->id,[m
+[31m-                    'name' => $user->name,[m
+[31m-                    'email' => $user->email,[m
+[31m-                ],[m
+[31m-                'membership' => $membership,[m
+[31m-            ],[m
+[32m+[m[32m            'success' => true, 'message' => 'Anggota berhasil ditambahkan',[m
+[32m+[m[32m            'data' => ['user' => ['id' => $user->id, 'name' => $user->name, 'email' => $user->email], 'membership' => $membership],[m
+         ], 201);[m
+     }[m
+ [m
+[31m-[m
+     /**[m
+      * GET /api/communities/{id}/members[m
+      */[m
+     public function publicMembers(Request $request, $id)[m
+     {[m
+         $community = Community::findOrFail($id);[m
+[31m-[m
+[31m-        $q = CommunityMembership::with(['user.role'])[m
+[31m-            ->where('community_id', $community->id)[m
+[31m-            ->where('status', 'active');[m
+[32m+[m[32m        $q = CommunityMembership::with(['user.role'])->where('community_id', $community->id)->where('status', 'active');[m
+ [m
+         if ($request->filled('search')) {[m
+             $s = trim($request->search);[m
+             $q->whereHas('user', function ($u) use ($s) {[m
+[31m-                $u->where('name', 'like', "%{$s}%")[m
+[31m-                    ->orWhere('email', 'like', "%{$s}%");[m
+[32m+[m[32m                $u->where('name', 'like', "%{$s}%")->orWhere('email', 'like', "%{$s}%");[m
+             });[m
+         }[m
+ [m
+         $q->orderBy('joined_at', 'desc');[m
+[31m-[m
+         $rows = $q->get()->map(fn($m) => [[m
+[31m-            'id'        => $m->user->id,[m
+[31m-            'name'      => $m->user->name,[m
+[31m-            'email'     => $m->user->email,[m
+[31m-            'role'      => ['name' => optional($m->user->role)->name],[m
+[31m-            'joined_at' => $m->joined_at,[m
+[32m+[m[32m            'id' => $m->user->id, 'name' => $m->user->name, 'email' => $m->user->email,[m
+[32m+[m[32m            'role' => ['name' => optional($m->user->role)->name], 'joined_at' => $m->joined_at,[m
+         ]);[m
+ [m
+         return response()->json(['data' => $rows->values()]);[m
+     }[m
+ [m
+     /**[m
+[31m-     * POST /api/admin/communities[m
+[32m+[m[32m     * ✅ POST /api/admin/communities - FIXED UPLOAD LOGIC[m
+      */[m
+     public function store(Request $request)[m
+     {[m
+         try {[m
+[32m+[m[32m            // ✅ VALIDASI LEBIH FLEKSIBEL - max 10MB, mime types lengkap[m
+             $validator = Validator::make($request->all(), [[m
+                 'name'                => 'required|string|max:255',[m
+                 'description'         => 'nullable|string',[m
+[31m-                // PERBAIKI: Logo optional untuk create, hanya validasi jika ada file[m
+[31m-                'logo'                => 'nullable|file|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048',[m
+[31m-[m
+[31m-                // Tambahan field dari FE[m
+[32m+[m[32m                'logo'                => 'nullable|file|image|mimes:jpeg,png,jpg,gif,svg,webp,avif|max:10240', // 10MB[m
+                 'corporate_id'        => 'nullable|integer|exists:corporates,id',[m
+                 'bg_color_1'          => 'nullable|string|max:16',[m
+                 'bg_color_2'          => 'nullable|string|max:16',[m
+                 'world_type'          => 'nullable|string|max:50',[m
+[31m-                'type'                => 'nullable|string|max:50', // alias[m
+[31m-                // PERBAIKI: Gunakan string untuk menerima "0"/"1" dari FormData[m
+[32m+[m[32m                'type'                => 'nullable|string|max:50',[m
+                 'is_active'           => 'nullable',[m
+[31m-[m
+[31m-                // opsional lama[m
+                 'category'            => 'nullable|string|max:100',[m
+                 'privacy'             => 'nullable|in:public,private',[m
+                 'is_verified'         => 'nullable|boolean',[m
+[31m-[m
+                 'admin_contact_ids'   => 'nullable|array',[m
+                 'admin_contact_ids.*' => 'integer|exists:users,id',[m
+             ]);[m
+ [m
+             if ($validator->fails()) {[m
+[32m+[m[32m                Log::warning('Community store validation failed', ['errors' => $validator->errors()]);[m
+                 return response()->json([[m
+[31m-                    'success' => false,[m
+[31m-                    'message' => 'Validation failed',[m
+[31m-                    'errors'  => $validator->errors(),[m
+[32m+[m[32m                    'success' => false, 'message' => 'Validation failed', 'errors' => $validator->errors(),[m
+                 ], 422);[m
+             }[m
+ [m
+             $validated = $validator->validated();[m
+ [m
+[31m-            // NORMALISASI: Konversi is_active ke integer 0/1[m
+[32m+[m[32m            // Normalisasi is_active[m
+             if (array_key_exists('is_active', $validated)) {[m
+                 $isActive = $validated['is_active'];[m
+[31m-                // Handle berbagai format input dari frontend (string, bool, numeric, array checkbox)[m
+                 if (is_array($isActive)) {[m
+[31m-                    // Contoh dari checkbox FE: [1] atau ['1'][m
+[31m-                    $flat = collect($isActive)[m
+[31m-                        ->map(fn($v) => is_bool($v) ? ($v ? '1' : '0') : strtolower(trim((string) $v)))[m
+[31m-                        ->filter(fn($v) => $v !== '');[m
+[32m+[m[32m                    $flat = collect($isActive)->map(fn($v) => is_bool($v) ? ($v ? '1' : '0') : strtolower(trim((string) $v)))->filter(fn($v) => $v !== '');[m
+                     $validated['is_active'] = $flat->contains(fn($v) => in_array($v, ['1', 'true', 'on', 'yes'], true)) ? 1 : 0;[m
+                 } elseif (is_string($isActive)) {[m
+                     $validated['is_active'] = in_array(strtolower($isActive), ['1', 'true', 'on', 'yes'], true) ? 1 : 0;[m
+[36m@@ -700,73 +558,75 @@[m [mpublic function store(Request $request)[m
+                     $validated['is_active'] = 0;[m
+                 }[m
+             } else {[m
+[31m-                // Default value jika tidak ada[m
+                 $validated['is_active'] = 0;[m
+             }[m
+ [m
+[31m-            // Alias: jika 'type' ada dan world_type belum diisi[m
+             if (empty($validated['world_type']) && !empty($validated['type'])) {[m
+                 $validated['world_type'] = $validated['type'];[m
+             }[m
+             unset($validated['type']);[m
+ [m
+[31m-            // Handle logo upload - hanya jika ada file yang diupload[m
+[31m-            if ($request->hasFile('logo')) {[m
+[31m-                $validated['logo'] = $request->file('logo')->store('communities', 'public');[m
+[32m+[m[32m            // ✅ HANDLE FILE UPLOAD - ROBUST[m
+[32m+[m[32m            if ($request->hasFile('logo') && $request->file('logo')->isValid()) {[m
+[32m+[m[32m                try {[m
+[32m+[m[32m                    $file = $request->file('logo');[m
+[32m+[m[32m                    $path = $file->store('communities', 'public');[m
+[32m+[m[32m                    if (!$path) {[m
+[32m+[m[32m                        throw new \Exception('Failed to store file');[m
+[32m+[m[32m                    }[m
+[32m+[m[32m                    $validated['logo'] = $path;[m
+[32m+[m[32m                    Log::info('Logo uploaded successfully', ['path' => $path, 'original_name' => $file->getClientOriginalName()]);[m
+[32m+[m[32m                } catch (\Exception $e) {[m
+[32m+[m[32m                    Log::error('File upload failed', ['error' => $e->getMessage(), 'file' => $request->file('logo')?->getClientOriginalName()]);[m
+[32m+[m[32m                    return response()->json([[m
+[32m+[m[32m                        'success' => false, 'message' => 'Failed to upload logo: ' . $e->getMessage(),[m
+[32m+[m[32m                    ], 500);[m
+[32m+[m[32m                }[m
+             } else {[m
+[31m-                // Jika tidak ada file, hapus dari validated agar tidak disimpan[m
+                 unset($validated['logo']);[m
+             }[m
+ [m
+             DB::beginTransaction();[m
+[31m-[m
+             $community = Community::create(collect($validated)->except(['admin_contact_ids'])->toArray());[m
+ [m
+[31m-            // Sinkronisasi admin contacts (pivot)[m
+             $ids = collect($validated['admin_contact_ids'] ?? [])->unique()->values();[m
+             if ($ids->isNotEmpty()) {[m
+                 $community->adminContacts()->sync($ids->all());[m
+             }[m
+ [m
+             DB::commit();[m
+[32m+[m[32m            Log::info('Community created', ['community_id' => $community->id]);[m
+ [m
+             return response()->json([[m
+[31m-                'success' => true,[m
+[31m-                'message' => 'Community created successfully',[m
+[32m+[m[32m                'success' => true, 'message' => 'Community created successfully',[m
+                 'data'    => $this->shapeCommunity($community->fresh()),[m
+             ], 201);[m
+[32m+[m
+         } catch (\Exception $e) {[m
+             DB::rollBack();[m
+[32m+[m[32m            Log::error('Community store failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);[m
+             return response()->json([[m
+[31m-                'success' => false,[m
+[31m-                'message' => 'Failed to create community: ' . $e->getMessage(),[m
+[32m+[m[32m                'success' => false, 'message' => 'Failed to create community: ' . $e->getMessage(),[m
+             ], 500);[m
+         }[m
+     }[m
+ [m
+     /**[m
+[31m-     * GET /api/communities/{id} (public)[m
+[32m+[m[32m     * GET /api/communities/{id}[m
+      */[m
+     public function show(Request $request, $id)[m
+     {[m
+         try {[m
+             $community = Community::with('adminContacts.role')->findOrFail($id);[m
+             $payload = $this->shapeCommunity($community, optional($request->user())->id);[m
+[31m-[m
+[31m-            return response()->json([[m
+[31m-                'success' => true,[m
+[31m-                'data'    => $payload,[m
+[31m-            ]);[m
+[32m+[m[32m            return response()->json(['success' => true, 'data' => $payload]);[m
+         } catch (\Exception $e) {[m
+[31m-            return response()->json([[m
+[31m-                'success' => false,[m
+[31m-                'message' => 'Community not found',[m
+[31m-            ], 404);[m
+[32m+[m[32m            return response()->json(['success' => false, 'message' => 'Community not found'], 404);[m
+         }[m
+     }[m
+ [m
+     /**[m
+[31m-     * PUT /api/admin/communities/{id}[m
+[32m+[m[32m     * ✅ PUT /api/admin/communities/{id} - FIXED UPLOAD LOGIC[m
+      */[m
+     public function update(Request $request, $id)[m
+     {[m
+[36m@@ -774,61 +634,48 @@[m [mpublic function update(Request $request, $id)[m
+             $validator = Validator::make($request->all(), [[m
+                 'name'                => 'required|string|max:255',[m
+                 'description'         => 'nullable|string',[m
+[31m-                // PERBAIKI: Untuk update, logo bisa kosong atau file[m
+[31m-                'logo'                => 'nullable',[m
+[31m-[m
+[31m-                // Tambahan field dari FE[m
+[32m+[m[32m                'logo'                => 'nullable', // ✅ Validasi file dilakukan terpisah jika ada upload[m
+                 'corporate_id'        => 'nullable|integer|exists:corporates,id',[m
+                 'bg_color_1'          => 'nullable|string|max:16',[m
+                 'bg_color_2'          => 'nullable|string|max:16',[m
+                 'world_type'          => 'nullable|string|max:50',[m
+[31m-                'type'                => 'nullable|string|max:50', // alias[m
+[31m-                // PERBAIKI: Gunakan string untuk menerima "0"/"1" dari FormData[m
+[32m+[m[32m                'type'                => 'nullable|string|max:50',[m
+                 'is_active'           => 'nullable',[m
+[31m-[m
+[31m-                // opsional lama[m
+                 'category'            => 'nullable|string|max:100',[m
+                 'privacy'             => 'nullable|in:public,private',[m
+                 'is_verified'         => 'nullable|boolean',[m
+[31m-[m
+                 'admin_contact_ids'   => 'nullable|array',[m
+                 'admin_contact_ids.*' => 'integer|exists:users,id',[m
+             ]);[m
+ [m
+[31m-            // Validasi khusus untuk logo jika berupa file upload[m
+[32m+[m[32m            // ✅ Validasi file hanya jika ada upload[m
+             if ($request->hasFile('logo')) {[m
+                 $logoValidator = Validator::make($request->all(), [[m
+[31m-                    'logo' => 'file|image|mimes:jpeg,png,jpg,gif,svg,webp|max:2048'[m
+[32m+[m[32m                    'logo' => 'file|image|mimes:jpeg,png,jpg,gif,svg,webp,avif|max:10240'[m
+                 ]);[m
+[31m-[m
+                 if ($logoValidator->fails()) {[m
+[32m+[m[32m                    Log::warning('Logo validation failed on update', ['errors' => $logoValidator->errors()]);[m
+                     return response()->json([[m
+[31m-                        'success' => false,[m
+[31m-                        'message' => 'Logo validation failed',[m
+[31m-                        'errors'  => $logoValidator->errors(),[m
+[32m+[m[32m                        'success' => false, 'message' => 'Logo validation failed', 'errors' => $logoValidator->errors(),[m
+                     ], 422);[m
+                 }[m
+             }[m
+ [m
+             if ($validator->fails()) {[m
+[32m+[m[32m                Log::warning('Community update validation failed', ['errors' => $validator->errors()]);[m
+                 return response()->json([[m
+[31m-                    'success' => false,[m
+[31m-                    'message' => 'Validation failed',[m
+[31m-                    'errors'  => $validator->errors(),[m
+[32m+[m[32m                    'success' => false, 'message' => 'Validation failed', 'errors' => $validator->errors(),[m
+                 ], 422);[m
+             }[m
+ [m
+             $community = Community::findOrFail($id);[m
+             $validated = $validator->validated();[m
+ [m
+[31m-            // NORMALISASI: Konversi is_active ke integer 0/1[m
+[32m+[m[32m            // Normalisasi is_active[m
+             if (array_key_exists('is_active', $validated)) {[m
+                 $isActive = $validated['is_active'];[m
+[31m-                // Handle berbagai format input dari frontend (string, bool, numeric, array checkbox)[m
+                 if (is_array($isActive)) {[m
+[31m-                    $flat = collect($isActive)[m
+[31m-                        ->map(fn($v) => is_bool($v) ? ($v ? '1' : '0') : strtolower(trim((string) $v)))[m
+[31m-                        ->filter(fn($v) => $v !== '');[m
+[32m+[m[32m                    $flat = collect($isActive)->map(fn($v) => is_bool($v) ? ($v ? '1' : '0') : strtolower(trim((string) $v)))->filter(fn($v) => $v !== '');[m
+                     $validated['is_active'] = $flat->contains(fn($v) => in_array($v, ['1', 'true', 'on', 'yes'], true)) ? 1 : 0;[m
+                 } elseif (is_string($isActive)) {[m
+                     $validated['is_active'] = in_array(strtolower($isActive), ['1', 'true', 'on', 'yes'], true) ? 1 : 0;[m
+[36m@@ -836,12 +683,9 @@[m [mpublic function update(Request $request, $id)[m
+                     $validated['is_active'] = $isActive ? 1 : 0;[m
+                 } elseif (is_numeric($isActive)) {[m
+                     $validated['is_active'] = (int) $isActive > 0 ? 1 : 0;[m
+[31m-                } else {[m
+[31m-                    $validated['is_active'] = 0;[m
+                 }[m
+             }[m
+ [m
+[31m-            // Alias: map 'type' ke 'world_type' jika perlu[m
+             if (empty($validated['world_type']) && !empty($validated['type'])) {[m
+                 $validated['world_type'] = $validated['type'];[m
+             }[m
+[36m@@ -849,39 +693,52 @@[m [mpublic function update(Request $request, $id)[m
+ [m
+             DB::beginTransaction();[m
+ [m
+[31m-            // Handle logo upload / replace[m
+[31m-            if ($request->hasFile('logo')) {[m
+[31m-                if ($community->logo && Storage::disk('public')->exists($community->logo)) {[m
+[31m-                    Storage::disk('public')->delete($community->logo);[m
+[32m+[m[32m            // ✅ HANDLE LOGO UPLOAD/REPLACE[m
+[32m+[m[32m            if ($request->hasFile('logo') && $request->file('logo')->isValid()) {[m
+[32m+[m[32m                try {[m
+[32m+[m[32m                    // Delete old logo[m
+[32m+[m[32m                    if ($community->logo && Storage::disk('public')->exists($community->logo)) {[m
+[32m+[m[32m                        Storage::disk('public')->delete($community->logo);[m
+[32m+[m[32m                        Log::info('Old logo deleted', ['path' => $community->logo]);[m
+[32m+[m[32m                    }[m
+[32m+[m[32m                    $file = $request->file('logo');[m
+[32m+[m[32m                    $path = $file->store('communities', 'public');[m
+[32m+[m[32m                    if (!$path) throw new \Exception('Failed to store file');[m
+[32m+[m[32m                    $validated['logo'] = $path;[m
+[32m+[m[32m                    Log::info('Logo updated', ['path' => $path]);[m
+[32m+[m[32m                } catch (\Exception $e) {[m
+[32m+[m[32m                    DB::rollBack();[m
+[32m+[m[32m                    Log::error('Logo update failed', ['error' => $e->getMessage()]);[m
+[32m+[m[32m                    return response()->json([[m
+[32m+[m[32m                        'success' => false, 'message' => 'Failed to upload logo: ' . $e->getMessage(),[m
+[32m+[m[32m                    ], 500);[m
+                 }[m
+[31m-                $validated['logo'] = $request->file('logo')->store('communities', 'public');[m
+             } elseif (is_string($request->input('logo'))) {[m
+                 $validated['logo'] = $request->input('logo');[m
+             } else {[m
+                 unset($validated['logo']);[m
+             }[m
+ [m
+[31m-            // Update fields utama[m
+             $community->update(collect($validated)->except(['admin_contact_ids'])->toArray());[m
+ [m
+[31m-            // Sinkronisasi admin contacts bila ada di request[m
+             if ($request->has('admin_contact_ids')) {[m
+                 $ids = collect($validated['admin_contact_ids'] ?? [])->unique()->values();[m
+                 $community->adminContacts()->sync($ids->all());[m
+             }[m
+ [m
+             DB::commit();[m
+[32m+[m[32m            Log::info('Community updated', ['community_id' => $community->id]);[m
+ [m
+             return response()->json([[m
+[31m-                'success' => true,[m
+[31m-                'message' => 'Community updated successfully',[m
+[32m+[m[32m                'success' => true, 'message' => 'Community updated successfully',[m
+                 'data'    => $this->shapeCommunity($community->fresh()),[m
+             ]);[m
+[32m+[m
+         } catch (\Exception $e) {[m
+             DB::rollBack();[m
+[32m+[m[32m            Log::error('Community update failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);[m
+             return response()->json([[m
+[31m-                'success' => false,[m
+[31m-                'message' => 'Failed to update community: ' . $e->getMessage(),[m
+[32m+[m[32m                'success' => false, 'message' => 'Failed to update community: ' . $e->getMessage(),[m
+             ], 500);[m
+         }[m
+     }[m
+[36m@@ -893,238 +750,124 @@[m [mpublic function destroy($id)[m
+     {[m
+         try {[m
+             $community = Community::findOrFail($id);[m
+[31m-[m
+             if ($community->logo && Storage::disk('public')->exists($community->logo)) {[m
+                 Storage::disk('public')->delete($community->logo);[m
+             }[m
+[31m-[m
+             $community->delete();[m
+[31m-[m
+[31m-            return response()->json([[m
+[31m-                'success' => true,[m
+[31m-                'message' => 'Community deleted successfully',[m
+[31m-            ]);[m
+[32m+[m[32m            Log::info('Community deleted', ['community_id' => $id]);[m
+[32m+[m[32m            return response()->json(['success' => true, 'message' => 'Community deleted successfully']);[m
+         } catch (\Exception $e) {[m
+[31m-            return response()->json([[m
+[31m-                'success' => false,[m
+[31m-                'message' => 'Failed to delete community: ' . $e->getMessage(),[m
+[31m-            ], 500);[m
+[32m+[m[32m            Log::error('Community delete failed', ['error' => $e->getMessage()]);[m
+[32m+[m[32m            return response()->json(['success' => false, 'message' => 'Failed to delete community: ' . $e->getMessage()], 500);[m
+         }[m
+     }[m
+ [m
+     /**[m
+      * GET /api/admin/communities/{id}/member-requests[m
+[31m-     * Daftar membership berstatus pending (butuh approval admin)[m
+      */[m
+     public function adminMemberRequests(Request $request, $id)[m
+     {[m
+         $community = Community::findOrFail($id);[m
+[31m-[m
+         $rows = CommunityMembership::with(['user.role'])[m
+[31m-            ->where('community_id', $community->id)[m
+[31m-            ->where('status', 'pending')[m
+[31m-            ->orderBy('created_at', 'desc')[m
+[31m-            ->get()[m
+[32m+[m[32m            ->where('community_id', $community->id)->where('status', 'pending')[m
+[32m+[m[32m            ->orderBy('created_at', 'desc')->get()[m
+             ->map(function ($m) {[m
+                 return [[m
+[31m-                    // gunakan id membership sebagai requestId untuk approve/reject[m
+[31m-                    'id'         => $m->id,[m
+[31m-                    'user'       => [[m
+[31m-                        'id'    => $m->user->id,[m
+[31m-                        'name'  => $m->user->name,[m
+[31m-                        'email' => $m->user->email,[m
+[31m-                        'phone' => $m->user->phone,[m
+[31m-                        'role'  => ['name' => optional($m->user->role)->name],[m
+[31m-                    ],[m
+[31m-                    'status'     => $m->status,          // 'pending'[m
+[31m-                    'created_at' => $m->created_at,      // dipakai FE untuk "Diminta pada"[m
+[31m-                    'message'    => null,                // placeholder bila nanti ada pesan[m
+[32m+[m[32m                    'id' => $m->id,[m
+[32m+[m[32m                    'user' => ['id' => $m->user->id, 'name' => $m->user->name, 'email' => $m->user->email, 'phone' => $m->user->phone, 'role' => ['name' => optional($m->user->role)->name]],[m
+[32m+[m[32m                    'status' => $m->status, 'created_at' => $m->created_at, 'message' => null,[m
+                 ];[m
+             });[m
+[31m-[m
+[31m-        return response()->json([[m
+[31m-            'success' => true,[m
+[31m-            'data'    => $rows->values(),[m
+[31m-            'total_row' => $rows->count(),[m
+[31m-        ]);[m
+[32m+[m[32m        return response()->json(['success' => true, 'data' => $rows->values(), 'total_row' => $rows->count()]);[m
+     }[m
+ [m
+     /**[m
+      * POST /api/admin/member-requests/{id}/approve[m
+[31m-     * Ubah pending -> active, set joined_at[m
+      */[m
+     public function approveMemberRequest(Request $request, $id)[m
+     {[m
+         $membership = CommunityMembership::with('user')->findOrFail($id);[m
+[32m+[m[32m        if ($membership->status === 'active') return response()->json(['success' => true, 'message' => 'Sudah aktif'], 200);[m
+[32m+[m[32m        if ($membership->status !== 'pending') return response()->json(['success' => false, 'message' => 'Status tidak valid'], 422);[m
+ [m
+[31m-        if ($membership->status === 'active') {[m
+[31m-            return response()->json(['success' => true, 'message' => 'Sudah aktif'], 200);[m
+[31m-        }[m
+[31m-[m
+[31m-        if ($membership->status !== 'pending') {[m
+[31m-            return response()->json(['success' => false, 'message' => 'Status tidak valid'], 422);[m
+[31m-        }[m
+[31m-[m
+[31m-        $membership->update([[m
+[31m-            'status'    => 'active',[m
+[31m-            'joined_at' => now(),[m
+[31m-        ]);[m
+[31m-[m
+[31m-        // Tambah history: joined (d)[m
+[31m-        \App\Models\MemberHistory::create([[m
+[31m-            'community_id' => $membership->community_id,[m
+[31m-            'user_id'      => $membership->user_id,[m
+[31m-            'action'       => 'joined',[m
+[31m-        ]);[m
+[31m-[m
+[31m-        return response()->json([[m
+[31m-            'success' => true,[m
+[31m-            'message' => 'Permintaan disetujui',[m
+[31m-        ]);[m
+[32m+[m[32m        $membership->update(['status' => 'active', 'joined_at' => now()]);[m
+[32m+[m[32m        \App\Models\MemberHistory::create(['community_id' => $membership->community_id, 'user_id' => $membership->user_id, 'action' => 'joined']);[m
+[32m+[m[32m        return response()->json(['success' => true, 'message' => 'Permintaan disetujui']);[m
+     }[m
+ [m
+     /**[m
+      * POST /api/admin/member-requests/{id}/reject[m
+[31m-     * Ubah pending -> removed (atau hapus baris jika diinginkan)[m
+      */[m
+     public function rejectMemberRequest(Request $request, $id)[m
+     {[m
+         $membership = CommunityMembership::with('user')->findOrFail($id);[m
+[31m-[m
+[31m-        if ($membership->status !== 'pending') {[m
+[31m-            return response()->json(['success' => false, 'message' => 'Status tidak valid'], 422);[m
+[31m-        }[m
+[31m-[m
+[31m-        $membership->update([[m
+[31m-            'status' => 'removed',[m
+[31m-        ]);[m
+[31m-[m
+[31m-        return response()->json([[m
+[31m-            'success' => true,[m
+[31m-            'message' => 'Permintaan ditolak',[m
+[31m-        ]);[m
+[32m+[m[32m        if ($membership->status !== 'pending') return response()->json(['success' => false, 'message' => 'Status tidak valid'], 422);[m
+[32m+[m[32m        $membership->update(['status' => 'removed']);[m
+[32m+[m[32m        return response()->json(['success' => true, 'message' => 'Permintaan ditolak']);[m
+     }[m
+ [m
+     /**[m
+      * GET /api/admin/communities/{id}/member-history[m
+[31m-     * Histori sederhana dari membership: joined (active.joined_at) dan left (removed.updated_at)[m
+      */[m
+     public function adminMemberHistory(Request $request, $id)[m
+     {[m
+[31m-        $community = \App\Models\Community::findOrFail($id);[m
+[31m-[m
+[32m+[m[32m        $community = Community::findOrFail($id);[m
+         $history = \App\Models\MemberHistory::with('user')[m
+[31m-            ->where('community_id', $community->id)[m
+[31m-            ->orderByDesc('created_at')[m
+[31m-            ->get()[m
+[32m+[m[32m            ->where('community_id', $community->id)->orderByDesc('created_at')->get()[m
+             ->map(fn($h) => [[m
+[31m-                'user_id'    => $h->user_id,[m
+[31m-                'user_name'  => $h->user->name ?? '-',[m
+[31m-                'action'     => $h->action,[m
+[31m-                'created_at' => $h->created_at,[m
+[31m-                'user'       => [[m
+[31m-                    'name'  => $h->user->name ?? '-',[m
+[31m-                    'email' => $h->user->email ?? '-',[m
+[31m-                ],[m
+[31m-            ])[m
+[31m-            ->values();[m
+[31m-[m
+[31m-        return response()->json([[m
+[31m-            'success'   => true,[m
+[31m-            'data'      => $history,[m
+[31m-            'total_row' => $history->count(),[m
+[31m-        ]);[m
+[32m+[m[32m                'user_id' => $h->user_id, 'user_name' => $h->user->name ?? '-', 'action' => $h->action,[m
+[32m+[m[32m                'created_at' => $h->created_at, 'user' => ['name' => $h->user->name ?? '-', 'email' => $h->user->email ?? '-'],[m
+[32m+[m[32m            ])->values();[m
+[32m+[m[32m        return response()->json(['success' => true, 'data' => $history, 'total_row' => $history->count()]);[m
+     }[m
+ [m
+[31m-[m
+[31m-[m
+     /**[m
+      * DELETE /api/admin/communities/{community}/members/{user}[m
+[31m-     * Hapus anggota komunitas (oleh admin)[m
+      */[m
+     public function adminRemoveMember($communityId, $userId)[m
+     {[m
+         try {[m
+             $community = Community::findOrFail($communityId);[m
+[32m+[m[32m            $membership = CommunityMembership::where('community_id', $communityId)->where('user_id', $userId)->first();[m
+[32m+[m[32m            if (!$membership) return response()->json(['success' => false, 'message' => 'Member tidak ditemukan dalam komunitas ini'], 404);[m
+ [m
+[31m-            $membership = CommunityMembership::where('community_id', $communityId)[m
+[31m-                ->where('user_id', $userId)[m
+[31m-                ->first();[m
+[31m-[m
+[31m-            if (!$membership) {[m
+[31m-                return response()->json([[m
+[31m-                    'success' => false,[m
+[31m-                    'message' => 'Member tidak ditemukan dalam komunitas ini',[m
+[31m-                ], 404);[m
+[31m-            }[m
+[31m-[m
+[31m-            // ubah status jadi removed atau hapus langsung[m
+[31m-            $membership->update([[m
+[31m-                'status' => 'removed',[m
+[31m-            ]);[m
+[31m-[m
+[31m-            // Tambah history: removed (c)[m
+[31m-            \App\Models\MemberHistory::create([[m
+[31m-                'community_id' => (int) $communityId,[m
+[31m-                'user_id'      => (int) $userId,[m
+[31m-                'action'       => 'removed',[m
+[31m-            ]);[m
+[31m-[m
+[31m-            return response()->json([[m
+[31m-                'success' => true,[m
+[31m-                'message' => 'Member berhasil dihapus dari komunitas',[m
+[31m-            ]);[m
+[32m+[m[32m            $membership->update(['status' => 'removed']);[m
+[32m+[m[32m            \App\Models\MemberHistory::create(['community_id' => (int) $communityId, 'user_id' => (int) $userId, 'action' => 'removed']);[m
+[32m+[m[32m            return response()->json(['success' => true, 'message' => 'Member berhasil dihapus dari komunitas']);[m
+         } catch (\Exception $e) {[m
+[31m-            return response()->json([[m
+[31m-                'success' => false,[m
+[31m-                'message' => 'Gagal menghapus member: ' . $e->getMessage(),[m
+[31m-            ], 500);[m
+[32m+[m[32m            return response()->json(['success' => false, 'message' => 'Gagal menghapus member: ' . $e->getMessage()], 500);[m
+         }[m
+     }[m
+ [m
+[32m+[m[32m    /**[m
+[32m+[m[32m     * GET /api/admin/communities/{id}/cubes[m
+[32m+[m[32m     */[m
+     public function cubes($communityId)[m
+     {[m
+         try {[m
+             $dynamicContents = \App\Models\DynamicContent::with([[m
+[31m-                'dynamic_content_cubes.cube' => function ($q) {[m
+[31m-                    // Include status so we can determine active/inactive correctly[m
+[31m-                    $q->select('id', 'code', 'status', 'created_at');[m
+[31m-                },[m
+[32m+[m[32m                'dynamic_content_cubes.cube' => function ($q) { $q->select('id', 'code', 'status', 'created_at'); },[m
+                 'dynamic_content_cubes.cube.ads'[m
+[31m-            ])[m
+[31m-                ->where('community_id', $communityId)[m
+[31m-                ->get();[m
+[32m+[m[32m            ])->where('community_id', $communityId)->get();[m
+ [m
+[31m-            // Flatten cubes dari seluruh dynamic_content komunitas ini[m
+             $cubes = $dynamicContents->flatMap(function ($dc) {[m
+                 return $dc->dynamic_content_cubes->map(function ($dcc) use ($dc) {[m
+                     $cube = $dcc->cube;[m
+                     $statusRaw = $cube->status ?? null;[m
+                     $isActive = in_array(strtolower((string)$statusRaw), ['1', 'true', 'active'], true);[m
+[31m-[m
+                     return [[m
+[31m-                        'id'          => $cube->id ?? null,[m
+[31m-                        'name'        => $cube->ads->first()->title ?? "Cube #" . ($cube->code ?? '-'),[m
+[31m-                        'widget_name' => $dc->name ?? '-',[m
+[31m-                        'widget_type' => $dc->type ?? '-',[m
+[31m-                        'type'        => $isActive ? 'active' : 'inactive', // ✅ fix di sini[m
+[31m-                        'created_at'  => $cube->created_at,[m
+[32m+[m[32m                        'id' => $cube->id ?? null,[m
+[32m+[m[32m                        'name' => $cube->ads->first()->title ?? "Cube #" . ($cube->code ?? '-'),[m
+[32m+[m[32m                        'widget_name' => $dc->name ?? '-', 'widget_type' => $dc->type ?? '-',[m
+[32m+[m[32m                        'type' => $isActive ? 'active' : 'inactive', 'created_at' => $cube->created_at,[m
+                     ];[m
+                 });[m
+             })->filter(fn($c) => $c['id'] !== null)->values();[m
+ [m
+[31m-[m
+[31m-            return response()->json([[m
+[31m-                'message' => $cubes->isEmpty() ? 'empty data' : 'success',[m
+[31m-                'data' => $cubes,[m
+[31m-                'total_row' => $cubes->count(),[m
+[31m-            ]);[m
+[32m+[m[32m            return response()->json(['message' => $cubes->isEmpty() ? 'empty data' : 'success', 'data' => $cubes, 'total_row' => $cubes->count()]);[m
+         } catch (\Throwable $e) {[m
+[31m-            Log::error('Gagal mengambil kubus komunitas', [[m
+[31m-                'error' => $e->getMessage(),[m
+[31m-                'trace' => $e->getTraceAsString(),[m
+[31m-            ]);[m
+[32m+[m[32m            Log::error('Gagal mengambil kubus komunitas', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);[m
+             return response()->json(['message' => 'server error'], 500);[m
+         }[m
+     }[m
+[31m-}[m
+[32m+[m[32m}[m
+\ No newline at end of file[m
+[1mdiff --git a/app/Http/Controllers/Admin/CubeController.php b/app/Http/Controllers/Admin/CubeController.php[m
+[1mindex fecae29..3ab68a9 100644[m
+[1m--- a/app/Http/Controllers/Admin/CubeController.php[m
+[1m+++ b/app/Http/Controllers/Admin/CubeController.php[m
+[36m@@ -616,8 +616,7 @@[m [mpublic function index(Request $request)[m
+                                 COALESCE((SELECT stock FROM promos WHERE code = ads.code LIMIT 1), ads.max_grab)[m
+                             )[m
+                         )) AS SIGNED) AS total_remaining'),[m
+[31m-                ])[m
+[31m-                    ->groupBy('ads.id')[m
+[32m+[m[32m                ])[m[41m                    [m
+                     ->get();[m
+             },[m
+             'ads.ad_category'[m
+[1mdiff --git a/app/Http/Controllers/Client/AdController.php b/app/Http/Controllers/Client/AdController.php[m
+[1mindex 40bb726..47a01a3 100644[m
+[1m--- a/app/Http/Controllers/Client/AdController.php[m
+[1m+++ b/app/Http/Controllers/Client/AdController.php[m
+[36m@@ -35,27 +35,29 @@[m [mpublic function getPromoRecommendation(Request $request)[m
+         }[m
+ [m
+         $model = Ad::with('cube', 'cube.cube_type', 'cube.opening_hours', 'cube.world')[m
+[31m-            ->select([[m
+[31m-                'ads.*',[m
+[31m-                // Total grab: harian -> sum hari ini, non-harian -> total keseluruhan; default 0 jika null[m
+[31m-                DB::raw('CAST(IF(ads.is_daily_grab = 1,[m
+[31m-                    COALESCE((SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id), 0),[m
+[31m-                    COALESCE(SUM(total_grab), 0)[m
+[31m-                ) AS SIGNED) AS total_grab'),[m
+[31m-                // Sisa stok: [m
+[31m-                // - unlimited -> angka besar[m
+[31m-                // - harian -> max_grab - total_grab hari ini[m
+[31m-                // - non-harian -> ambil dari promos.stock jika ada, else ads.max_grab (tanpa minus lagi karena stok dikurangi saat claim)[m
+[31m-                DB::raw('CAST(GREATEST(0, IF(ads.unlimited_grab = 1,[m
+[31m-                    9999999,[m
+[31m-                    IF(ads.is_daily_grab = 1,[m
+[31m-                        ads.max_grab - COALESCE((SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id), 0),[m
+[31m-                        COALESCE((SELECT stock FROM promos WHERE code = ads.code LIMIT 1), ads.max_grab)[m
+[32m+[m[32m    ->select([[m
+[32m+[m[32m        'ads.*',[m
+[32m+[m[32m        DB::raw('([m
+[32m+[m[32m            SELECT COALESCE(SUM(total_grab),0)[m
+[32m+[m[32m            FROM summary_grabs[m[41m [m
+[32m+[m[32m            WHERE ad_id = ads.id[m
+[32m+[m[32m        ) as total_grab'),[m
+[32m+[m
+[32m+[m[32m        DB::raw('([m
+[32m+[m[32m            CASE[m[41m [m
+[32m+[m[32m                WHEN ads.unlimited_grab = 1 THEN 9999999[m
+[32m+[m[32m                WHEN ads.is_daily_grab = 1 THEN[m[41m [m
+[32m+[m[32m                    ads.max_grab - ([m
+[32m+[m[32m                        SELECT COALESCE(SUM(total_grab),0)[m
+[32m+[m[32m                        FROM summary_grabs[m[41m [m
+[32m+[m[32m                        WHERE ad_id = ads.id[m[41m [m
+[32m+[m[32m                        AND date = CURDATE()[m
+                     )[m
+[31m-                )) AS SIGNED) AS total_remaining'),[m
+[31m-            ])[m
+[31m-            ->leftJoin('summary_grabs', 'summary_grabs.ad_id', 'ads.id')[m
+[31m-            ->leftJoin('cubes', 'cubes.id', 'ads.cube_id')[m
+[32m+[m[32m                ELSE ads.max_grab[m
+[32m+[m[32m            END[m
+[32m+[m[32m        ) as total_remaining')[m
+[32m+[m[32m    ])[m
+[32m+[m[32m    ->leftJoin('cubes', 'cubes.id', 'ads.cube_id')[m
+             ->where('cubes.status', 'active')[m
+             ->where('is_information', 0)[m
+             // ->where('cubes.is_information', '<>', '1')[m
+[36m@@ -83,7 +85,7 @@[m [mpublic function getPromoRecommendation(Request $request)[m
+             }, function ($q) {[m
+                 $q->whereNull('ads.community_id');[m
+             })[m
+[31m-            ->groupBy('ads.id')[m
+[32m+[m[32m            ->groupBy('ads.id', 'ads.cube_id')[m
+             ->orderBy('cubes.is_recommendation', 'desc')[m
+             ->inRandomOrder()[m
+             ->limit(10)[m
+[36m@@ -463,7 +465,7 @@[m [mpublic function getMenuCubes($id)[m
+             ->leftJoin('cubes', 'cubes.id', 'ads.cube_id')[m
+             ->where('cubes.status', 'active')[m
+             ->whereIn('cubes.id', $id_cubes)[m
+[31m-            ->groupBy('ads.id')[m
+[32m+[m[32m            ->groupBy('ads.id', 'ads.cube_id', 'cubes.is_recommendation')[m
+             ->inRandomOrder()[m
+             ->limit(10)[m
+             ->get();[m
+[1mdiff --git a/app/Http/Controllers/Client/CubeController.php b/app/Http/Controllers/Client/CubeController.php[m
+[1mindex 3bd4edc..da71c5a 100644[m
+[1m--- a/app/Http/Controllers/Client/CubeController.php[m
+[1m+++ b/app/Http/Controllers/Client/CubeController.php[m
+[36m@@ -89,8 +89,6 @@[m [mpublic function index(Request $request)[m
+                             )[m
+                         )) AS SIGNED) AS total_remaining'),[m
+                 ])[m
+[31m-                    ->leftJoin('summary_grabs', 'summary_grabs.ad_id', 'ads.id')[m
+[31m-                    ->groupBy('ads.id')[m
+                     ->get();[m
+             },[m
+             'ads.ad_category',[m
+[1mdiff --git a/config/cors.php b/config/cors.php[m
+[1mindex a93c00e..49d63c2 100644[m
+[1m--- a/config/cors.php[m
+[1m+++ b/config/cors.php[m
+[36m@@ -24,9 +24,10 @@[m
+     'https://fe-huehuy-ig6k.vercel.app',[m
+     'https://app-159-223-48-146.nip.io',[m
+     'http://localhost:3000',[m
+[32m+[m[32m    'http://localhost:9000',[m
+     'http://localhost:5173',[m
+[31m-    'http://192.168.56.1:3000',[m
+[31m-    'http://192.168.56.1:9000',[m
+[32m+[m[32m    'http://192.168.1.9:3000',[m
+[32m+[m[32m    'http://192.168.1.9:9000',[m
+   ],[m
+ [m
+   'allowed_origins_patterns' => [],[m

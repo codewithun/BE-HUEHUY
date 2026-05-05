@@ -35,27 +35,29 @@ class AdController extends Controller
         }
 
         $model = Ad::with('cube', 'cube.cube_type', 'cube.opening_hours', 'cube.world')
-            ->select([
-                'ads.*',
-                // Total grab: harian -> sum hari ini, non-harian -> total keseluruhan; default 0 jika null
-                DB::raw('CAST(IF(ads.is_daily_grab = 1,
-                    COALESCE((SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id), 0),
-                    COALESCE(SUM(total_grab), 0)
-                ) AS SIGNED) AS total_grab'),
-                // Sisa stok: 
-                // - unlimited -> angka besar
-                // - harian -> max_grab - total_grab hari ini
-                // - non-harian -> ambil dari promos.stock jika ada, else ads.max_grab (tanpa minus lagi karena stok dikurangi saat claim)
-                DB::raw('CAST(GREATEST(0, IF(ads.unlimited_grab = 1,
-                    9999999,
-                    IF(ads.is_daily_grab = 1,
-                        ads.max_grab - COALESCE((SELECT SUM(total_grab) FROM summary_grabs WHERE date = DATE(NOW()) AND ad_id = ads.id), 0),
-                        COALESCE((SELECT stock FROM promos WHERE code = ads.code LIMIT 1), ads.max_grab)
+    ->select([
+        'ads.*',
+        DB::raw('(
+            SELECT COALESCE(SUM(total_grab),0)
+            FROM summary_grabs 
+            WHERE ad_id = ads.id
+        ) as total_grab'),
+
+        DB::raw('(
+            CASE 
+                WHEN ads.unlimited_grab = 1 THEN 9999999
+                WHEN ads.is_daily_grab = 1 THEN 
+                    ads.max_grab - (
+                        SELECT COALESCE(SUM(total_grab),0)
+                        FROM summary_grabs 
+                        WHERE ad_id = ads.id 
+                        AND date = CURDATE()
                     )
-                )) AS SIGNED) AS total_remaining'),
-            ])
-            ->leftJoin('summary_grabs', 'summary_grabs.ad_id', 'ads.id')
-            ->leftJoin('cubes', 'cubes.id', 'ads.cube_id')
+                ELSE ads.max_grab
+            END
+        ) as total_remaining')
+    ])
+    ->leftJoin('cubes', 'cubes.id', 'ads.cube_id')
             ->where('cubes.status', 'active')
             ->where('is_information', 0)
             // ->where('cubes.is_information', '<>', '1')
@@ -83,7 +85,7 @@ class AdController extends Controller
             }, function ($q) {
                 $q->whereNull('ads.community_id');
             })
-            ->groupBy('ads.id')
+            ->groupBy('ads.id', 'ads.cube_id')
             ->orderBy('cubes.is_recommendation', 'desc')
             ->inRandomOrder()
             ->limit(10)
@@ -463,7 +465,7 @@ class AdController extends Controller
             ->leftJoin('cubes', 'cubes.id', 'ads.cube_id')
             ->where('cubes.status', 'active')
             ->whereIn('cubes.id', $id_cubes)
-            ->groupBy('ads.id')
+            ->groupBy('ads.id', 'ads.cube_id', 'cubes.is_recommendation')
             ->inRandomOrder()
             ->limit(10)
             ->get();

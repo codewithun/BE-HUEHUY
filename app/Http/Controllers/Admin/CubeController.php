@@ -616,8 +616,7 @@ class CubeController extends Controller
                                 COALESCE((SELECT stock FROM promos WHERE code = ads.code LIMIT 1), ads.max_grab)
                             )
                         )) AS SIGNED) AS total_remaining'),
-                ])
-                    ->groupBy('ads.id')
+                ])                    
                     ->get();
             },
             'ads.ad_category'

@@ -26,8 +26,8 @@ return [
     'http://localhost:3000',
     'http://localhost:9000',
     'http://localhost:5173',
-    'http://192.168.1.9:3000',
-    'http://192.168.1.9:9000',
+    'http://192.168.1.41:3000',
+    'http://192.168.1.41:9000',
   ],
 
   'allowed_origins_patterns' => [],

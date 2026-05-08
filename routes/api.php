@@ -114,7 +114,7 @@ Route::prefix('email-verification')->group(function () {
  */
 Route::prefix('qr-entry')->group(function () {
     Route::post('/register', [QrEntryController::class, 'qrRegisterAndVerify']);
-    Route::post('/verify-email', [QrEntryController::class, 'qrVerifyEmail']); // ✅ Ubah ke /verify
+    Route::post('/verify-email', [QrEntryController::class, 'qrVerifyEmail']);
     Route::get('/status', [QrEntryController::class, 'qrEntryStatus']);
 });
 
@@ -189,16 +189,10 @@ Route::get('/events/{id}', [EventController::class, 'show'])->whereNumber('id');
 /**
  * =======================
  * PUBLIC Communities (list & detail)
- * (PERHATIKAN: statis/dengan nama didefinisikan SEBELUM dinamis)
  * =======================
  */
 Route::get('/communities', [CommunityController::class, 'index']);
-// 👇 route publik, tetap ada untuk listing / tampilan tanpa login
 Route::get('/communities/public/{id}', [CommunityController::class, 'show'])->whereNumber('id');
-
-/**
- * +++ NEW: PUBLIC members fallback +++
- */
 Route::get('/communities/{id}/members', [CommunityController::class, 'publicMembers'])->whereNumber('id');
 
 /**
@@ -222,12 +216,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/account', [AuthController::class, 'account']);
     Route::get('/account-authenticated', [AuthController::class, 'account']);
 
-
-    /**
-     * =======================
-     * ADMIN: Communities management (defined in admin.php)
-     * =======================
-     */
     // 👇 route privat, pakai auth supaya bisa baca Bearer token
     Route::get('/communities/{id}', [CommunityController::class, 'show'])->whereNumber('id');
 
@@ -247,10 +235,11 @@ Route::middleware('auth:sanctum')->group(function () {
     // === Opening Hours ===
     Route::apiResource('/opening-hours', OpeningHourController::class)->only(['store', 'update', 'destroy']);
 
-    // === Grabs ===
+    // === Grabs (QR Validation Fallback) ===
     Route::prefix('grabs')->group(function () {
         Route::get('/', [GrabController::class, 'index']);
         Route::post('/', [GrabController::class, 'store']);
+        // ✅ Endpoint untuk validasi QR general (fallback jika promo/voucher endpoint tidak ada)
         Route::post('/validate', [GrabController::class, 'validateGrab']);
         Route::get('/validated-history', [GrabController::class, 'validatedHistory']);
     });
@@ -263,7 +252,6 @@ Route::middleware('auth:sanctum')->group(function () {
     // === Reports ===
     Route::apiResource('/report-content-ticket', ReportContentTicketController::class)->only(['index', 'store']);
 
-
     // === Huehuy Ads ===
     Route::prefix('huehuy-ads')->group(function () {
         Route::get('/', [HuehuyAdController::class, 'index']);
@@ -272,26 +260,21 @@ Route::middleware('auth:sanctum')->group(function () {
     });
 
     /**
-     * COMMUNITY MEMBERSHIP ENDPOINTS (statis dulu!)
+     * COMMUNITY MEMBERSHIP ENDPOINTS
      */
     Route::get('/communities/with-membership', [CommunityController::class, 'withMembership']);
     Route::get('/communities/user-communities', [CommunityController::class, 'userCommunities']);
     Route::post('/communities/{id}/join', [CommunityController::class, 'join'])->whereNumber('id');
-    // NEW: Join request (for private communities)
     Route::post('/communities/{id}/join-request', [CommunityController::class, 'requestJoin'])->whereNumber('id');
     Route::post('/communities/{id}/leave', [CommunityController::class, 'leave'])->whereNumber('id');
 
     /**
-     * Community nested resources (gunakan constraint numeric)
+     * Community nested resources
      */
     Route::prefix('communities/{communityId}')
         ->whereNumber('communityId')
         ->group(function () {
-
-            // === Events per community (FE: /communities/{id}/events)
             Route::get('/events', [EventController::class, 'indexByCommunity']);
-
-            // === Alias promo-categories -> pakai controller categories index
             Route::get('/promo-categories', [CommunityWidgetController::class, 'index']);
 
             // Categories
@@ -323,22 +306,29 @@ Route::middleware('auth:sanctum')->group(function () {
             });
         });
 
-    // Promos & Vouchers history
+    // ============================================
+    // ✅ QR VALIDATION ENDPOINTS (PENTING!)
+    // ============================================
+    
+    // --- Promo Validation ---
     Route::prefix('promos')->group(function () {
-        Route::post('/validate', [PromoController::class, 'validateCode']);
+        // ✅ Endpoint utama untuk validasi QR promo (tenant_scan)
         Route::post('/validate-code', [PromoController::class, 'validateCode']);
+        // Alias untuk kompatibilitas
+        Route::post('/validate', [PromoController::class, 'validateCode']);
+        
         Route::get('/{promo}/history', [PromoController::class, 'history'])->whereNumber('promo');
-
-        Route::post('/{promo}/items', [PromoItemController::class, 'storeForPromo'])
-            ->whereNumber('promo');
+        Route::post('/{promo}/items', [PromoItemController::class, 'storeForPromo'])->whereNumber('promo');
         Route::post('/{promo}/claim', [PromoItemController::class, 'claim'])->whereNumber('promo');
     });
 
+    // --- Voucher Validation ---
     Route::prefix('vouchers')->group(function () {
+        // ✅ Endpoint utama untuk validasi QR voucher (tenant_scan)
         Route::post('/validate', [VoucherController::class, 'validateCode']);
+        
         Route::get('/{voucher}/history', [VoucherController::class, 'history'])->whereNumber('voucher');
         Route::get('/voucher-items', [VoucherController::class, 'voucherItems']);
-
         Route::get('/lookup-by-code/{code}', [VoucherController::class, 'lookupByCode']);
         Route::get('/user-voucher-items/{userId}', [VoucherController::class, 'getUserVoucherItems'])->whereNumber('userId');
     });
@@ -374,45 +364,33 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/voucher-items', [\App\Http\Controllers\Admin\VoucherItemController::class, 'index']);
         Route::get('/promo-validations', [\App\Http\Controllers\Admin\PromoController::class, 'validationsIndex']);
         Route::get('/voucher-validations', [VoucherController::class, 'validationsIndex']);
+        
         // === USERS (untuk MultiSelectDropdown admin contacts) ===
-        // Contoh: /api/admin/users?only_admin_contacts=true&paginate=all
-        // atau    /api/admin/users?roles[]=admin&roles[]=manager_tenant&paginate=all
         Route::get('/users', [AdminUserController::class, 'index']);
-
-        // Communities routes are defined in admin.php
 
         // === AD CATEGORIES CRUD (Admin) ===
         Route::get('/ad-categories', [AdCategoryController::class, 'index']);
         Route::get('/ad-categories/{id}', [AdCategoryController::class, 'show'])->whereNumber('id');
         Route::post('/ad-categories', [AdCategoryController::class, 'store']);
-        Route::post('/ad-categories/{id}', [AdCategoryController::class, 'update'])->whereNumber('id'); // if your FE uses POST+_method=PUT
+        Route::post('/ad-categories/{id}', [AdCategoryController::class, 'update'])->whereNumber('id');
         Route::delete('/ad-categories/{id}', [AdCategoryController::class, 'destroy'])->whereNumber('id');
 
         // For parent select options in FE
-        // Standardized: use OptionController for ad-category options (includes image + wrapper)
         Route::get('/options/ad-category', [\App\Http\Controllers\Admin\OptionController::class, 'adCategory']);
-
-        // Preserve AdCategoryController options on a distinct path for internal/admin selects
         Route::get('/ad-categories/options', [AdCategoryController::class, 'options']);
 
         // === CUBE TYPES CRUD (Admin) ===
         Route::apiResource('cube-types', CubeTypeController::class);
-
-        // Removed conflicting route - cubes by community is handled in admin.php
-        // Route::get('/communities/{communityId}/cubes', [CubeController::class, 'cubesByCommunity']);
 
         // Stream file QR (with CORS via api middleware)
         Route::get('/qrcodes/{id}/file', [\App\Http\Controllers\Admin\QrcodeController::class, 'file'])
             ->whereNumber('id');
     });
 
-
-
     Route::post('/ads/{id}/claim', [\App\Http\Controllers\Admin\AdController::class, 'claim']);
     Route::get('/ads/{id}', [\App\Http\Controllers\Admin\AdController::class, 'show']);
 
     // === Chat routes ===
-    // === Universal chat (bisa dipakai user/mitra/admin) ===
     Route::prefix('chat')->group(function () {
         Route::post('/resolve', [ChatController::class, 'resolve']);
         Route::post('/send', [ChatController::class, 'send']);
@@ -444,9 +422,6 @@ Route::middleware('auth:sanctum')->group(function () {
 if (app()->environment('local', 'development')) {
     require __DIR__ . '/test_validation.php';
 }
-
-
-
 
 /**
  * Fallback 404

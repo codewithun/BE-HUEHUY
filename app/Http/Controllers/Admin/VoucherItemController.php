@@ -166,16 +166,51 @@ class VoucherItemController extends Controller
             ], 404);
         }
 
-        if ($voucher->stock <= 0) {
+        /**
+         * Validasi voucher khusus penerima.
+         * Jika voucher dikirim melalui notifikasi ke user tertentu,
+         * maka hanya user yang punya notifikasi voucher tersebut yang boleh klaim.
+         */
+        $targetedNotificationExists = Notification::where(function ($q) use ($voucher) {
+                $q->where(function ($q1) use ($voucher) {
+                    $q1->where('type', 'voucher')
+                        ->where('target_id', $voucher->id);
+                })->orWhere(function ($q2) use ($voucher) {
+                    $q2->where('target_type', 'voucher')
+                        ->where('target_id', $voucher->id);
+                });
+            })
+            ->exists();
 
+            if ($targetedNotificationExists) {
+                $userHasVoucherNotification = Notification::where('user_id', $userId)
+                    ->where(function ($q) use ($voucher) {
+                        $q->where(function ($q1) use ($voucher) {
+                            $q1->where('type', 'voucher')
+                                ->where('target_id', $voucher->id);
+                        })->orWhere(function ($q2) use ($voucher) {
+                            $q2->where('target_type', 'voucher')
+                                ->where('target_id', $voucher->id);
+                        });
+                    })
+                    ->exists();
+
+            if (!$userHasVoucherNotification) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Voucher ini hanya dapat diklaim oleh penerima yang ditentukan.'
+                ], 403);
+            }
+        }
+        if ($voucher->stock <= 0) {
             $deleted = $this->cleanupNotifications($userId, $voucherId, $request->input('notification_id'));
+        
             return response()->json([
                 'success' => false,
                 'message' => 'Stok voucher habis',
                 'notification_deleted' => $deleted,
             ], 400);
         }
-
 
         $already = VoucherItem::where('user_id', $userId)
             ->where('voucher_id', $voucher->id)

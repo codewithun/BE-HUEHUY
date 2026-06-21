@@ -1339,22 +1339,17 @@ class PromoController extends Controller
             if (!$isValidCode) {
                 return response()->json(['success' => false, 'message' => 'Kode unik tidak valid.'], 422);
             }
-        } else {
+            } else {
 
-            $promo = \App\Models\Promo::where('code', $code)->first();
-            Log::info('🔍 Search master promo by code', ['code' => $code, 'found' => !!$promo, 'promo_id' => $promo->id ?? null]);
-
-            if (!$promo) {
-
-
+                // PRIORITAS 1: kode item promo milik user dari saku
+                // Contoh: kode unik per user yang ditunjukkan user ke tenant.
                 $promoItem = \App\Models\PromoItem::with(['promo', 'user'])
                     ->where('code', $code)
                     ->first();
 
-
-                if ($promoItem && !$promoItem->promo) {
-                    $promo = \App\Models\Promo::find($promoItem->promo_id)
-                        ?: \App\Models\Promo::where('code', $promoItem->code)->first();
+                if ($promoItem) {
+                    $item = $promoItem;
+                    $promo = $promoItem->promo ?: \App\Models\Promo::find($promoItem->promo_id);
 
                     if (!$promo) {
                         Log::warning('Orphan promo_item detected', [
@@ -1362,49 +1357,64 @@ class PromoController extends Controller
                             'promo_id' => $promoItem->promo_id,
                             'code'     => $promoItem->code,
                         ]);
-                        return response()->json(['success' => false, 'message' => 'Promo tidak ditemukan'], 404);
+
+                        return response()->json([
+                            'success' => false,
+                            'message' => 'Promo tidak ditemukan'
+                        ], 404);
                     }
-                }
 
-                Log::info('🔍 Search promo_item by code', ['code' => $code, 'found' => !!$promoItem, 'item_owner' => $promoItem->user_id ?? null]);
+                    $ownerHint = $promoItem->user_id;
 
-                if ($promoItem) {
+                    Log::info('🎯 Promo item found by code, validating user item', [
+                        'code' => $code,
+                        'item_id' => $item->id,
+                        'promo_id' => $promo->id,
+                        'item_owner' => $item->user_id,
+                        'validator_id' => $user->id,
+                    ]);
+                } else {
 
-                    if ($promoItem->user_id == $user->id) {
-                        $item  = $promoItem;
-                        $promo = $item->promo;
-                        Log::info('🎯 User owns the promo_item, using existing item', ['item_id' => $item->id]);
+                    // PRIORITAS 2: fallback kode master promo
+                    // Dipakai untuk kompatibilitas flow lama.
+                    $promo = \App\Models\Promo::where('code', $code)->first();
+
+                    Log::info('🔍 Search master promo by code', [
+                        'code' => $code,
+                        'found' => !!$promo,
+                        'promo_id' => $promo->id ?? null
+                    ]);
+
+                    if (!$promo) {
+                        Log::warning('❌ Code not found in both promo_items and promos', [
+                            'code' => $code
+                        ]);
+
+                        return response()->json([
+                            'success' => false,
+                            'message' => 'Promo dengan kode tersebut tidak ditemukan'
+                        ], 404);
+                    }
+
+                    $existingItem = \App\Models\PromoItem::with(['promo', 'user'])
+                        ->where('promo_id', $promo->id)
+                        ->where('user_id', $user->id)
+                        ->first();
+
+                    Log::info('🔍 Search existing promo_item for user by master code', [
+                        'promo_id' => $promo->id,
+                        'user_id' => $user->id,
+                        'found' => !!$existingItem
+                    ]);
+
+                    if ($existingItem) {
+                        $item = $existingItem;
                     } else {
-
-                        $promo = $promoItem->promo;
-                        $item = null;
                         $ownerHint = $user->id;
-                        Log::info('🎯 User does not own the item, will create new item for this user', ['promo_id' => $promo->id]);
+                        $item = null;
                     }
-                } else {
-                    Log::warning('❌ Code not found in both promos and promo_items', ['code' => $code]);
-                    return response()->json(['success' => false, 'message' => 'Promo dengan kode tersebut tidak ditemukan'], 404);
-                }
-            } else {
-
-                $existingItem = \App\Models\PromoItem::with(['promo', 'user'])
-                    ->where('promo_id', $promo->id)
-                    ->where('user_id', $user->id)
-                    ->first();
-
-                Log::info('🔍 Search existing promo_item for user', ['promo_id' => $promo->id, 'user_id' => $user->id, 'found' => !!$existingItem]);
-
-                if ($existingItem) {
-                    $item = $existingItem;
-                    Log::info('🎯 Found existing item for user', ['item_id' => $item->id]);
-                } else {
-
-                    $ownerHint = $user->id;
-                    $item = null;
-                    Log::info('🎯 No existing item, will create new one', ['promo_id' => $promo->id, 'user_id' => $user->id]);
                 }
             }
-        }
 
         if (!$promo) {
             return response()->json(['success' => false, 'message' => 'Promo tidak ditemukan'], 404);
@@ -1477,8 +1487,7 @@ class PromoController extends Controller
             if (!is_null($locked->redeemed_at) || in_array($locked->status, ['redeemed', 'used'], true)) {
                 DB::commit();
                 $lockedFresh = $locked->fresh();
-                $lockedFresh->setAttribute('display_code', ($promo->code ?? $code));
-                return response()->json([
+                $lockedFresh->setAttribute('display_code', $code);                return response()->json([
                     'success' => true,
                     'message' => 'Promo sudah divalidasi sebelumnya',
                     'data'    => [
@@ -1514,8 +1523,7 @@ class PromoController extends Controller
             if ($affected === 0) {
                 DB::commit();
                 $lockedFresh = $locked->fresh();
-                $lockedFresh->setAttribute('display_code', ($promo->code ?? $code));
-                return response()->json([
+                $lockedFresh->setAttribute('display_code', $code);                return response()->json([
                     'success' => true,
                     'message' => 'Promo sudah divalidasi sebelumnya',
                     'data'    => [
@@ -1527,13 +1535,11 @@ class PromoController extends Controller
             }
 
 
-            $this->savePromoValidation($locked, $validatorId, $promo->code ?? $code);
-
+            $this->savePromoValidation($locked, $validatorId, $code);
             DB::commit();
 
             $lockedFresh = $locked->fresh();
-            $lockedFresh->setAttribute('display_code', ($promo->code ?? $code));
-
+            $lockedFresh->setAttribute('display_code', $code);
             return response()->json([
                 'success' => true,
                 'message' => 'Validasi berhasil',

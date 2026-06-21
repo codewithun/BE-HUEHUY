@@ -1462,27 +1462,43 @@ class VoucherController extends Controller
             if (!$codeMatches) {
                 return response()->json(['success' => false, 'message' => 'Kode unik tidak valid.'], 422);
             }
-        } else {
-
-            $voucher = Voucher::with(['community'])
-                ->where('code', $code)
-                ->first();
-
-            if (!$voucher) {
-                return response()->json(['success' => false, 'message' => 'Voucher dengan kode tersebut tidak ditemukan'], 404);
+            } else {
+            
+                // PRIORITAS 1: kode item user dari saku, contoh 0621000001
+                $item = VoucherItem::with(['voucher', 'voucher.community', 'user'])
+                    ->where('code', $code)
+                    ->first();
+            
+                // PRIORITAS 2: fallback kode master voucher, contoh kcgmujaer
+                // Dipakai hanya untuk kompatibilitas flow lama.
+                if (!$item) {
+                    $voucher = Voucher::with(['community'])
+                        ->where('code', $code)
+                        ->first();
+            
+                    if (!$voucher) {
+                        return response()->json([
+                            'success' => false,
+                            'message' => 'Voucher dengan kode tersebut tidak ditemukan'
+                        ], 404);
+                    }
+            
+                    $item = VoucherItem::with(['voucher', 'voucher.community', 'user'])
+                        ->where('voucher_id', $voucher->id)
+                        ->when($ownerHint, function ($q) use ($ownerHint) {
+                            $q->where('user_id', $ownerHint);
+                        })
+                        ->whereNull('used_at')
+                        ->first();
+            
+                    if (!$item) {
+                        return response()->json([
+                            'success' => false,
+                            'message' => 'Tidak ada voucher item yang tersedia atau sudah digunakan'
+                        ], 404);
+                    }
+                }
             }
-
-
-            $item = VoucherItem::with(['voucher', 'voucher.community', 'user'])
-                ->where('voucher_id', $voucher->id)
-                ->where('user_id', $ownerHint ?? $user->id)
-                ->whereNull('used_at')
-                ->first();
-
-            if (!$item) {
-                return response()->json(['success' => false, 'message' => 'Tidak ada voucher item yang tersedia atau sudah digunakan'], 404);
-            }
-        }
 
 
         if ($ownerHint && (int)$item->user_id !== (int)$ownerHint) {

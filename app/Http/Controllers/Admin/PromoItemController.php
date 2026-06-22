@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Auth;
 use App\Models\Promo;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class PromoItemController extends Controller
 {
@@ -21,26 +22,202 @@ class PromoItemController extends Controller
      * - Promo tidak punya komunitas (promo umum)
      * - User adalah member aktif dari komunitas promo
      */
-    private function canUserAccessPromo($promoId, $userId)
+    private function notificationAllowsUser(int $userId, string $targetName, int $targetId, ?string $code = null): bool
     {
-        $promo = Promo::find($promoId);
+        try {
+            if (!Schema::hasTable('notifications')) {
+                return false;
+            }
 
-        if (!$promo) {
+            $hasTargetType = Schema::hasColumn('notifications', 'target_type');
+            $hasType       = Schema::hasColumn('notifications', 'type');
+            $hasData       = Schema::hasColumn('notifications', 'data');
+
+            $query = DB::table('notifications')
+                ->where('user_id', $userId)
+                ->where('target_id', $targetId);
+
+            if ($hasTargetType || $hasType) {
+                $query->where(function ($q) use ($targetName, $hasTargetType, $hasType) {
+                    if ($hasTargetType) {
+                        $q->where('target_type', $targetName);
+                    }
+
+                    if ($hasType) {
+                        if ($hasTargetType) {
+                            $q->orWhere('type', $targetName);
+                        } else {
+                            $q->where('type', $targetName);
+                        }
+                    }
+                });
+            }
+
+            if ($query->exists()) {
+                return true;
+            }
+
+            if ($code && $hasData) {
+                return DB::table('notifications')
+                    ->where('user_id', $userId)
+                    ->where('data', 'like', '%' . $code . '%')
+                    ->exists();
+            }
+
+            return false;
+        } catch (\Throwable $e) {
+            Log::warning('Promo claim notification check failed', [
+                'user_id' => $userId,
+                'target_name' => $targetName,
+                'target_id' => $targetId,
+                'code' => $code,
+                'error' => $e->getMessage(),
+            ]);
+
             return false;
         }
+    }
 
-        // Jika promo tidak punya komunitas, semua user bisa akses
-        if (!$promo->community_id) {
+    private function canUserClaimPromoTarget($promo = null, $ad = null, int $userId): bool
+    {
+        $promoTargetType = '';
+
+        if ($promo && Schema::hasColumn('promos', 'target_type')) {
+            $promoTargetType = strtolower((string) ($promo->target_type ?? ''));
+        }
+
+        $adTargetType = $ad ? strtolower((string) ($ad->target_type ?? '')) : '';
+
+        $targetType = $promoTargetType ?: $adTargetType ?: 'all';
+
+        // Umum / kosong = boleh
+        if ($targetType === '' || $targetType === 'all' || $targetType === 'null') {
             return true;
         }
 
-        // Cek apakah user adalah member aktif dari komunitas
-        $isMember = \App\Models\CommunityMembership::where('community_id', $promo->community_id)
-            ->where('user_id', $userId)
-            ->where('status', 'active')
-            ->exists();
+        // Target user tertentu
+        if ($targetType === 'user') {
+            // 1) Kolom langsung di promos
+            try {
+                if ($promo && Schema::hasColumn('promos', 'target_user_id')) {
+                    $targetUserId = (int) ($promo->target_user_id ?? 0);
+                    if ($targetUserId > 0 && $targetUserId === (int) $userId) {
+                        return true;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Promo claim promo.target_user_id check failed', [
+                    'promo_id' => $promo->id ?? null,
+                    'user_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
 
-        return $isMember;
+            // 2) Kolom langsung di ads
+            try {
+                if ($ad && Schema::hasColumn('ads', 'target_user_id')) {
+                    $targetUserId = (int) ($ad->target_user_id ?? 0);
+                    if ($targetUserId > 0 && $targetUserId === (int) $userId) {
+                        return true;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Promo claim ad.target_user_id check failed', [
+                    'ad_id' => $ad->id ?? null,
+                    'user_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            // 3) Relasi target_users di Ad
+            try {
+                if ($ad && method_exists($ad, 'target_users')) {
+                    $allowedIds = $ad->target_users()
+                        ->pluck('users.id')
+                        ->map(fn($v) => (int) $v)
+                        ->toArray();
+
+                    if (in_array((int) $userId, $allowedIds, true)) {
+                        return true;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Promo claim ad.target_users relation check failed', [
+                    'ad_id' => $ad->id ?? null,
+                    'user_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            // 4) Pivot ad_target_users
+            try {
+                if ($ad && Schema::hasTable('ad_target_users')) {
+                    $exists = DB::table('ad_target_users')
+                        ->where('ad_id', $ad->id)
+                        ->where('user_id', $userId)
+                        ->exists();
+
+                    if ($exists) {
+                        return true;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Promo claim ad_target_users check failed', [
+                    'ad_id' => $ad->id ?? null,
+                    'user_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            // 5) Notification target promo
+            if ($promo && $this->notificationAllowsUser($userId, 'promo', (int) $promo->id, $promo->code ?? null)) {
+                return true;
+            }
+
+            // 6) Notification target ad
+            if ($ad && $this->notificationAllowsUser($userId, 'ad', (int) $ad->id, $ad->code ?? null)) {
+                return true;
+            }
+
+            return false;
+        }
+
+        // Target komunitas
+        if ($targetType === 'community') {
+            $communityId = $promo->community_id ?? $ad->community_id ?? null;
+
+            if (!$communityId) {
+                return false;
+            }
+
+            try {
+                if (!Schema::hasTable('community_memberships')) {
+                    return false;
+                }
+
+                $q = DB::table('community_memberships')
+                    ->where('community_id', $communityId)
+                    ->where('user_id', $userId);
+
+                if (Schema::hasColumn('community_memberships', 'status')) {
+                    $q->where('status', 'active');
+                }
+
+                return $q->exists();
+            } catch (\Throwable $e) {
+                Log::warning('Promo claim community membership check failed', [
+                    'promo_id' => $promo->id ?? null,
+                    'ad_id' => $ad->id ?? null,
+                    'community_id' => $communityId,
+                    'user_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+
+                return false;
+            }
+        }
+
+        return false;
     }
 
     public function index(Request $request)
@@ -208,8 +385,17 @@ class PromoItemController extends Controller
 
         $data       = $request->only(['promo_id', 'user_id', 'status', 'expires_at']);
         $authUserId = Auth::id();
-        $data['user_id'] = $request->input('user_id', $authUserId);
+        $isClaimAction = $request->boolean('claim');
 
+        if ($isClaimAction && !$authUserId) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthenticated'
+            ], 401);
+        }
+
+        // Kalau claim, user_id wajib user login. Jangan percaya payload user_id dari FE.
+        $data['user_id'] = $isClaimAction ? $authUserId : $request->input('user_id', $authUserId);
 
         $promo = Promo::find($data['promo_id']);
         $ad    = null;
@@ -275,8 +461,6 @@ class PromoItemController extends Controller
         }
 
         $requestedStatus = $request->input('status');
-        $isClaimAction   = $request->boolean('claim');
-
         // NOTE: removed fallback that forced expires_at to promo end_date.
         // The expires_at should reflect the per-item validation deadline (e.g. reserved + validation_time_limit),
         // not always fallback to promo end_date here. Calculation is done later when item is reserved/claimed.
@@ -350,6 +534,22 @@ class PromoItemController extends Controller
                 return ['ok' => false, 'reason' => 'Promo tidak ditemukan'];
             }
 
+            // 👥 Validasi target user / komunitas untuk claim
+            $adForTarget = $lockedAd;
+
+            if (!$adForTarget && $lockedPromo && !empty($lockedPromo->code)) {
+                $adForTarget = \App\Models\Ad::where('code', $lockedPromo->code)->first();
+            }
+
+            if ($isClaimAction && $authUserId) {
+                if (!$this->canUserClaimPromoTarget($lockedPromo, $adForTarget, (int) $authUserId)) {
+                    return [
+                        'ok' => false,
+                        'reason' => 'Promo ini hanya dapat diklaim oleh penerima yang ditentukan.',
+                        'status' => 403,
+                    ];
+                }
+            }
 
             $existing = PromoItem::where('promo_id', $data['promo_id'])
                 ->where('user_id', $authUserId)
@@ -589,7 +789,7 @@ class PromoItemController extends Controller
                 'success' => false,
                 'message' => $result['reason'] ?? 'Stok promo habis',
                 'debug'   => $result['debug'] ?? null
-            ], 409);
+            ], (int) ($result['status'] ?? 409));
         }
 
         if (!empty($result['already'])) {

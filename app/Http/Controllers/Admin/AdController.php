@@ -11,6 +11,7 @@ use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -92,6 +93,147 @@ class AdController extends Controller
         } catch (\Throwable $e) {
             return null;
         }
+    }
+    
+        private function userCanClaimAdTarget(Ad $ad, int $userId): bool
+    {
+        $targetType = strtolower((string) ($ad->target_type ?? 'all'));
+    
+        // Umum / kosong = boleh
+        if ($targetType === '' || $targetType === 'all' || $targetType === 'null') {
+            return true;
+        }
+    
+        // Target user tertentu
+        if ($targetType === 'user') {
+            // 1) Pivot relasi target_users kalau ada
+            try {
+                if (method_exists($ad, 'target_users')) {
+                    $allowedIds = $ad->target_users()
+                        ->pluck('users.id')
+                        ->map(fn($v) => (int) $v)
+                        ->toArray();
+    
+                    if (in_array((int) $userId, $allowedIds, true)) {
+                        return true;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Ad claim target_users relation check failed', [
+                    'ad_id' => $ad->id,
+                    'user_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+    
+            // 2) Kolom langsung target_user_id kalau ada
+            try {
+                if (Schema::hasColumn('ads', 'target_user_id')) {
+                    $targetUserId = (int) ($ad->target_user_id ?? 0);
+                    if ($targetUserId > 0 && $targetUserId === (int) $userId) {
+                        return true;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Ad claim target_user_id check failed', [
+                    'ad_id' => $ad->id,
+                    'user_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+    
+            // 3) Pivot ad_target_users kalau ada
+            try {
+                if (Schema::hasTable('ad_target_users')) {
+                    $exists = DB::table('ad_target_users')
+                        ->where('ad_id', $ad->id)
+                        ->where('user_id', $userId)
+                        ->exists();
+    
+                    if ($exists) {
+                        return true;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Ad claim ad_target_users check failed', [
+                    'ad_id' => $ad->id,
+                    'user_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+    
+            // 4) Notification target ad / promo / voucher
+            try {
+                if (Schema::hasTable('notifications')) {
+                    $exists = DB::table('notifications')
+                        ->where('user_id', $userId)
+                        ->where(function ($q) use ($ad) {
+                            $q->where(function ($qq) use ($ad) {
+                                $qq->where('target_id', $ad->id)
+                                    ->where(function ($n) {
+                                        $n->where('target_type', 'ad')
+                                            ->orWhere('target_type', 'promo')
+                                            ->orWhere('target_type', 'voucher')
+                                            ->orWhere('type', 'ad')
+                                            ->orWhere('type', 'promo')
+                                            ->orWhere('type', 'voucher');
+                                    });
+                            });
+    
+                            if (!empty($ad->code) && Schema::hasColumn('notifications', 'data')) {
+                                $q->orWhere('data', 'like', '%' . $ad->code . '%');
+                            }
+                        })
+                        ->exists();
+    
+                    if ($exists) {
+                        return true;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Ad claim notifications check failed', [
+                    'ad_id' => $ad->id,
+                    'user_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+    
+            return false;
+        }
+    
+        // Target komunitas
+        if ($targetType === 'community') {
+            if (!$ad->community_id) {
+                return false;
+            }
+    
+            try {
+                if (!Schema::hasTable('community_memberships')) {
+                    return false;
+                }
+    
+                return DB::table('community_memberships')
+                    ->where('community_id', $ad->community_id)
+                    ->where('user_id', $userId)
+                    ->where(function ($q) {
+                        if (Schema::hasColumn('community_memberships', 'status')) {
+                            $q->where('status', 'active');
+                        }
+                    })
+                    ->exists();
+            } catch (\Throwable $e) {
+                Log::warning('Ad claim community membership check failed', [
+                    'ad_id' => $ad->id,
+                    'community_id' => $ad->community_id,
+                    'user_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+    
+                return false;
+            }
+        }
+    
+        return false;
     }
 
     // ========================================>
@@ -1347,22 +1489,12 @@ class AdController extends Controller
                 ], 422);
             }
 
-            // 👥 Validasi target user
-            if ($ad->target_type === 'user') {
-                $allowedIds = $ad->target_users()->pluck('user_id')->toArray();
-                if (!in_array($user->id, $allowedIds)) {
-                    return response()->json(['success' => false, 'message' => 'Anda tidak memiliki akses ke ' . $itemType . ' ini'], 403);
-                }
-            }
-
-            // 👥 Validasi komunitas
-            if ($ad->target_type === 'community' && $ad->community_id) {
-                $isMember = \App\Models\CommunityMembership::where('user_id', $user->id)
-                    ->where('community_id', $ad->community_id)
-                    ->exists();
-                if (!$isMember) {
-                    return response()->json(['success' => false, 'message' => 'Anda bukan member komunitas target'], 403);
-                }
+           // 👥 Validasi target user / komunitas
+            if (!$this->userCanClaimAdTarget($ad, (int) $user->id)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => ucfirst($itemType) . ' ini hanya dapat diklaim oleh penerima yang ditentukan.'
+                ], 403);
             }
 
             // 📦 Cek stok

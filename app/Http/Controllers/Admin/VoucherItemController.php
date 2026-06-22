@@ -20,6 +20,222 @@ class VoucherItemController extends Controller
     /**
      * List voucher items (punya user atau all kalau admin).
      */
+    private function notificationAllowsUser(int $userId, string $targetName, int $targetId, ?string $code = null): bool
+    {
+        try {
+            if (!Schema::hasTable('notifications')) {
+                return false;
+            }
+
+            $hasTargetType = Schema::hasColumn('notifications', 'target_type');
+            $hasType       = Schema::hasColumn('notifications', 'type');
+            $hasData       = Schema::hasColumn('notifications', 'data');
+
+            $query = DB::table('notifications')
+                ->where('user_id', $userId)
+                ->where('target_id', $targetId);
+
+            if ($hasTargetType || $hasType) {
+                $query->where(function ($q) use ($targetName, $hasTargetType, $hasType) {
+                    if ($hasTargetType) {
+                        $q->where('target_type', $targetName);
+                    }
+
+                    if ($hasType) {
+                        if ($hasTargetType) {
+                            $q->orWhere('type', $targetName);
+                        } else {
+                            $q->where('type', $targetName);
+                        }
+                    }
+                });
+            }
+
+            if ($query->exists()) {
+                return true;
+            }
+
+            if ($code && $hasData) {
+                return DB::table('notifications')
+                    ->where('user_id', $userId)
+                    ->where('data', 'like', '%' . $code . '%')
+                    ->exists();
+            }
+
+            return false;
+        } catch (\Throwable $e) {
+            Log::warning('Voucher claim notification check failed', [
+                'user_id' => $userId,
+                'target_name' => $targetName,
+                'target_id' => $targetId,
+                'code' => $code,
+                'error' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
+    }
+
+    private function canUserClaimVoucherTarget(Voucher $voucher, int $userId): bool
+    {
+        $ad = null;
+
+        try {
+            if (!empty($voucher->ad_id)) {
+                $ad = \App\Models\Ad::find($voucher->ad_id);
+            }
+
+            if (!$ad && !empty($voucher->code)) {
+                $ad = \App\Models\Ad::where('code', $voucher->code)->first();
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Voucher claim related ad lookup failed', [
+                'voucher_id' => $voucher->id,
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        $voucherTargetType = '';
+
+        if (Schema::hasColumn('vouchers', 'target_type')) {
+            $voucherTargetType = strtolower((string) ($voucher->target_type ?? ''));
+        }
+
+        $adTargetType = $ad ? strtolower((string) ($ad->target_type ?? '')) : '';
+
+        $targetType = $voucherTargetType ?: $adTargetType ?: 'all';
+
+        // Umum / kosong = boleh
+        if ($targetType === '' || $targetType === 'all' || $targetType === 'null') {
+            return true;
+        }
+
+        // Target user tertentu
+        if ($targetType === 'user') {
+            // 1) Kolom target_user_id di vouchers
+            try {
+                if (Schema::hasColumn('vouchers', 'target_user_id')) {
+                    $targetUserId = (int) ($voucher->target_user_id ?? 0);
+                    if ($targetUserId > 0 && $targetUserId === (int) $userId) {
+                        return true;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Voucher claim voucher.target_user_id check failed', [
+                    'voucher_id' => $voucher->id,
+                    'user_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            // 2) Kolom target_user_id di ads
+            try {
+                if ($ad && Schema::hasColumn('ads', 'target_user_id')) {
+                    $targetUserId = (int) ($ad->target_user_id ?? 0);
+                    if ($targetUserId > 0 && $targetUserId === (int) $userId) {
+                        return true;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Voucher claim ad.target_user_id check failed', [
+                    'ad_id' => $ad->id ?? null,
+                    'user_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            // 3) Relasi target_users di Ad
+            try {
+                if ($ad && method_exists($ad, 'target_users')) {
+                    $allowedIds = $ad->target_users()
+                        ->pluck('users.id')
+                        ->map(fn($v) => (int) $v)
+                        ->toArray();
+
+                    if (in_array((int) $userId, $allowedIds, true)) {
+                        return true;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Voucher claim ad.target_users relation check failed', [
+                    'ad_id' => $ad->id ?? null,
+                    'user_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            // 4) Pivot ad_target_users
+            try {
+                if ($ad && Schema::hasTable('ad_target_users')) {
+                    $exists = DB::table('ad_target_users')
+                        ->where('ad_id', $ad->id)
+                        ->where('user_id', $userId)
+                        ->exists();
+
+                    if ($exists) {
+                        return true;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Voucher claim ad_target_users check failed', [
+                    'ad_id' => $ad->id ?? null,
+                    'user_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            // 5) Notification target voucher
+            if ($this->notificationAllowsUser($userId, 'voucher', (int) $voucher->id, $voucher->code ?? null)) {
+                return true;
+            }
+
+            // 6) Notification target ad
+            if ($ad && $this->notificationAllowsUser($userId, 'ad', (int) $ad->id, $ad->code ?? null)) {
+                return true;
+            }
+
+            return false;
+        }
+
+        // Target komunitas
+        if ($targetType === 'community') {
+            $communityId = $voucher->community_id ?? $ad->community_id ?? null;
+
+            if (!$communityId) {
+                return false;
+            }
+
+            try {
+                if (!Schema::hasTable('community_memberships')) {
+                    return false;
+                }
+
+                $q = DB::table('community_memberships')
+                    ->where('community_id', $communityId)
+                    ->where('user_id', $userId);
+
+                if (Schema::hasColumn('community_memberships', 'status')) {
+                    $q->where('status', 'active');
+                }
+
+                return $q->exists();
+            } catch (\Throwable $e) {
+                Log::warning('Voucher claim community membership check failed', [
+                    'voucher_id' => $voucher->id,
+                    'ad_id' => $ad->id ?? null,
+                    'community_id' => $communityId,
+                    'user_id' => $userId,
+                    'error' => $e->getMessage(),
+                ]);
+
+                return false;
+            }
+        }
+
+        return false;
+    }
+
     public function index(Request $request)
     {
         $q = \App\Models\VoucherItem::with(['voucher', 'user']);
@@ -171,37 +387,14 @@ class VoucherItemController extends Controller
          * Jika voucher dikirim melalui notifikasi ke user tertentu,
          * maka hanya user yang punya notifikasi voucher tersebut yang boleh klaim.
          */
-        $targetedNotificationExists = Notification::where(function ($q) use ($voucher) {
-                $q->where(function ($q1) use ($voucher) {
-                    $q1->where('type', 'voucher')
-                        ->where('target_id', $voucher->id);
-                })->orWhere(function ($q2) use ($voucher) {
-                    $q2->where('target_type', 'voucher')
-                        ->where('target_id', $voucher->id);
-                });
-            })
-            ->exists();
-
-            if ($targetedNotificationExists) {
-                $userHasVoucherNotification = Notification::where('user_id', $userId)
-                    ->where(function ($q) use ($voucher) {
-                        $q->where(function ($q1) use ($voucher) {
-                            $q1->where('type', 'voucher')
-                                ->where('target_id', $voucher->id);
-                        })->orWhere(function ($q2) use ($voucher) {
-                            $q2->where('target_type', 'voucher')
-                                ->where('target_id', $voucher->id);
-                        });
-                    })
-                    ->exists();
-
-            if (!$userHasVoucherNotification) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Voucher ini hanya dapat diklaim oleh penerima yang ditentukan.'
-                ], 403);
-            }
+        // 👥 Validasi target user / komunitas
+        if (!$this->canUserClaimVoucherTarget($voucher, (int) $userId)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Voucher ini hanya dapat diklaim oleh penerima yang ditentukan.'
+            ], 403);
         }
+        
         if ($voucher->stock <= 0) {
             $deleted = $this->cleanupNotifications($userId, $voucherId, $request->input('notification_id'));
         

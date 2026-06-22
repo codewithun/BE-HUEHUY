@@ -15,9 +15,84 @@ use App\Models\World;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class HomeController extends Controller
 {
+    /**
+     * Filter promo/voucher visibility:
+     * - target_type null/empty/all => visible to everyone
+     * - target_type user => visible only to selected user
+     * - target_type community => visible only to active community member
+     */
+    private function applyAdAudienceVisibilityFilter($query, $user = null)
+    {
+        if (!Schema::hasColumn('ads', 'target_type')) {
+            return $query;
+        }
+
+        $userId = $user?->id;
+
+        return $query->where(function ($q) use ($userId) {
+            $q->whereNull('ads.target_type')
+                ->orWhere('ads.target_type', '')
+                ->orWhere('ads.target_type', 'all');
+
+            if ($userId) {
+                $q->orWhere(function ($userTarget) use ($userId) {
+                    $userTarget->where('ads.target_type', 'user')
+                        ->where(function ($w) use ($userId) {
+                            if (Schema::hasColumn('ads', 'target_user_id')) {
+                                $w->where('ads.target_user_id', $userId);
+                            } else {
+                                $w->whereRaw('1 = 0');
+                            }
+
+                            if (Schema::hasTable('ad_target_users')) {
+                                $w->orWhereExists(function ($sub) use ($userId) {
+                                    $sub->select(DB::raw(1))
+                                        ->from('ad_target_users')
+                                        ->whereColumn('ad_target_users.ad_id', 'ads.id')
+                                        ->where('ad_target_users.user_id', $userId);
+                                });
+                            }
+
+                            if (Schema::hasTable('notifications')) {
+                                $w->orWhereExists(function ($sub) use ($userId) {
+                                    $sub->select(DB::raw(1))
+                                        ->from('notifications')
+                                        ->where('notifications.user_id', $userId)
+                                        ->whereColumn('notifications.target_id', 'ads.id')
+                                        ->where(function ($n) {
+                                            $n->where('notifications.target_type', 'ad')
+                                                ->orWhere('notifications.target_type', 'promo')
+                                                ->orWhere('notifications.target_type', 'voucher')
+                                                ->orWhere('notifications.type', 'ad')
+                                                ->orWhere('notifications.type', 'promo')
+                                                ->orWhere('notifications.type', 'voucher');
+                                        });
+                                });
+                            }
+                        });
+                });
+            }
+
+            if ($userId && Schema::hasTable('community_memberships')) {
+                $q->orWhere(function ($communityTarget) use ($userId) {
+                    $communityTarget->where('ads.target_type', 'community')
+                        ->whereNotNull('ads.community_id')
+                        ->whereExists(function ($sub) use ($userId) {
+                            $sub->select(DB::raw(1))
+                                ->from('community_memberships')
+                                ->whereColumn('community_memberships.community_id', 'ads.community_id')
+                                ->where('community_memberships.user_id', $userId)
+                                ->where('community_memberships.status', 'active');
+                        });
+                });
+            }
+        });
+    }
+
     public function banner()
     {
         $model = Banner::get();
@@ -89,24 +164,19 @@ class HomeController extends Controller
     public function category(Request $request)
     {
         $worldIdFilter = $request->get('world_id', null);
-
         $user = Auth::user();
-
         $worlds = [];
 
-        // Handle case when user is not authenticated (public endpoint)
         if ($user && $user->worlds) {
             foreach ($user->worlds as $world) {
                 array_push($worlds, $world->world_id);
             }
         }
 
-        $homeCategory = AdCategory::where('is_home_display', true)
-            ->get();
+        $homeCategory = AdCategory::where('is_home_display', true)->get();
 
         foreach ($homeCategory as $key => $category) {
-
-            $ads = Ad::with('ad_category', 'cube.cube_type')
+            $adsQuery = Ad::with('ad_category', 'cube.cube_type')
                 ->select(
                     'ads.*',
                     DB::raw('CAST(IF(ads.is_daily_grab = 1,
@@ -131,29 +201,27 @@ class HomeController extends Controller
                 })
                 ->where('cubes.status', 'active')
                 ->when($worldIdFilter, function ($query) use ($worldIdFilter) {
-
                     return $query->where('cubes.world_id', $worldIdFilter);
                 }, function ($query) use ($worlds) {
-
                     return $query->where(function ($q) use ($worlds) {
                         if (empty($worlds)) {
-                            // If no user worlds, show all ads with null world_id or show all
                             $q->whereNull('cubes.world_id');
                         } else {
                             $q->whereNull('cubes.world_id')
                                 ->orWhereIn('cubes.world_id', $worlds);
                         }
                     });
-                })
-                ->distinct('ads.id')
+                });
+
+            $adsQuery = $this->applyAdAudienceVisibilityFilter($adsQuery, $user);
+
+            $ads = $adsQuery->distinct('ads.id')
                 ->groupBy('ads.id')
-                // ->orderBy('cubes.is_recommendation', 'desc')
                 ->inRandomOrder()
                 ->limit(5)
                 ->get();
 
-            $childCategory = AdCategory::where('parent_id', $category->id)
-                ->get();
+            $childCategory = AdCategory::where('parent_id', $category->id)->get();
 
             $category->child_categories = $childCategory;
             $category->ads = $ads;
@@ -188,7 +256,6 @@ class HomeController extends Controller
     function worlds()
     {
         $user = Auth::user();
-
         $user_worlds = [];
 
         foreach ($user->worlds as $world) {
@@ -201,7 +268,6 @@ class HomeController extends Controller
         }
 
         $worlds = World::whereNotIn('id', $user_worlds)->get()->toArray();
-
         $worlds = array_merge($user_has_worlds, $worlds);
 
         return response([
@@ -214,31 +280,37 @@ class HomeController extends Controller
     {
         $filterType = $request->get('type', '');
         $communityId = $request->get('community_id', null);
-        // Load relasi yang diperlukan untuk FE dengan filter ads berdasarkan scope komunitas/global
+        $user = Auth::user();
+
         $query = DynamicContent::with([
-            'dynamic_content_cubes' => function ($q) use ($communityId) {
-                $q->with(['cube' => function ($cubeQ) use ($communityId) {
-                    // Eager load ads dan batasi hanya ads aktif sesuai scope
-                    $cubeQ->with(['ads' => function ($adsQ) use ($communityId) {
-                        $adsQ->where('status', 'active')
-                            ->when($communityId, function ($scoped) use ($communityId) {
-                                // Widget komunitas: tampilkan ads komunitas + global
-                                $scoped->where(function ($nested) use ($communityId) {
-                                    $nested->whereNull('community_id')
-                                        ->orWhere('community_id', $communityId);
+            'dynamic_content_cubes' => function ($q) use ($communityId, $user) {
+                $q->with([
+                    'cube' => function ($cubeQ) use ($communityId, $user) {
+                        $cubeQ->with([
+                            'ads' => function ($adsQ) use ($communityId, $user) {
+                                $adsQ->where('status', 'active');
+
+                                $this->applyAdAudienceVisibilityFilter($adsQ, $user);
+
+                                $adsQ->when($communityId, function ($scoped) use ($communityId) {
+                                    $scoped->where(function ($nested) use ($communityId) {
+                                        $nested->whereNull('ads.community_id')
+                                            ->orWhere('ads.community_id', $communityId);
+                                    });
+                                }, function ($global) {
+                                    $global->whereNull('ads.community_id');
                                 });
-                            }, function ($global) {
-                                // Widget global: hanya ads global (tanpa community_id)
-                                $global->whereNull('community_id');
-                            });
-                    }, 'cube_type', 'opening_hours']);
-                }]);
+                            },
+                            'cube_type',
+                            'opening_hours',
+                        ]);
+                    },
+                ]);
             },
             'ad_category',
-            'community'
+            'community',
         ]);
 
-        // Filter berdasarkan community_id untuk daftar widget
         if ($communityId && $communityId !== '' && $communityId !== 'null') {
             $query->where('community_id', $communityId);
         } else {
@@ -253,7 +325,6 @@ class HomeController extends Controller
             $model = $query->orderBy('level', 'asc')->get();
         }
 
-        // Safety pass: pastikan ads di widget global bersih dari ads komunitas (fallback kalau ada relasi lain yg inject)
         if (!$communityId) {
             $model->each(function ($widget) {
                 if ($widget->community_id === null && $widget->relationLoaded('dynamic_content_cubes')) {

@@ -17,58 +17,200 @@ use Illuminate\Support\Facades\Log;
 
 class AdController extends Controller
 {
+    private function applyAudienceVisibilityFilter($query, ?\App\Models\User $user = null)
+    {
+        // Safety: kalau kolom target_type belum ada di tabel ads, jangan paksa filter
+        // supaya endpoint lama tidak error SQL.
+        if (!\Illuminate\Support\Facades\Schema::hasColumn('ads', 'target_type')) {
+            return $query;
+        }
+
+        $userId = $user?->id;
+
+        $hasTargetUserIdColumn = \Illuminate\Support\Facades\Schema::hasColumn('ads', 'target_user_id');
+
+        $hasAdTargetUsers =
+            \Illuminate\Support\Facades\Schema::hasTable('ad_target_users') &&
+            \Illuminate\Support\Facades\Schema::hasColumn('ad_target_users', 'ad_id') &&
+            \Illuminate\Support\Facades\Schema::hasColumn('ad_target_users', 'user_id');
+
+        $hasNotifications =
+            \Illuminate\Support\Facades\Schema::hasTable('notifications') &&
+            \Illuminate\Support\Facades\Schema::hasColumn('notifications', 'target_id') &&
+            \Illuminate\Support\Facades\Schema::hasColumn('notifications', 'user_id');
+
+        $hasNotificationTargetType =
+            $hasNotifications &&
+            \Illuminate\Support\Facades\Schema::hasColumn('notifications', 'target_type');
+
+        $hasNotificationType =
+            $hasNotifications &&
+            \Illuminate\Support\Facades\Schema::hasColumn('notifications', 'type');
+
+        $hasCommunityMemberships =
+            \Illuminate\Support\Facades\Schema::hasTable('community_memberships') &&
+            \Illuminate\Support\Facades\Schema::hasColumn('community_memberships', 'community_id') &&
+            \Illuminate\Support\Facades\Schema::hasColumn('community_memberships', 'user_id');
+
+        $hasCommunityMembershipStatus =
+            $hasCommunityMemberships &&
+            \Illuminate\Support\Facades\Schema::hasColumn('community_memberships', 'status');
+
+        return $query->where(function ($q) use (
+            $userId,
+            $hasTargetUserIdColumn,
+            $hasAdTargetUsers,
+            $hasNotifications,
+            $hasNotificationTargetType,
+            $hasNotificationType,
+            $hasCommunityMemberships,
+            $hasCommunityMembershipStatus
+        ) {
+            // 1) Konten umum: boleh tampil ke semua user.
+            $q->whereNull('ads.target_type')
+                ->orWhere('ads.target_type', '')
+                ->orWhere('ads.target_type', 'all');
+
+            // Kalau tidak login, jangan tampilkan konten target user/community.
+            if (!$userId) {
+                return;
+            }
+
+            // 2) Konten khusus user tertentu.
+            $q->orWhere(function ($userTarget) use (
+                $userId,
+                $hasTargetUserIdColumn,
+                $hasAdTargetUsers,
+                $hasNotifications,
+                $hasNotificationTargetType,
+                $hasNotificationType
+            ) {
+                $userTarget->where('ads.target_type', 'user')
+                    ->where(function ($w) use (
+                        $userId,
+                        $hasTargetUserIdColumn,
+                        $hasAdTargetUsers,
+                        $hasNotifications,
+                        $hasNotificationTargetType,
+                        $hasNotificationType
+                    ) {
+                        // Kolom langsung di ads, kalau ada.
+                        if ($hasTargetUserIdColumn) {
+                            $w->where('ads.target_user_id', $userId);
+                        } else {
+                            // Biar group where tetap punya kondisi awal yang aman.
+                            $w->whereRaw('1 = 0');
+                        }
+
+                        // Pivot target user, kalau ada.
+                        if ($hasAdTargetUsers) {
+                            $w->orWhereExists(function ($sub) use ($userId) {
+                                $sub->select(DB::raw(1))
+                                    ->from('ad_target_users')
+                                    ->whereColumn('ad_target_users.ad_id', 'ads.id')
+                                    ->where('ad_target_users.user_id', $userId);
+                            });
+                        }
+
+                        // Fallback: target user lewat notifications, kalau ada.
+                        if ($hasNotifications) {
+                            $w->orWhereExists(function ($sub) use ($userId, $hasNotificationTargetType, $hasNotificationType) {
+                                $sub->select(DB::raw(1))
+                                    ->from('notifications')
+                                    ->where('notifications.user_id', $userId)
+                                    ->whereColumn('notifications.target_id', 'ads.id');
+
+                                if ($hasNotificationTargetType || $hasNotificationType) {
+                                    $sub->where(function ($n) use ($hasNotificationTargetType, $hasNotificationType) {
+                                        if ($hasNotificationTargetType) {
+                                            $n->whereIn('notifications.target_type', ['ad', 'promo', 'voucher']);
+                                        }
+
+                                        if ($hasNotificationType) {
+                                            if ($hasNotificationTargetType) {
+                                                $n->orWhereIn('notifications.type', ['ad', 'promo', 'voucher']);
+                                            } else {
+                                                $n->whereIn('notifications.type', ['ad', 'promo', 'voucher']);
+                                            }
+                                        }
+                                    });
+                                }
+                            });
+                        }
+                    });
+            });
+
+            // 3) Konten khusus komunitas: hanya tampil ke member komunitas tersebut.
+            if ($hasCommunityMemberships) {
+                $q->orWhere(function ($communityTarget) use ($userId, $hasCommunityMembershipStatus) {
+                    $communityTarget->where('ads.target_type', 'community')
+                        ->whereNotNull('ads.community_id')
+                        ->whereExists(function ($sub) use ($userId, $hasCommunityMembershipStatus) {
+                            $sub->select(DB::raw(1))
+                                ->from('community_memberships')
+                                ->whereColumn('community_memberships.community_id', 'ads.community_id')
+                                ->where('community_memberships.user_id', $userId);
+
+                            if ($hasCommunityMembershipStatus) {
+                                $sub->whereIn('community_memberships.status', [
+                                    'active',
+                                    'approved',
+                                    'accepted',
+                                    'joined',
+                                    'member',
+                                    1,
+                                    '1',
+                                ]);
+                            }
+                        });
+                });
+            }
+        });
+    }
+
     public function getPromoRecommendation(Request $request)
     {
         $worldIdFilter = $request->get('world_id', null);
-        // Tambah optional community scoping
         $communityId = $request->get('community_id', null);
-
         $user = Auth::user();
 
         $worlds = [];
-
-        // Handle case when user is not authenticated (public endpoint)
         if ($user && $user->worlds) {
             foreach ($user->worlds as $world) {
-                array_push($worlds, $world->world_id);
+                $worlds[] = $world->world_id;
             }
         }
 
         $model = Ad::with('cube', 'cube.cube_type', 'cube.opening_hours', 'cube.world')
-    ->select([
-        'ads.*',
-        DB::raw('(
-            SELECT COALESCE(SUM(total_grab),0)
-            FROM summary_grabs 
-            WHERE ad_id = ads.id
-        ) as total_grab'),
-
-        DB::raw('(
-            CASE 
-                WHEN ads.unlimited_grab = 1 THEN 9999999
-                WHEN ads.is_daily_grab = 1 THEN 
-                    ads.max_grab - (
-                        SELECT COALESCE(SUM(total_grab),0)
-                        FROM summary_grabs 
-                        WHERE ad_id = ads.id 
-                        AND date = CURDATE()
-                    )
-                ELSE ads.max_grab
-            END
-        ) as total_remaining')
-    ])
-    ->leftJoin('cubes', 'cubes.id', 'ads.cube_id')
+            ->select([
+                'ads.*',
+                DB::raw('(
+                    SELECT COALESCE(SUM(total_grab),0)
+                    FROM summary_grabs
+                    WHERE ad_id = ads.id
+                ) as total_grab'),
+                DB::raw('(
+                    CASE
+                        WHEN ads.unlimited_grab = 1 THEN 9999999
+                        WHEN ads.is_daily_grab = 1 THEN
+                            ads.max_grab - (
+                                SELECT COALESCE(SUM(total_grab),0)
+                                FROM summary_grabs
+                                WHERE ad_id = ads.id
+                                AND date = CURDATE()
+                            )
+                        ELSE ads.max_grab
+                    END
+                ) as total_remaining')
+            ])
+            ->leftJoin('cubes', 'cubes.id', 'ads.cube_id')
             ->where('cubes.status', 'active')
             ->where('is_information', 0)
-            // ->where('cubes.is_information', '<>', '1')
             ->when($worldIdFilter, function ($query) use ($worldIdFilter) {
-
                 return $query->where('cubes.world_id', $worldIdFilter);
             }, function ($query) use ($worlds) {
-
                 return $query->where(function ($q) use ($worlds) {
                     if (empty($worlds)) {
-                        // If no user worlds, show all ads with null world_id or show all
                         $q->whereNull('cubes.world_id');
                     } else {
                         $q->whereNull('cubes.world_id')
@@ -76,7 +218,6 @@ class AdController extends Controller
                     }
                 });
             })
-            // Community scoping: jika ada community_id tampilkan ads komunitas + global; jika tidak hanya global
             ->when($communityId, function ($q) use ($communityId) {
                 $q->where(function ($sub) use ($communityId) {
                     $sub->where('ads.community_id', $communityId)
@@ -84,7 +225,9 @@ class AdController extends Controller
                 });
             }, function ($q) {
                 $q->whereNull('ads.community_id');
-            })
+            });
+
+        $model = $this->applyAudienceVisibilityFilter($model, $user)
             ->groupBy('ads.id', 'ads.cube_id')
             ->orderBy('cubes.is_recommendation', 'desc')
             ->inRandomOrder()
@@ -97,20 +240,17 @@ class AdController extends Controller
         ]);
     }
 
+
     public function getPromoNearest(Request $request, $lat, $long)
     {
         $worldIdFilter = $request->get('world_id', null);
-        // Tambah optional community scoping
         $communityId = $request->get('community_id', null);
-
         $user = Auth::user();
 
         $worlds = [];
-
-        // Handle case when user is not authenticated (public endpoint)
         if ($user && $user->worlds) {
             foreach ($user->worlds as $world) {
-                array_push($worlds, $world->world_id);
+                $worlds[] = $world->world_id;
             }
         }
 
@@ -135,13 +275,10 @@ class AdController extends Controller
             ])
             ->join('cubes', 'cubes.id', 'ads.cube_id')
             ->when($worldIdFilter, function ($query) use ($worldIdFilter) {
-
                 return $query->where('cubes.world_id', $worldIdFilter);
             }, function ($query) use ($worlds) {
-
                 return $query->where(function ($q) use ($worlds) {
                     if (empty($worlds)) {
-                        // If no user worlds, show all ads with null world_id or show all
                         $q->whereNull('cubes.world_id');
                     } else {
                         $q->whereNull('cubes.world_id')
@@ -152,7 +289,6 @@ class AdController extends Controller
             ->where('is_information', 0)
             ->where('cubes.status', 'active')
             ->where('cubes.is_information', '<>', '1')
-            // Community scoping: jika ada community_id tampilkan ads komunitas + global; jika tidak hanya global
             ->when($communityId, function ($q) use ($communityId) {
                 $q->where(function ($sub) use ($communityId) {
                     $sub->where('ads.community_id', $communityId)
@@ -160,7 +296,9 @@ class AdController extends Controller
                 });
             }, function ($q) {
                 $q->whereNull('ads.community_id');
-            })
+            });
+
+        $model = $this->applyAudienceVisibilityFilter($model, $user)
             ->orderBy('distance', 'ASC')
             ->limit(6)
             ->get();
@@ -170,6 +308,7 @@ class AdController extends Controller
             'data' => $model
         ]);
     }
+
 
     public function getPrimaryCategory()
     {
@@ -259,6 +398,9 @@ class AdController extends Controller
                 $query = $query->whereNull('cubes.world_id');
             }
         }
+
+        $user = Auth::user();
+        $query = $this->applyAudienceVisibilityFilter($query, $user);
 
         $query =  $query->select([
             'ads.*',
@@ -454,8 +596,10 @@ class AdController extends Controller
 
         $id_cubes = [];
         foreach ($menu_cubes as $cube) {
-            array_push($id_cubes, $cube->cube_id);
+            $id_cubes[] = $cube->cube_id;
         }
+
+        $user = Auth::user();
 
         $model = Ad::with('cube', 'cube.cube_type', 'cube.opening_hours', 'cube.world')
             ->select([
@@ -464,7 +608,9 @@ class AdController extends Controller
             ->leftJoin('summary_grabs', 'summary_grabs.ad_id', 'ads.id')
             ->leftJoin('cubes', 'cubes.id', 'ads.cube_id')
             ->where('cubes.status', 'active')
-            ->whereIn('cubes.id', $id_cubes)
+            ->whereIn('cubes.id', $id_cubes);
+
+        $model = $this->applyAudienceVisibilityFilter($model, $user)
             ->groupBy('ads.id', 'ads.cube_id', 'cubes.is_recommendation')
             ->inRandomOrder()
             ->limit(10)
@@ -535,6 +681,9 @@ class AdController extends Controller
                 }
             }
         }
+
+        $user = Auth::user();
+        $query = $this->applyAudienceVisibilityFilter($query, $user);
 
         $query = $query->inRandomOrder()
             ->limit(20)
@@ -642,6 +791,9 @@ class AdController extends Controller
                     });
                 }
             }
+
+            $user = Auth::user();
+            $query = $this->applyAudienceVisibilityFilter($query, $user);
 
             $ads = $query->orderBy('ads.created_at', 'DESC')
                 ->limit($limit)

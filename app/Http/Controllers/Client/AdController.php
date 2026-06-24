@@ -471,7 +471,19 @@ class AdController extends Controller
                 ->update(['status' => 'inactive']);
         }
 
-        $query = Cube::with('ads', 'tags', 'ads.ad_category', 'cube_type', 'user', 'corporate', 'world');
+        $query = Cube::with([
+            'ads' => function ($adQuery) use ($user) {
+                $adQuery->where('ads.status', 'active')
+                    ->with('ad_category');
+
+                $this->applyAudienceVisibilityFilter($adQuery, $user);
+            },
+            'tags',
+            'cube_type',
+            'user',
+            'corporate',
+            'world'
+        ]);
 
         $query =  $query->select([
             'cubes.*',
@@ -486,6 +498,24 @@ class AdController extends Controller
                     ->orWhere('cubes.user_id', $user->id);
             })
             ->first();
+        
+        if (!$query) {
+            DB::rollBack();
+
+            return response([
+                'message' => 'Konten tidak ditemukan',
+                'data' => null
+            ], 404);
+        }
+
+        if ($query->ads->isEmpty() && (int) $query->user_id !== (int) $user->id) {
+            DB::rollBack();
+
+            return response([
+                'message' => 'Konten tidak ditemukan atau tidak tersedia untuk user ini',
+                'data' => null
+            ], 404);
+        }
 
         if ($query->user_id == $user->id) {
             $query->is_my_cube = true;
@@ -545,8 +575,10 @@ class AdController extends Controller
 
         $query = Cube::with([
             'ads' => function ($query) {
-                $query->where('status', 'active');
+                $query->where('ads.status', 'active');
+                $this->applyAudienceVisibilityFilter($query, null);
             },
+
             'ads.ad_category',
             'tags',
             'cube_type',
@@ -566,8 +598,10 @@ class AdController extends Controller
                     $query->where('status', 'active');
                 },
                 'cube.ads' => function ($query) {
-                    $query->where('status', 'active');
+                    $query->where('ads.status', 'active');
+                    $this->applyAudienceVisibilityFilter($query, null);
                 },
+
                 'cube.ads.ad_category',
                 'cube.tags',
                 'cube.cube_type',
@@ -582,6 +616,29 @@ class AdController extends Controller
             if ($adQuery && $adQuery->cube) {
                 $query = $adQuery->cube;
             }
+
+            $adQueryBuilder = \App\Models\Ad::with([
+                'cube' => function ($query) {
+                    $query->where('status', 'active');
+                },
+                'cube.ads' => function ($query) {
+                    $query->where('ads.status', 'active');
+                    $this->applyAudienceVisibilityFilter($query, null);
+                },
+                'cube.ads.ad_category',
+                'cube.tags',
+                'cube.cube_type',
+                'cube.user',
+                'cube.corporate',
+                'cube.opening_hours'
+            ])
+                ->where('code', $code)
+                ->where('status', 'active');
+            
+            $adQueryBuilder = $this->applyAudienceVisibilityFilter($adQueryBuilder, null);
+            
+            $adQuery = $adQueryBuilder->first();
+
         }
 
         return response([

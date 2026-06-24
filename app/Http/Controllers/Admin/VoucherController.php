@@ -325,6 +325,150 @@ class VoucherController extends Controller
         return $voucher;
     }
 
+    private function isPrivilegedViewer($user): bool
+    {
+        if (!$user) return false;
+
+        $role = strtolower((string) (
+            $user->role->name
+            ?? $user->role
+            ?? $user->level
+            ?? $user->type
+            ?? ''
+        ));
+
+        return in_array($role, [
+            'admin',
+            'superadmin',
+            'manager',
+            'tenant',
+            'owner',
+            'staff',
+            'operator',
+        ], true);
+    }
+
+    private function findRelatedAdForVoucher(Voucher $voucher): ?\App\Models\Ad
+    {
+        try {
+            if (!empty($voucher->ad_id)) {
+                $ad = \App\Models\Ad::find($voucher->ad_id);
+                if ($ad) return $ad;
+            }
+
+            if (!empty($voucher->code)) {
+                $ad = \App\Models\Ad::where('code', $voucher->code)->first();
+                if ($ad) return $ad;
+            }
+        } catch (\Throwable $e) {
+            Log::warning('findRelatedAdForVoucher failed', [
+                'voucher_id' => $voucher->id ?? null,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return null;
+    }
+
+    private function canViewerSeeVoucher(Voucher $voucher, $user = null): bool
+    {
+        $ad = $this->findRelatedAdForVoucher($voucher);
+
+        if ($this->isPrivilegedViewer($user)) {
+            return true;
+        }
+
+        if ($user) {
+            $ownerIds = [
+                $voucher->user_id ?? null,
+                $voucher->owner_user_id ?? null,
+                $voucher->created_by ?? null,
+                $ad->user_id ?? null,
+                $ad->owner_user_id ?? null,
+                $ad->created_by ?? null,
+            ];
+
+            $ownerIds = collect($ownerIds)
+                ->filter()
+                ->map(fn ($id) => (int) $id)
+                ->unique()
+                ->values()
+                ->all();
+
+            if (in_array((int) $user->id, $ownerIds, true)) {
+                return true;
+            }
+        }
+
+        $voucherTargetType = Schema::hasColumn('vouchers', 'target_type')
+            ? strtolower((string) ($voucher->target_type ?? ''))
+            : '';
+
+        $adTargetType = $ad
+            ? strtolower((string) ($ad->target_type ?? ''))
+            : '';
+
+        $targetType = $voucherTargetType ?: $adTargetType ?: 'all';
+
+        if ($targetType === '' || $targetType === 'all' || $targetType === 'null') {
+            return true;
+        }
+
+        if (!$user) {
+            return false;
+        }
+
+        if ($targetType === 'user') {
+            if (Schema::hasColumn('vouchers', 'target_user_id')) {
+                $targetUserId = (int) ($voucher->target_user_id ?? 0);
+                if ($targetUserId > 0 && $targetUserId === (int) $user->id) {
+                    return true;
+                }
+            }
+
+            if ($ad && Schema::hasColumn('ads', 'target_user_id')) {
+                $targetUserId = (int) ($ad->target_user_id ?? 0);
+                if ($targetUserId > 0 && $targetUserId === (int) $user->id) {
+                    return true;
+                }
+            }
+
+            if ($ad && Schema::hasTable('ad_target_users')) {
+                return DB::table('ad_target_users')
+                    ->where('ad_id', $ad->id)
+                    ->where('user_id', $user->id)
+                    ->exists();
+            }
+
+            return false;
+        }
+
+        if ($targetType === 'community') {
+            $communityId = $voucher->community_id ?? $ad->community_id ?? null;
+
+            if (!$communityId || !Schema::hasTable('community_memberships')) {
+                return false;
+            }
+
+            return DB::table('community_memberships')
+                ->where('community_id', $communityId)
+                ->where('user_id', $user->id)
+                ->when(Schema::hasColumn('community_memberships', 'status'), function ($q) {
+                    $q->whereIn('status', [
+                        'active',
+                        'approved',
+                        'accepted',
+                        'joined',
+                        'member',
+                        1,
+                        '1',
+                    ]);
+                })
+                ->exists();
+        }
+
+        return false;
+    }
 
     public function index(Request $request)
     {
@@ -468,6 +612,10 @@ class VoucherController extends Controller
             return response(['messaege' => 'Data not found'], 404)->header('Cache-Control', 'no-store');
         }
 
+        if (!$this->canViewerSeeVoucher($model, Auth::user())) {
+            return response(['message' => 'Voucher tidak ditemukan atau tidak tersedia untuk user ini'], 404)
+                ->header('Cache-Control', 'no-store');
+        }
 
         $model = $this->resolveOwnerUserId($model);
 
@@ -562,6 +710,12 @@ class VoucherController extends Controller
                 ], 404);
             }
 
+            if (!$this->canViewerSeeVoucher($model, Auth::user())) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Voucher tidak ditemukan'
+                ], 404);
+            }
 
             $model = $this->addImageVersioning($model);
             $model = $this->resolveOwnerUserId($model);
@@ -2081,6 +2235,13 @@ class VoucherController extends Controller
                 return response()->json(['success' => false, 'message' => 'Voucher tidak ditemukan'], 404);
             }
 
+            if (!$this->canViewerSeeVoucher($voucher, $user)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Voucher ini tidak ditujukan untuk Anda'
+                ], 403);
+            }
+
             // Check tanggal validasi untuk voucher dengan start/finish validate
             if ($voucher->start_validate && now()->lt($voucher->start_validate)) {
                 if ($nid = $request->input('notification_id')) {
@@ -2103,22 +2264,6 @@ class VoucherController extends Controller
                     Notification::where('id', $nid)->where('user_id', $user->id)->update(['read_at' => now()]);
                 }
                 return response()->json(['success' => false, 'message' => 'Voucher sudah kadaluwarsa'], 410);
-            }
-
-            // Check targeting
-            if ($voucher->target_type === 'user') {
-                if ($voucher->target_user_id && (int)$voucher->target_user_id !== (int)$user->id) {
-                    return response()->json(['success' => false, 'message' => 'Voucher ini tidak ditujukan untuk Anda'], 403);
-                }
-            } elseif ($voucher->target_type === 'community' && $voucher->community_id) {
-                $isMember = DB::table('community_memberships')
-                    ->where('community_id', $voucher->community_id)
-                    ->where('user_id', $user->id)
-                    ->when(\Illuminate\Support\Facades\Schema::hasColumn('community_memberships', 'status'), fn($q) => $q->where('status', 'active'))
-                    ->exists();
-                if (!$isMember) {
-                    return response()->json(['success' => false, 'message' => 'Voucher khusus anggota komunitas'], 403);
-                }
             }
 
             // ✨ VOUCHER HARIAN: Check grab history untuk hari ini

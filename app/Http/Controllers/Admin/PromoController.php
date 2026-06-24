@@ -21,6 +21,161 @@ use Illuminate\Support\Str;
 
 class PromoController extends Controller
 {
+    private function isPrivilegedViewer($user): bool
+    {
+        if (!$user) return false;
+
+        $role = strtolower((string) (
+            $user->role->name
+            ?? $user->role
+            ?? $user->level
+            ?? $user->type
+            ?? ''
+        ));
+
+        return in_array($role, [
+            'admin',
+            'superadmin',
+            'manager',
+            'tenant',
+            'owner',
+            'staff',
+            'operator',
+        ], true);
+    }
+
+    private function findRelatedAdForPromo(Promo $promo): ?\App\Models\Ad
+    {
+        try {
+            if (Schema::hasColumn('promos', 'ad_id') && !empty($promo->ad_id)) {
+                $ad = \App\Models\Ad::find($promo->ad_id);
+                if ($ad) return $ad;
+            }
+
+            if (!empty($promo->code)) {
+                $ad = \App\Models\Ad::where('code', $promo->code)->first();
+                if ($ad) return $ad;
+            }
+
+            if (!empty($promo->cube_id)) {
+                $ad = \App\Models\Ad::where('cube_id', $promo->cube_id)
+                    ->where(function ($q) use ($promo) {
+                        $q->where('title', $promo->title)
+                            ->orWhere('code', $promo->code);
+                    })
+                    ->first();
+
+                if ($ad) return $ad;
+            }
+        } catch (\Throwable $e) {
+            Log::warning('findRelatedAdForPromo failed', [
+                'promo_id' => $promo->id ?? null,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return null;
+    }
+
+    private function canViewerSeePromo(Promo $promo, $user = null): bool
+    {
+        $ad = $this->findRelatedAdForPromo($promo);
+
+        if ($this->isPrivilegedViewer($user)) {
+            return true;
+        }
+
+        if ($user) {
+            $ownerIds = [
+                $promo->user_id ?? null,
+                $promo->owner_user_id ?? null,
+                $promo->created_by ?? null,
+                $ad->user_id ?? null,
+                $ad->owner_user_id ?? null,
+                $ad->created_by ?? null,
+            ];
+
+            $ownerIds = collect($ownerIds)
+                ->filter()
+                ->map(fn ($id) => (int) $id)
+                ->unique()
+                ->values()
+                ->all();
+
+            if (in_array((int) $user->id, $ownerIds, true)) {
+                return true;
+            }
+        }
+
+        $promoTargetType = Schema::hasColumn('promos', 'target_type')
+            ? strtolower((string) ($promo->target_type ?? ''))
+            : '';
+
+        $adTargetType = $ad
+            ? strtolower((string) ($ad->target_type ?? ''))
+            : '';
+
+        $targetType = $promoTargetType ?: $adTargetType ?: 'all';
+
+        if ($targetType === '' || $targetType === 'all' || $targetType === 'null') {
+            return true;
+        }
+
+        if (!$user) {
+            return false;
+        }
+
+        if ($targetType === 'user') {
+            if (Schema::hasColumn('promos', 'target_user_id')) {
+                $targetUserId = (int) ($promo->target_user_id ?? 0);
+                if ($targetUserId > 0 && $targetUserId === (int) $user->id) {
+                    return true;
+                }
+            }
+
+            if ($ad && Schema::hasColumn('ads', 'target_user_id')) {
+                $targetUserId = (int) ($ad->target_user_id ?? 0);
+                if ($targetUserId > 0 && $targetUserId === (int) $user->id) {
+                    return true;
+                }
+            }
+
+            if ($ad && Schema::hasTable('ad_target_users')) {
+                return DB::table('ad_target_users')
+                    ->where('ad_id', $ad->id)
+                    ->where('user_id', $user->id)
+                    ->exists();
+            }
+
+            return false;
+        }
+
+        if ($targetType === 'community') {
+            $communityId = $promo->community_id ?? $ad->community_id ?? null;
+
+            if (!$communityId || !Schema::hasTable('community_memberships')) {
+                return false;
+            }
+
+            return DB::table('community_memberships')
+                ->where('community_id', $communityId)
+                ->where('user_id', $user->id)
+                ->when(Schema::hasColumn('community_memberships', 'status'), function ($q) {
+                    $q->whereIn('status', [
+                        'active',
+                        'approved',
+                        'accepted',
+                        'joined',
+                        'member',
+                        1,
+                        '1',
+                    ]);
+                })
+                ->exists();
+        }
+
+        return false;
+    }
 
     private function normalizePhone(?string $raw): ?string
     {
@@ -424,6 +579,11 @@ class PromoController extends Controller
     {
         $promo = Promo::find($id);
         if (!$promo) {
+            if (!$this->canViewerSeePromo($promo, Auth::user())) {
+            return response()->json([
+                'message' => 'Promo tidak ditemukan atau tidak tersedia untuk user ini'
+            ], 404);
+        }
             return response()->json([
                 'message' => 'Data not found'
             ], 404);
@@ -451,6 +611,13 @@ class PromoController extends Controller
             } catch (\Exception $e) {
                 Log::warning('Relations not available for Promo model, loading without them');
                 $promo = $query->first();
+            }
+
+            if (!$this->canViewerSeePromo($promo, Auth::user())) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Promo tidak ditemukan'
+                ], 404);
             }
 
             if (!$promo) {
@@ -1054,8 +1221,14 @@ class PromoController extends Controller
 
     public function indexByCommunity($communityId)
     {
-        $promos = Promo::where('community_id', $communityId)->get();
-        $promos = $promos->map(function ($promo) {
+        $user = Auth::user();
+
+            $promos = Promo::where('community_id', $communityId)
+                ->get()
+                ->filter(fn ($promo) => $this->canViewerSeePromo($promo, $user))
+                ->values();
+
+            $promos = $promos->map(function ($promo) {
             $promo->validation_type = $promo->validation_type ?? 'auto';
             return $promo;
         });
@@ -1182,6 +1355,12 @@ class PromoController extends Controller
                 ], 404);
             }
 
+            if (!$this->canViewerSeePromo($promo, Auth::user())) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Promo tidak ditemukan atau tidak tersedia untuk user ini'
+                ], 404);
+            }
 
 
             $responseData = [
